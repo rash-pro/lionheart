@@ -1,0 +1,5 @@
+# FF8 USA Disc 1, interpreter: leave the credits and reach the title menu.
+# This wait covers BIOS initialization with empty slots or formatted cards.
+# Capture the title with --max-vblanks 2850.
+2400 CROSS
+2402 -

@@ -1,0 +1,7 @@
+# FF8 USA: Continue, slot 1, reach the real card's save list.
+2400 CROSS
+2402 -
+3000 CROSS
+3008 -
+3600 CROSS
+3608 -

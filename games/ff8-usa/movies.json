@@ -1,0 +1,730 @@
+{
+  "1:151220": {
+    "movie": "disc00_00",
+    "frames": 326,
+    "pc_frames": 326,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:154480": {
+    "movie": "disc00_01",
+    "frames": 199,
+    "pc_frames": 205,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "1:156470": {
+    "movie": "disc00_02",
+    "frames": 161,
+    "pc_frames": 161,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:158080": {
+    "movie": "disc00_03",
+    "frames": 1100,
+    "pc_frames": 1100,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:169080": {
+    "movie": "disc00_04",
+    "frames": 215,
+    "pc_frames": 215,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:171230": {
+    "movie": "disc00_05",
+    "frames": 1114,
+    "pc_frames": 1114,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:182370": {
+    "movie": "disc00_06",
+    "frames": 41,
+    "pc_frames": 41,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:182780": {
+    "movie": "disc00_07",
+    "frames": 1084,
+    "pc_frames": 1084,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:193620": {
+    "movie": "disc00_08",
+    "frames": 324,
+    "pc_frames": 324,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "1:196860": {
+    "movie": "disc00_09",
+    "frames": 1391,
+    "pc_frames": 1391,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:210770": {
+    "movie": "disc00_10",
+    "frames": 393,
+    "pc_frames": 393,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:214700": {
+    "movie": "disc00_11",
+    "frames": 465,
+    "pc_frames": 465,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:219350": {
+    "movie": "disc00_12",
+    "frames": 45,
+    "pc_frames": 45,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:219800": {
+    "movie": "disc00_13",
+    "frames": 15,
+    "pc_frames": 15,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:219950": {
+    "movie": "disc00_14",
+    "frames": 360,
+    "pc_frames": 360,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:223550": {
+    "movie": "disc00_15",
+    "frames": 300,
+    "pc_frames": 300,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:226550": {
+    "movie": "disc00_16",
+    "frames": 150,
+    "pc_frames": 150,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:228050": {
+    "movie": "disc00_17",
+    "frames": 890,
+    "pc_frames": 890,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:236950": {
+    "movie": "disc00_18",
+    "frames": 191,
+    "pc_frames": 192,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:238860": {
+    "movie": "disc00_19",
+    "frames": 121,
+    "pc_frames": 121,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:240070": {
+    "movie": "disc00_20",
+    "frames": 401,
+    "pc_frames": 401,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:244080": {
+    "movie": "disc00_21",
+    "frames": 829,
+    "pc_frames": 829,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:252370": {
+    "movie": "disc00_22",
+    "frames": 141,
+    "pc_frames": 141,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "1:253780": {
+    "movie": "disc00_23",
+    "frames": 550,
+    "pc_frames": 550,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:259280": {
+    "movie": "disc00_24",
+    "frames": 575,
+    "pc_frames": 575,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:265030": {
+    "movie": "disc00_25",
+    "frames": 130,
+    "pc_frames": 130,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:266330": {
+    "movie": "disc00_26",
+    "frames": 101,
+    "pc_frames": 101,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:267340": {
+    "movie": "disc00_27",
+    "frames": 306,
+    "pc_frames": 306,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:270400": {
+    "movie": "disc00_28",
+    "frames": 432,
+    "pc_frames": 432,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:274720": {
+    "movie": "disc00_29",
+    "frames": 750,
+    "pc_frames": 750,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "1:282220": {
+    "movie": "disc00_30",
+    "frames": 2897,
+    "pc_frames": 2925,
+    "pc_fps": "15/1",
+    "offset_frames": 28
+  },
+  "2:183954": {
+    "movie": "disc01_00",
+    "frames": 453,
+    "pc_frames": 453,
+    "pc_fps": "15/1",
+    "offset_frames": -1
+  },
+  "2:188484": {
+    "movie": "disc01_01",
+    "frames": 278,
+    "pc_frames": 278,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:191264": {
+    "movie": "disc01_02",
+    "frames": 330,
+    "pc_frames": 330,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:194564": {
+    "movie": "disc01_03",
+    "frames": 450,
+    "pc_frames": 450,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:199064": {
+    "movie": "disc01_04",
+    "frames": 168,
+    "pc_frames": 168,
+    "pc_fps": "15/1",
+    "offset_frames": -1
+  },
+  "2:200744": {
+    "movie": "disc01_05",
+    "frames": 219,
+    "pc_frames": 219,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:202934": {
+    "movie": "disc01_06",
+    "frames": 104,
+    "pc_frames": 104,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:203974": {
+    "movie": "disc01_07",
+    "frames": 160,
+    "pc_frames": 160,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:205574": {
+    "movie": "disc01_08",
+    "frames": 381,
+    "pc_frames": 381,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:209384": {
+    "movie": "disc01_09",
+    "frames": 226,
+    "pc_frames": 226,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:211644": {
+    "movie": "disc01_10",
+    "frames": 416,
+    "pc_frames": 416,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:215804": {
+    "movie": "disc01_11",
+    "frames": 603,
+    "pc_frames": 603,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:221834": {
+    "movie": "disc01_12",
+    "frames": 335,
+    "pc_frames": 335,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:225184": {
+    "movie": "disc01_13",
+    "frames": 381,
+    "pc_frames": 381,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:228994": {
+    "movie": "disc01_14",
+    "frames": 531,
+    "pc_frames": 531,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:234304": {
+    "movie": "disc01_15",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:235504": {
+    "movie": "disc01_16",
+    "frames": 149,
+    "pc_frames": 149,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:236994": {
+    "movie": "disc01_17",
+    "frames": 150,
+    "pc_frames": 150,
+    "pc_fps": "15/1",
+    "offset_frames": 2
+  },
+  "2:238494": {
+    "movie": "disc01_18",
+    "frames": 255,
+    "pc_frames": 255,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:241044": {
+    "movie": "disc01_19",
+    "frames": 428,
+    "pc_frames": 428,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:245324": {
+    "movie": "disc01_20",
+    "frames": 150,
+    "pc_frames": 150,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:246824": {
+    "movie": "disc01_21",
+    "frames": 75,
+    "pc_frames": 75,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:247574": {
+    "movie": "disc01_22",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:248774": {
+    "movie": "disc01_23",
+    "frames": 285,
+    "pc_frames": 285,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:251624": {
+    "movie": "disc01_24",
+    "frames": 330,
+    "pc_frames": 330,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:254924": {
+    "movie": "disc01_25",
+    "frames": 300,
+    "pc_frames": 300,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:257924": {
+    "movie": "disc01_26",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:259124": {
+    "movie": "disc01_27",
+    "frames": 75,
+    "pc_frames": 75,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:259874": {
+    "movie": "disc01_28",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:261074": {
+    "movie": "disc01_29",
+    "frames": 692,
+    "pc_frames": 692,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:267994": {
+    "movie": "disc01_30",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "2:269194": {
+    "movie": "disc01_31",
+    "frames": 135,
+    "pc_frames": 135,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:270544": {
+    "movie": "disc01_32",
+    "frames": 327,
+    "pc_frames": 327,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "2:273814": {
+    "movie": "disc01_33",
+    "frames": 1186,
+    "pc_frames": 1186,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:208589": {
+    "movie": "disc02_00",
+    "frames": 197,
+    "pc_frames": 197,
+    "pc_fps": "15/1",
+    "offset_frames": -1
+  },
+  "3:210559": {
+    "movie": "disc02_01",
+    "frames": 472,
+    "pc_frames": 472,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:215279": {
+    "movie": "disc02_02",
+    "frames": 105,
+    "pc_frames": 105,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "3:216329": {
+    "movie": "disc02_03",
+    "frames": 105,
+    "pc_frames": 105,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:217379": {
+    "movie": "disc02_04",
+    "frames": 106,
+    "pc_frames": 106,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:218439": {
+    "movie": "disc02_05",
+    "frames": 106,
+    "pc_frames": 106,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:219499": {
+    "movie": "disc02_06",
+    "frames": 110,
+    "pc_frames": 110,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:220599": {
+    "movie": "disc02_07",
+    "frames": 300,
+    "pc_frames": 300,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:223599": {
+    "movie": "disc02_08",
+    "frames": 75,
+    "pc_frames": 75,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:224349": {
+    "movie": "disc02_09",
+    "frames": 728,
+    "pc_frames": 728,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:231629": {
+    "movie": "disc02_10",
+    "frames": 120,
+    "pc_frames": 120,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:232829": {
+    "movie": "disc02_11",
+    "frames": 315,
+    "pc_frames": 315,
+    "pc_fps": "15/1",
+    "offset_frames": -1
+  },
+  "3:235979": {
+    "movie": "disc02_12",
+    "frames": 226,
+    "pc_frames": 226,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "3:238239": {
+    "movie": "disc02_13",
+    "frames": 611,
+    "pc_frames": 611,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:244349": {
+    "movie": "disc02_14",
+    "frames": 105,
+    "pc_frames": 105,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:245399": {
+    "movie": "disc02_15",
+    "frames": 255,
+    "pc_frames": 255,
+    "pc_fps": "15/1",
+    "offset_frames": -4
+  },
+  "3:247949": {
+    "movie": "disc02_16",
+    "frames": 233,
+    "pc_frames": 233,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:250279": {
+    "movie": "disc02_17",
+    "frames": 90,
+    "pc_frames": 90,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "3:251179": {
+    "movie": "disc02_18",
+    "frames": 90,
+    "pc_frames": 90,
+    "pc_fps": "15/1",
+    "offset_frames": 5
+  },
+  "3:252079": {
+    "movie": "disc02_19",
+    "frames": 162,
+    "pc_frames": 162,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:253699": {
+    "movie": "disc02_20",
+    "frames": 275,
+    "pc_frames": 275,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:256449": {
+    "movie": "disc02_21",
+    "frames": 280,
+    "pc_frames": 280,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:259249": {
+    "movie": "disc02_22",
+    "frames": 90,
+    "pc_frames": 90,
+    "pc_fps": "15/1",
+    "offset_frames": -4
+  },
+  "3:260149": {
+    "movie": "disc02_23",
+    "frames": 200,
+    "pc_frames": 200,
+    "pc_fps": "15/1",
+    "offset_frames": 2
+  },
+  "3:262149": {
+    "movie": "disc02_24",
+    "frames": 600,
+    "pc_frames": 600,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:268149": {
+    "movie": "disc02_25",
+    "frames": 30,
+    "pc_frames": 30,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:268449": {
+    "movie": "disc02_26",
+    "frames": 410,
+    "pc_frames": 410,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:272549": {
+    "movie": "disc02_27",
+    "frames": 130,
+    "pc_frames": 130,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:273849": {
+    "movie": "disc02_28",
+    "frames": 376,
+    "pc_frames": 376,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:277609": {
+    "movie": "disc02_29",
+    "frames": 395,
+    "pc_frames": 395,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "3:281559": {
+    "movie": "disc02_30",
+    "frames": 625,
+    "pc_frames": 625,
+    "pc_fps": "15/1",
+    "offset_frames": 1
+  },
+  "3:287809": {
+    "movie": "disc02_31",
+    "frames": 995,
+    "pc_frames": 995,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:128480": {
+    "movie": "disc03_00",
+    "frames": 390,
+    "pc_frames": 390,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:132380": {
+    "movie": "disc03_01",
+    "frames": 1260,
+    "pc_frames": 1260,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:144980": {
+    "movie": "disc03_02",
+    "frames": 285,
+    "pc_frames": 285,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:147830": {
+    "movie": "disc03_03",
+    "frames": 225,
+    "pc_frames": 225,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:150080": {
+    "movie": "disc03_04",
+    "frames": 4348,
+    "pc_frames": 4345,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  },
+  "4:193560": {
+    "movie": "disc03_05",
+    "frames": 3065,
+    "pc_frames": 3065,
+    "pc_fps": "15/1",
+    "offset_frames": -2
+  },
+  "4:224210": {
+    "movie": "disc03_06",
+    "frames": 7091,
+    "pc_frames": 7091,
+    "pc_fps": "15/1",
+    "offset_frames": 0
+  }
+}

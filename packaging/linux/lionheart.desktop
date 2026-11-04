@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Lionheart
+Comment=Play Final Fantasy VIII from your own discs
+Exec=lionheart
+Icon=lionheart
+Terminal=false
+Categories=Game;

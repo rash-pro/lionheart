@@ -1,0 +1,32 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0,r32ui) uniform uimage2D native_vram;
+layout(set=0,binding=1,std430) readonly buffer Pixels { uint rgba[]; } source;
+#ifdef MSAA
+layout(set=0,binding=2,rgba8) uniform writeonly image2DMS scaled_vram;
+#else
+layout(set=0,binding=2,rgba8) uniform writeonly image2D scaled_vram;
+#endif
+layout(push_constant,std430) uniform Patch {
+    uvec4 rect;
+    uvec4 origin_scale_depth;
+    uvec2 size;
+} p;
+void main() {
+    uvec2 pixel=gl_GlobalInvocationID.xy;
+    uint scale=p.origin_scale_depth.z;
+    if (any(greaterThanEqual(pixel,p.rect.zw*scale))) return;
+    uvec2 dst=p.rect.xy*scale+pixel;
+    uvec2 relative=dst-p.origin_scale_depth.xy*scale;
+    uint sx=p.origin_scale_depth.w!=0 ? relative.x*2u/3u : relative.x;
+    uvec2 src=min(uvec2(sx,relative.y),p.size-uvec2(1));
+    vec4 color=unpackUnorm4x8(source.rgba[src.y*p.size.x+src.x]);
+    color.a=(imageLoad(native_vram,ivec2(dst/scale)).r&32768u)!=0u ? 1.0 : 0.0;
+#ifdef MSAA
+    for (int i=0;i<imageSamples(scaled_vram);++i) imageStore(scaled_vram,ivec2(dst),i,color);
+#else
+    imageStore(scaled_vram,ivec2(dst),color);
+#endif
+    // GPU-private marker. The low 16 native bits and the soft oracle are intact.
+    if (all(equal(pixel%scale,uvec2(0)))) imageAtomicOr(native_vram,ivec2(dst/scale),65536u);
+}

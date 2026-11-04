@@ -1,0 +1,9 @@
+# FF8 USA Disc 1, interpreter: title -> New Game -> opening movie.
+# The initial wait covers BIOS initialization with empty slots or formatted cards.
+# A one-VBlank Up pulse avoids repeating and wrapping the two-entry menu.
+2400 CROSS
+2402 -
+3000 UP
+3001 -
+3010 CROSS
+3012 -

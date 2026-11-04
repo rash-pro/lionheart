@@ -1,0 +1,16 @@
+# Host field/world profiling from a save in slot 1 (use a copy): skip startup screens, Continue,
+# slot 1, highlighted save, load; the scene is shown from VBlank ~1620 on the host.
+# work/saves/disc1-start-maxed.mcr loads the infirmary bed close-up (bghoke_2, set 2);
+# work/saves/disc1-early.mcr loads the world map (set 26).
+300 CROSS
+302 -
+600 CROSS
+602 -
+900 CROSS
+902 -
+1140 CROSS
+1148 -
+1300 CROSS
+1308 -
+1460 CROSS
+1468 -
