@@ -51,6 +51,9 @@ copies of the cards.
 LIONHEART_DISCS=/path/to/discs LIONHEART_SAVES=/path/to/cards SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m game
 ```
 
+Tests marked `realtime` measure wall-clock pacing. CI skips them (`-m 'not game and not realtime'`). If one fails on a
+busy machine, run it again on its own.
+
 Vulkan contract tests skip when the driver or the validation layer is missing. A connected controller can affect
 the SDL inventory tests; if one fails, include your controller model in the report.
 

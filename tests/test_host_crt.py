@@ -41,6 +41,10 @@ def test_prebuilt_shader_matches_source_and_validates(tmp_path, name):
         pytest.skip('glslc is not installed; prebuilt SPIR-V only validated')
     rebuilt = tmp_path / f'{name}.inc'
     subprocess.run([glslc, '-O', '-mfmt=c', '-o', str(rebuilt), str(SHADERS / name)], check=True, cwd=SHADERS)
+    recorded = (SHADERS / 'prebuilt' / 'GLSLC_VERSION').read_text()
+    local = subprocess.run([glslc, '--version'], check=True, capture_output=True, text=True).stdout
+    if local != recorded:
+        pytest.skip('prebuilt SPIR-V comes from another glslc build; source compiled and prebuilt validated')
     assert rebuilt.read_text() == prebuilt.read_text(), f'run backends/host/shaders/rebuild.sh after editing {name}'
 
 

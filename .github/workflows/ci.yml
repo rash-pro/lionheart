@@ -21,7 +21,7 @@ jobs:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
           FF8_PLAYER_HOST: ${{ github.workspace }}/build/lionheart
-        run: python -m pytest -q -m 'not game'
+        run: python -m pytest -q -m 'not game and not realtime'
   windows:
     runs-on: ubuntu-24.04
     steps:

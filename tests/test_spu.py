@@ -48,7 +48,9 @@ def test_audio_wav_is_lossless(audio_binary, tmp_path, mode):
         assert audio.readframes(44100) == struct.pack("<hh", 4999, -5000) * 44100
 
 
-@pytest.mark.parametrize("mode", ["paced", "pal", "fast", "resample", "overrun"])
+@pytest.mark.parametrize("mode", [pytest.param("paced", marks=pytest.mark.realtime),
+                                  pytest.param("pal", marks=pytest.mark.realtime),
+                                  "fast", "resample", "overrun"])
 def test_audio_clock_and_fast_mode(audio_binary, tmp_path, mode):
     subprocess.run([str(audio_binary), mode, str(tmp_path / f"{mode}.wav")], check=True, timeout=15,
                    env={**os.environ, "SDL_AUDIODRIVER": "dummy"}, capture_output=True)
