@@ -16,7 +16,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--build', type=Path, default=ROOT / 'build/windows')
     p.add_argument('--deps', type=Path, default=DEFAULT)
+    p.add_argument('--jobs', type=int, default=8, help='parallel build jobs (default: 8)')
     args = p.parse_args()
+    if args.jobs < 1:
+        p.error('--jobs must be positive')
     paths = fetch(args.deps)
     build = args.build.resolve()
     prefix = args.deps / 'install-ucrt'
@@ -35,7 +38,7 @@ def main():
         run(['cmake', '-S', paths['zlib'], '-B', paths['zlib'] / 'build-ucrt',
              f'-DCMAKE_TOOLCHAIN_FILE={ROOT}/cmake/toolchains/windows-llvm-mingw.cmake',
              f'-DCMAKE_INSTALL_PREFIX={prefix}', '-DCMAKE_BUILD_TYPE=Release'], env)
-        run(['cmake', '--build', paths['zlib'] / 'build-ucrt', '-j8'], env)
+        run(['cmake', '--build', paths['zlib'] / 'build-ucrt', f'-j{args.jobs}'], env)
         run(['cmake', '--install', paths['zlib'] / 'build-ucrt'], env)
         shutil.copyfile(prefix / 'lib/libzlibstatic.a', prefix / 'lib/libz.a')
         for dll in (prefix / 'bin').glob('*zlib*.dll'):
@@ -62,7 +65,7 @@ def main():
                  '--disable-encoders', '--disable-muxers', '--disable-filters', '--disable-devices']
     if not (prefix / 'lib/libavformat.dll.a').exists():
         run(configure, env, ffbuild)
-        run(['make', '-j8'], env, ffbuild)
+        run(['make', f'-j{args.jobs}'], env, ffbuild)
         run(['make', 'install'], env, ffbuild)
         (prefix / 'ffmpeg-configure.txt').write_text(' '.join(configure) + '\n')
     run(['cmake', '-S', ROOT, '-B', build,
@@ -70,7 +73,7 @@ def main():
          '-DCMAKE_BUILD_TYPE=Release', '-DFF8_PLAYER=ON',
          '-DFF8_STATE_BRIDGE=OFF', '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON',
          f'-DZLIB_LIBRARY={prefix}/lib/libz.a', f'-DZLIB_INCLUDE_DIR={prefix}/include'], env)
-    run(['cmake', '--build', build, '--target', 'ff8', '-j8'], env)
+    run(['cmake', '--build', build, '--target', 'ff8', f'-j{args.jobs}'], env)
     dist = build / 'dist-windows'
     dist.mkdir(exist_ok=True)
     shutil.copyfile(build / 'Lionheart.exe', dist / 'Lionheart.exe')
