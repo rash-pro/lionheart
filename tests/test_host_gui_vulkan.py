@@ -9,13 +9,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 IMGUI = ROOT / "third_party/imgui"
-ICD = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+
 
 
 @pytest.fixture(scope="module")
-def gui_vulkan_contract(tmp_path_factory):
-    if not ICD.is_file() or not shutil.which("c++") or not shutil.which("cc"):
-        pytest.skip("lavapipe and a C/C++ toolchain are required for the Vulkan GUI contract")
+def gui_vulkan_contract(tmp_path_factory, vulkan_replay):
+    if not shutil.which("c++") or not shutil.which("cc"):
+        pytest.skip("A C/C++ toolchain are required for the Vulkan GUI contract")
     output = tmp_path_factory.mktemp("gui-vulkan")
     volk = output / "volk.o"
     subprocess.run(["cc", "-c", str(ROOT / "third_party/parallel-psx/volk/volk.c"), "-o", str(volk)],
@@ -34,7 +34,7 @@ def gui_vulkan_contract(tmp_path_factory):
 def test_vulkan_gui_pixels_formats_font_rebuild_resize_and_reinitialize(gui_vulkan_contract):
     # Test the official backend with synthetic glyphs; the actual UI supplies its
     # approved Chakra/Spleen atlas through the exact same upload/descriptor path.
-    env = dict(os.environ, VK_DRIVER_FILES=str(ICD), VK_ICD_FILENAMES=str(ICD))
+    env = dict(os.environ)
     layers = list(Path("/usr/share/vulkan/explicit_layer.d").glob("*khronos*validation*.json"))
     if layers:
         env.update(VK_INSTANCE_LAYERS="VK_LAYER_KHRONOS_validation",

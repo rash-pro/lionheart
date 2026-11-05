@@ -54,8 +54,25 @@ LIONHEART_DISCS=/path/to/discs LIONHEART_SAVES=/path/to/cards SDL_VIDEODRIVER=du
 Tests marked `realtime` measure wall-clock pacing. CI skips them (`-m 'not game and not realtime'`). If one fails on a
 busy machine, run it again on its own.
 
-Vulkan contract tests skip when the driver or the validation layer is missing. A connected controller can affect
-the SDL inventory tests; if one fails, include your controller model in the report.
+Tier-1 Vulkan presentation tests use the Vulkan loader's device selection. They honor
+`VK_DRIVER_FILES` (or the older `VK_ICD_FILENAMES`) instead of forcing lavapipe.
+Select one ICD for each run; manifest filenames vary by distribution:
+
+```sh
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m 'not game and not realtime'
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m 'not game and not realtime'
+```
+
+Unset both variables to exercise the loader default. The host ranks compatible
+discrete, integrated, virtual and CPU devices in that order; `GRANITE_VULKAN_DEVICE_INDEX`
+overrides the enumerated device index. Startup logs identify the selected GPU.
+With no usable default device the optional contracts skip; an unavailable explicitly
+selected ICD fails the setup. The synchronization test skips if the Khronos validation
+layer is missing and also looks in `VK_LAYER_PATH` and `VK_ADD_LAYER_PATH` for local
+manifests. Test builds use at most four compilation jobs.
+
+A connected controller can affect the SDL inventory tests; if one fails, include
+your controller model in the report.
 
 ## Rules
 

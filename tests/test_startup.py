@@ -22,7 +22,7 @@ def synthetic_dev(tmp_path_factory):
                     f'-DGENERATED_DIR={generated}', '-DCMAKE_BUILD_TYPE=Release',
                     '-DFF8_PLAYER=OFF', '-DFF8_HOST_INTERPRETER_ONLY=ON',
                     '-DFF8_RCHEEVOS=OFF', '-DFF8_STATE_BRIDGE=OFF'], check=True, capture_output=True)
-    subprocess.run(['cmake', '--build', str(build), '--target', 'ff8', '-j8'],
+    subprocess.run(['cmake', '--build', str(build), '--target', 'ff8', '-j4'],
                    check=True, capture_output=True, timeout=180)
     return build / 'ff8', exe
 

@@ -18,7 +18,7 @@ def test_pgxp_cache_and_parser(tmp_path):
 
 
 # Reuse the real Vulkan build for projection/perspective pixel contracts.
-from test_vulkan import vulkan_replay, ICD
+from test_vulkan import vulkan_env
 from test_gpu import read_png
 import json
 import struct
@@ -70,7 +70,7 @@ def replay(vulkan_replay, stream, shot, mode, scale=4, policy=None):
              str(shot.with_suffix('.csv')), '0', '1', '--pgxp', mode]
     if policy: command += ['--pgxp-policy',policy]
     run = subprocess.run(command,
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
+                         env=vulkan_env(),
                          text=True, capture_output=True, timeout=120)
     assert run.returncode == 0, run.stderr
     report = json.loads(run.stdout)
@@ -119,7 +119,7 @@ def test_truncated_projection_payload_is_rejected(vulkan_replay, tmp_path, paylo
     stream = tmp_path / 'truncated.gpu'
     stream.write_bytes(b'FF8GPUR2' + struct.pack('<II', 7, 0) + payload)
     run = subprocess.run([str(vulkan_replay), str(stream), '1'],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, timeout=60)
+                         env=vulkan_env(), capture_output=True, timeout=60)
     assert run.returncode == 2
 
 
@@ -164,7 +164,7 @@ def test_pgxp_host_initializes_lazy_hardware_and_keeps_guest_state(vulkan_replay
                    '--stall', '0', '--max-instructions', '0', '--max-vblanks', '2', '--dump-state', str(state)]
         if mode != 'default':
             command += ['--renderer', 'vulkan', '--pgxp', mode]
-        run = subprocess.run(command, env=dict(os.environ, VK_DRIVER_FILES=str(ICD),
+        run = subprocess.run(command, env=vulkan_env(
                              SDL_VIDEODRIVER='offscreen', SDL_AUDIODRIVER='dummy'),
                              text=True, capture_output=True, timeout=30)
         assert run.returncode == 0, run.stdout + run.stderr

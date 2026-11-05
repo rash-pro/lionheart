@@ -214,7 +214,7 @@ def synthetic_player(tmp_path_factory):
                     "-DFF8_RCHEEVOS=OFF", "-DFF8_STATE_BRIDGE=OFF"],
                    check=True, capture_output=True)
     (build / "disc_identity.h").write_text(metadata(tmp / "game"))
-    subprocess.run(["cmake", "--build", str(build), "-j8"], check=True, capture_output=True, timeout=180)
+    subprocess.run(["cmake", "--build", str(build), "-j4"], check=True, capture_output=True, timeout=180)
     return build / "lionheart"
 
 
@@ -345,7 +345,7 @@ def real_player(tmp_path_factory):
     subprocess.run(["cmake", "-S", str(ROOT), "-B", str(build), "-DFF8_PLAYER=ON",
                     "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"],
                    check=True, capture_output=True)
-    subprocess.run(["cmake", "--build", str(build), "-j8"], check=True, capture_output=True, timeout=300)
+    subprocess.run(["cmake", "--build", str(build), "-j4"], check=True, capture_output=True, timeout=300)
     return build / "lionheart"
 
 

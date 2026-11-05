@@ -186,7 +186,6 @@ def soft_preview(tmp_path_factory):
 
 @pytest.mark.parametrize('size,age', [((1280,720),120), ((1920,1080),60), ((1920,1080),120), ((1920,1080),2070), ((2560,1440),120), ((3840,2160),120)])
 def test_soft_vulkan_composition(crt_preview, soft_preview, tmp_path, size, age):
-    from test_host_crt import ICD
     width, height = size
     src = tmp_path / 'in.rgb'; src.write_bytes(bytes([132]) * (320 * 240 * 3))
     vk = tmp_path / 'vk.rgb'; soft = tmp_path / 'soft.rgb'
@@ -195,7 +194,7 @@ def test_soft_vulkan_composition(crt_preview, soft_preview, tmp_path, size, age)
                '--timing', *map(str,TIMING), '--size', f'{width}x{height}', '--crt', 'off', '--out', str(vk),
                '--filter', 'nearest', '--osd-label', label, '--osd-value', value, '--osd-age', str(age)]
     subprocess.run(command, cwd=ROOT, check=True, capture_output=True,
-                   env={**os.environ,'VK_DRIVER_FILES':str(ICD), 'SDL_VIDEODRIVER':'dummy', 'SDL_AUDIODRIVER':'dummy'})
+                   env={**os.environ, 'SDL_VIDEODRIVER':'dummy', 'SDL_AUDIODRIVER':'dummy'})
     subprocess.run([str(soft_preview),str(width),str(height),str(soft),label,value,str(age)], check=True, capture_output=True,
                    env={**os.environ,'SDL_VIDEODRIVER':'dummy','SDL_AUDIODRIVER':'dummy','SDL_RENDER_DRIVER':'software'})
     a = np.frombuffer(vk.read_bytes(), dtype=np.uint8).astype(int)
@@ -218,7 +217,6 @@ def test_sdl_osd_event_hooks(tmp_path):
 
 
 def test_vulkan_sdl_osd_events(crt_preview):
-    from test_host_crt import ICD
     subprocess.run(['cmake','--build',str(crt_preview.parent),'--target','osd_input','-j4'],check=True,capture_output=True,timeout=120)
     subprocess.run([str(crt_preview.parent/'osd_input'),'vulkan'],check=True,capture_output=True,timeout=30,
-                   env={**os.environ,'VK_DRIVER_FILES':str(ICD),'SDL_VIDEODRIVER':'dummy','SDL_AUDIODRIVER':'dummy'})
+                   env={**os.environ,'SDL_VIDEODRIVER':'dummy','SDL_AUDIODRIVER':'dummy'})
