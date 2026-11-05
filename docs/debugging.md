@@ -28,3 +28,45 @@ Keep traces and extracted code under `build/`. Do not attach game dumps or gener
 
 Report the supported serial, input script, last matching VBlank, compiler/options, and log excerpts.
 A small synthetic MIPS regression is the preferred fix evidence when the failing behavior can be isolated.
+
+## Measuring frame spikes
+
+On Linux x86-64, `tools/frame_probe.py` relinks an existing CMake host with a diagnostic
+object. It leaves the original binary alone and works with both the default player
+and the developer build. Relink and preserve the baseline before rebuilding:
+
+```sh
+python tools/frame_probe.py build/player --output build/baseline/lionheart-timing
+python tools/frame_probe.py build/dev --output build/baseline/ff8-timing
+```
+
+Set `FF8_FRAME_TIMINGS` to a CSV path when running a probe. Each VBlank records elapsed
+time, the emulation thread's CPU time, guest cycles, and interpreter/native instruction
+counts. Frame logging is outside the timed interval. The default probe clocks only
+frame boundaries and presentation; it adds no per-instruction timers.
+
+For diagnosis, relink with `--subsystems`. This adds exclusive timers for GTE, GPU
+commands, CD/DMA and SPU, plus sampled host/guest PCs in `CSV.samples`. The `guest_ms`
+column is the remaining CPU time, including scheduling and host input/audio work.
+Nested device calls are charged to their innermost subsystem. These timers perturb
+hot paths: do not use a subsystem probe to report a speedup. Vulkan's separate
+`--gpu-timings CSV` reports encoding, software raster, upload and submission costs.
+
+`tools/frame_bench.py` alternates two timing probes, creates fresh card/config copies,
+checks completion and identical per-frame guest work, and records load and distributions:
+
+```sh
+python tools/frame_bench.py --before build/baseline/lionheart-timing \
+  --after build/candidate/lionheart-timing --exe build/generated/extracted/SLUS_008.92 \
+  --disc /path/to/disc1.cue --card /path/to/disc1-early.mcr \
+  --script tests/scripts/battle-magic.txt --first 2100 --last 4000 \
+  --runs 5 --renderer soft --output build/frame-comparison
+```
+
+Repeat with `--renderer vulkan` and with the developer probes, both normally and
+with `--interpreter`. For Vulkan, select the intended ICD in the environment.
+The benchmark does not capture images, dump state, or enable subsystem profiling.
+Optional `--before-state` and `--after-state` accept independently produced compatible
+checkpoints; restore before `--first` to leave a warmup interval. Prove route exactness
+from boot separately with `tools/compare.py`. A checkpoint is specific to its build,
+input script and execution mode.
