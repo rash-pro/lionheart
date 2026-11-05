@@ -22,6 +22,7 @@ def licences(dist, paths=None, prefix=None):
     for source, name in [
         ('LICENSE', 'Lionheart-MIT.txt'),
         ('THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md'),
+        ('licenses/curl.txt', 'curl.txt'),
         ('third_party/parallel-psx/volk/volk.h', 'volk-MIT.h'),
     ]:
         shutil.copyfile(ROOT / source, dest / name)
