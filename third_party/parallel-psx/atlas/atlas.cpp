@@ -40,7 +40,11 @@ void FBAtlas::load_image_both(const Rect &rect, bool rendered)
 	write_domain(Domain::Scaled,Stage::Compute,rect);
 	for (unsigned y=rect.y/BLOCK_HEIGHT; y<=(rect.y+rect.height-1)/BLOCK_HEIGHT; ++y)
 		for (unsigned x=rect.x/BLOCK_WIDTH; x<=(rect.x+rect.width-1)/BLOCK_WIDTH; ++x)
-			info(x,y)=(info(x,y)&~(STATUS_OWNERSHIP_MASK|STATUS_TEXTURE_RENDERED))|STATUS_SFB_PREFER|(rendered ? STATUS_TEXTURE_RENDERED : 0);
+			// The second write_domain can flush/clear the first domain's status.
+			// The upcoming dispatch writes both planes, after those barriers.
+			info(x,y)=(info(x,y)&~(STATUS_OWNERSHIP_MASK|STATUS_TEXTURE_RENDERED))|
+				STATUS_SFB_PREFER|STATUS_COMPUTE_FB_WRITE|STATUS_COMPUTE_SFB_WRITE|
+				(rendered ? STATUS_TEXTURE_RENDERED : 0);
 }
 
 bool FBAtlas::texture_rendered(const Rect &rect)
@@ -77,6 +81,17 @@ Domain FBAtlas::blit_vram(const Rect &dst, const Rect &src)
 	unsigned src_xend = (src.x + src.width - 1) / BLOCK_WIDTH;
 	unsigned src_ybegin = src.y / BLOCK_HEIGHT;
 	unsigned src_yend = (src.y + src.height - 1) / BLOCK_HEIGHT;
+
+	// write_domain may retire a barrier after read_domain registered this copy's
+	// source. The copy is queued only after we return: retain both future accesses.
+	StatusFlags read = domain == Domain::Scaled ? STATUS_COMPUTE_SFB_READ : STATUS_COMPUTE_FB_READ;
+	StatusFlags write = domain == Domain::Scaled ? STATUS_COMPUTE_SFB_WRITE : STATUS_COMPUTE_FB_WRITE;
+	for (unsigned y = src_ybegin; y <= src_yend; ++y)
+		for (unsigned x = src_xbegin; x <= src_xend; ++x)
+			info(x, y) |= read;
+	for (unsigned y = dst_ybegin; y <= dst_yend; ++y)
+		for (unsigned x = dst_xbegin; x <= dst_xend; ++x)
+			info(x, y) |= write;
 
 	for (unsigned j = 0; j <= min(dst_yend - dst_ybegin, src_yend - src_ybegin); j++)
 		for (unsigned i = 0; i <= min(dst_xend - dst_xbegin, src_xend - src_xbegin); i++)
