@@ -273,3 +273,47 @@ def test_hud_background_copy_keeps_scaled_pixels(vulkan_replay, tmp_path, scale,
     assert json.loads(result.stdout)['errors'] == 0
     assert read_png(frames / 'frame-000001.png') == read_png(frames / 'frame-000002.png')
 
+
+@pytest.mark.parametrize('scale,msaa', [(4, 1), (1, 4)])
+@pytest.mark.parametrize('color', [False, True])
+@pytest.mark.parametrize('masked', [False, True])
+def test_vulkan_color_codes_survive_attachment_conversion(vulkan_replay, tmp_path, scale, msaa, color, masked):
+    """Integer colors stay exact; fractional modulation truncates in either shader."""
+    words = []
+
+    def gp0(*values):
+        words.extend((0, value) for value in values)
+
+    def xy(x, y):
+        return x | (y << 16)
+
+    words.extend((1, value) for value in [0x05000000, 0x06000000 | 600 | (3160 << 12),
+                                        0x07000000 | 16 | (256 << 10), 0x08000001, 0x03000000])
+    gp0(0xe3000000, 0xe407ffff, 0xe1000400)
+    # Mask testing selects the programmable feedback shader, even without blending.
+    gp0(0xe6000002 if masked else 0xe6000000)
+    for value in range(256):
+        gp0(0x60000000 | value * 0x010101, xy(value, 0), xy(1, 4))
+    # Bit 15 makes the zero-intensity texel opaque. Uploads are outside scanout.
+    gp0(0xa0000000, xy(512, 256), xy(32, 1))
+    pixels = [0x8000 | value * 0x421 for value in range(32)]
+    gp0(*(pixels[i] | (pixels[i + 1] << 16) for i in range(0, 32, 2)))
+    gp0(0xe1000518)
+    for y, command in [(8, 0x65000000), (16, 0x64808080), (24, 0x64414141)]:
+        gp0(command, xy(0, y), 0, xy(32, 1))
+    words.append((2, 0))
+    stream = tmp_path / 'color-codes.gpu'
+    stream.write_bytes(b'FF8GPUR1' + b''.join(struct.pack('<II', *word) for word in words))
+    shot = tmp_path / 'color-codes.png'
+    run = subprocess.run([str(vulkan_replay), str(stream), str(scale), str(shot),
+                          str(tmp_path / 'timing.csv'), str(int(color)), str(msaa), '--benchmark'],
+                         env=vulkan_env(), capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    width, _, rgb = read_png(shot)
+    for y, codes in [(0, range(256)), (8, [n * 8 for n in range(32)]),
+                     (16, [n * 8 for n in range(32)]), (24, [n * 65 // 16 for n in range(32)])]:
+        for x, code in enumerate(codes):
+            expected = code if color else (code & 248) | (code >> 5)
+            # These are constant rectangles, away from texture/triangle edges.
+            at = ((y * scale + scale // 2) * width + x * scale + scale // 2) * 3
+            assert tuple(rgb[at:at + 3]) == (expected,) * 3, (x, y, code, tuple(rgb[at:at + 3]))

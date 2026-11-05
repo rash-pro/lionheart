@@ -405,9 +405,9 @@ const  vec4 C30 = vec4( 1.0,  1.0, -0.5,  0.0);
 const  vec4 B60 = vec4( 2.0,  0.5, -2.0, -0.5);
 const  vec4 C60 = vec4( 2.0,  0.0, -1.0,  0.5);
 
-const  vec4 runtime = vec4(0.4, 0.4, 0.4, 0.4);
-const  vec4 runtime = vec4(0.2, 0.4, 0.2, 0.4);
-const  vec4 runtime = runtime.yxwz;
+const  vec4 width45 = vec4(0.4, 0.4, 0.4, 0.4);
+const  vec4 width30 = vec4(0.2, 0.4, 0.2, 0.4);
+const  vec4 width60 = width30.yxwz;
 const  vec4 Mshift = vec4(0.2, 0.2, 0.2, 0.2);
 
 const  vec4 threshold = vec4(0.32, 0.32, 0.32, 0.32);
@@ -517,10 +517,10 @@ vec4 sample_vram_sabr(out float opacity)
 
 	vec2 fp = fract(tc);
 
-	vec4 ma45 = smoothstep(C45 - runtime, C45 + runtime, Ai * fp.y + B45 * fp.x);
-	vec4 ma30 = smoothstep(C30 - runtime, C30 + runtime, Ai * fp.y + B30 * fp.x);
-	vec4 ma60 = smoothstep(C60 - runtime, C60 + runtime, Ai * fp.y + B60 * fp.x);
-	vec4 marn = smoothstep(C45 - runtime + Mshift, C45 + runtime + Mshift, Ai * fp.y + B45 * fp.x);
+	vec4 ma45 = smoothstep(C45 - width45, C45 + width45, Ai * fp.y + B45 * fp.x);
+	vec4 ma30 = smoothstep(C30 - width30, C30 + width30, Ai * fp.y + B30 * fp.x);
+	vec4 ma60 = smoothstep(C60 - width60, C60 + width60, Ai * fp.y + B60 * fp.x);
+	vec4 marn = smoothstep(C45 - width45 + Mshift, C45 + width45 + Mshift, Ai * fp.y + B45 * fp.x);
 
 	vec4 e45   = lum_wd(p12, p8, p16, p18, p22, p14, p17, p13);
 	vec4 econt = lum_wd(p17, p11, p23, p13, p7, p19, p12, p18);

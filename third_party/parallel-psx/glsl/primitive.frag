@@ -100,11 +100,10 @@ void main()
 	FragColor = vColor;
 #endif
 
-	// Get round down behavior instead of round-to-nearest.
-	// This is required for various "fade" out effects.
-	// However, don't accidentially round down if we are already rounded to avoid
-	// unintended feedback effects.
-	FragColor.rgb -= 0.49 / 255.0;
+	// Quantize explicitly: UNORM attachment conversion may choose either adjacent
+	// integer, so a half-step bias cannot implement truncation portably. Keep the
+	// existing 0.01-code margin for values already on an integer boundary.
+	FragColor.rgb = floor(FragColor.rgb * 255.0 + 0.01) / 255.0;
 
 #if 0
 #if defined(TEXTURED)
