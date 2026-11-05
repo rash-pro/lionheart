@@ -73,7 +73,7 @@ def test_signin_view_search_filters_unlock_and_signout(ra_gui, tmp_path, rendere
                  'assert-text ach.102.status "5 / 10"\n'
                  'capture {shots}-view.png\nnav right\nwait 2\n'
                  'assert-text ach.filters "Unlocked 0"\nnav left\n'
-                 + click(920, 134, scale) + 'text "Measured"\nwait 3\n'
+                 + click(920, 100, scale) + 'text "Measured"\nwait 3\n'
                  'assert-text ach.102.title "Measured signal"\ncapture {shots}-search.png\n'
                  'close\nat 55\ncapture {shots}-toast.png\nopen achievements\nwait 15\n'
                  'assert-text ach.stats "1 / 3 unlocked · 5 / 17 points"\n'

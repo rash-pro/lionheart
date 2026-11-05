@@ -26,6 +26,7 @@ int gui_ui_visible(gui_rect_t);
 int gui_ui_wants_text(void);
 void gui_ui_text(const char *id, const char *text, gui_rect_t, gui_font_t, gui_colour_t);
 void gui_ui_text_centred(const char *id, const char *text, gui_rect_t, gui_font_t, gui_colour_t);
+float gui_ui_text_width(const char *text, gui_font_t);
 void gui_ui_keycap(const char *id, const char *key, const char *label, gui_rect_t);
 void gui_ui_panel(gui_rect_t, unsigned rgba, float radius);
 void gui_ui_line(float x1,float y1,float x2,float y2,unsigned rgba,float width);
