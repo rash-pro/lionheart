@@ -62,7 +62,7 @@ int host_ra_file_write(const char *path,const void *data,size_t size) {
     if (close(fd)) { fd=-1; goto done; }
     fd=-1;
 #ifdef _WIN32
-    ok=rename(temp,path)==0;
+    ok=MoveFileExA(temp,path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
 #else
     ok=rename(temp,path)==0;
     if (ok) {
