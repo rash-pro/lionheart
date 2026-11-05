@@ -20,7 +20,7 @@ def test_shell_recreates_both_renderers_and_keeps_text_input(real_player, tmp_pa
     config.write_text(f'disc1={discs[0]}\n')
     script = tmp_path / 'gui.txt'
     script.write_text('\n'.join([
-        'wait 20', 'section next', 'section next', 'section next', 'wait 3',
+        'wait 20', 'section next', 'section next', 'section next', 'section next', 'wait 3',
         'assert-focus video.renderer', f'drop "{movies}"',
         'nav right', 'wait 15', 'assert-text video.renderer "Vulkan"',
         'nav right', 'wait 15', 'assert-text video.renderer "Soft"',

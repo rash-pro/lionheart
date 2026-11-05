@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "ra.h"
 #include "gui_assets.h"
 #include "osd_font.h"
 #include "imgui.h"
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace {
 struct Observation {
@@ -39,7 +41,12 @@ struct Ui {
     int emblem_rect = -1;
     bool platform = false, soft = false, in_frame = false, modal = false, modal_frame = false;
     bool nfd = false, wait_for_pad_release = false;
+    float opacity = 1;
+    unsigned badge_revision = 0;
+    uint64_t badges_at = 0;
 } ui;
+struct BadgeRect { unsigned id; int colour,grey; };
+std::vector<BadgeRect> badges;
 Observation observations[2048];
 
 const ImU32 colours[] = {
@@ -49,7 +56,7 @@ const ImU32 colours[] = {
 };
 
 ImU32 rgba(unsigned c) {
-    return IM_COL32(c >> 24, (c >> 16) & 255, (c >> 8) & 255, c & 255);
+    return IM_COL32(c >> 24, (c >> 16) & 255, (c >> 8) & 255, unsigned((c & 255)*ui.opacity));
 }
 float pixel(float v) { return std::round(v * ui.scale); }
 float scroll_y() { return ImGui::GetCurrentWindow()->Scroll.y; }
@@ -154,6 +161,7 @@ void text_at(const char *text, ImRect r, gui_font_t font, ImU32 colour, bool cen
         p.y=std::round((r.Min.y+r.Max.y-size.y)*0.5f);
     }
     ImVec4 clip(r.Min.x,r.Min.y,r.Max.x,r.Max.y);
+    colour=(colour&0xffffffu)|(ImU32(((colour>>24)&255)*ui.opacity)<<24);
     draw()->AddText(f,f->FontSize,p,colour,text,nullptr,wrap ? r.GetWidth() : 0.0f,&clip);
 }
 int arrow_delta(const Item &it) {
@@ -212,6 +220,13 @@ void rebuild_fonts(float scale) {
     MonoRects mono=mono_rects(14*scale),hint=mono_rects(22*scale);
     ui.fonts[GUI_MONO]=mono.font; ui.fonts[GUI_HINT]=hint.font;
     ui.emblem_rect=io.Fonts->AddCustomRectRegular(gui_emblem_width,gui_emblem_height);
+    badges.clear();
+    const host_ra_status_t *status=host_ra_status();
+    for (unsigned i=0;i<status->total;++i) {
+        host_ra_achievement_t a;
+        if (host_ra_achievement(i,&a) && a.badge)
+            badges.push_back({a.id,io.Fonts->AddCustomRectRegular(64,64),io.Fonts->AddCustomRectRegular(64,64)});
+    }
     io.FontDefault=ui.fonts[GUI_REGULAR];
     io.Fonts->Build();
     unsigned char *pixels; int width,height; io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
@@ -219,6 +234,21 @@ void rebuild_fonts(float scale) {
     const ImFontAtlasCustomRect *r=io.Fonts->GetCustomRectByIndex(ui.emblem_rect);
     for (int y=0;y<gui_emblem_height;++y)
         std::memcpy(pixels+(size_t(r->Y+y)*width+r->X)*4,gui_emblem_rgba+size_t(y)*gui_emblem_width*4,size_t(gui_emblem_width)*4);
+    for (const auto &badge:badges) for (unsigned i=0;i<status->total;++i) {
+        host_ra_achievement_t a;
+        if (!host_ra_achievement(i,&a) || a.id!=badge.id || !a.badge) continue;
+        for (int variant=0;variant<2;++variant) {
+            const auto *rect=io.Fonts->GetCustomRectByIndex(variant ? badge.grey : badge.colour);
+            for (unsigned y=0;y<64;++y) for (unsigned x=0;x<64;++x) {
+                unsigned char *d=pixels+(size_t(rect->Y+y)*width+rect->X+x)*4;
+                const unsigned char *s=a.badge+(y*64+x)*4;
+                std::memcpy(d,s,4);
+                if (variant) d[0]=d[1]=d[2]=(unsigned char)((unsigned(s[0])*77+unsigned(s[1])*150+unsigned(s[2])*29)>>8);
+            }
+        }
+        break;
+    }
+    ui.badge_revision=status->badge_revision; ui.badges_at=SDL_GetTicks64();
     ui.font_scale=scale;
 }
 ImGuiKey key(SDL_Scancode code) {
@@ -374,7 +404,8 @@ extern "C" void gui_ui_begin(unsigned width,unsigned height,int overlay) {
     uint64_t now=SDL_GetTicks64();
     ui.scale=std::max(0.75f,std::min(4.0f,float(height)/720.0f));
     if (ui.pending_scale!=ui.scale) { ui.pending_scale=ui.scale;ui.resize_at=now; }
-    if (!ui.font_scale || (ui.font_scale!=ui.scale && now-ui.resize_at>=250)) rebuild_fonts(ui.scale);
+    if (!ui.font_scale || (ui.font_scale!=ui.scale && now-ui.resize_at>=250) ||
+        (ui.badge_revision!=host_ra_status()->badge_revision && now-ui.badges_at>=250)) rebuild_fonts(ui.scale);
     if (ui.platform) {
         if (ui.wait_for_pad_release && !pad_held()) {
             ui.wait_for_pad_release=false;
@@ -401,7 +432,7 @@ extern "C" void gui_ui_begin(unsigned width,unsigned height,int overlay) {
     style.Colors[ImGuiCol_ModalWindowDimBg]=ImVec4(5/255.0f,5/255.0f,8/255.0f,0.62f);
     style.Colors[ImGuiCol_ScrollbarBg]=ImVec4(0,0,0,0);
     style.Colors[ImGuiCol_ScrollbarGrab]=ImVec4(0.18f,0.18f,0.22f,1);
-    ImGui::NewFrame(); ui.in_frame=true; ui.observation_count=0;ui.focus[0]=0;ui.modal_frame=false;ui.modal_depth=0;ui.modal_parent[0]=0;
+    ImGui::NewFrame(); ui.in_frame=true; ui.opacity=1; ui.observation_count=0;ui.focus[0]=0;ui.modal_frame=false;ui.modal_depth=0;ui.modal_parent[0]=0;
     ui.control_row_pending=false;ui.frame_edit=0;
     ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(float(width),float(height)));
     ImGui::Begin("##lionheart",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse);
@@ -629,6 +660,29 @@ extern "C" void gui_ui_emblem(gui_rect_t r) {
     ImFontAtlas *atlas=ImGui::GetIO().Fonts;ImVec2 uv0,uv1;
     atlas->CalcCustomRectUV(atlas->GetCustomRectByIndex(ui.emblem_rect),&uv0,&uv1);
     ImRect b=bounds(r);draw()->AddImage(atlas->TexID,b.Min,b.Max,uv0,uv1);
+}
+extern "C" void gui_ui_opacity(float opacity) { ui.opacity=std::max(0.0f,std::min(1.0f,opacity)); }
+extern "C" void gui_ui_badge(unsigned id,gui_rect_t r,int locked,float opacity) {
+    if (!ui.in_frame) return;
+    ImRect b=bounds(r);
+    auto found=std::find_if(badges.begin(),badges.end(),[=](const BadgeRect &v) { return v.id==id; });
+    if (found!=badges.end()) {
+        ImFontAtlas *atlas=ImGui::GetIO().Fonts; ImVec2 uv0,uv1;
+        atlas->CalcCustomRectUV(atlas->GetCustomRectByIndex(locked ? found->grey : found->colour),&uv0,&uv1);
+        draw()->AddImage(atlas->TexID,b.Min,b.Max,uv0,uv1,IM_COL32(255,255,255,unsigned(opacity*(locked ? 128 : 255))));
+    } else {
+        ImU32 colour=IM_COL32(107,107,120,unsigned(opacity*128));
+        for (float at=0;at<r.w;at+=8) {
+            float end=std::min(at+4,r.w);
+            draw()->AddLine(point(r.x+at,r.y),point(r.x+end,r.y),colour,std::max(1.0f,pixel(1)));
+            draw()->AddLine(point(r.x+at,r.y+r.h),point(r.x+end,r.y+r.h),colour,std::max(1.0f,pixel(1)));
+        }
+        for (float at=0;at<r.h;at+=8) {
+            float end=std::min(at+4,r.h);
+            draw()->AddLine(point(r.x,r.y+at),point(r.x,r.y+end),colour,std::max(1.0f,pixel(1)));
+            draw()->AddLine(point(r.x+r.w,r.y+at),point(r.x+r.w,r.y+end),colour,std::max(1.0f,pixel(1)));
+        }
+    }
 }
 extern "C" void gui_ui_scroll_begin(const char *id,gui_rect_t r) {
     if (!ui.in_frame) return;

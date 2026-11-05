@@ -19,7 +19,7 @@ static struct {
     int enabled, window, persistent, replacement, dirty, width, height;
     int paused, saved_window;
     unsigned event;
-    double now, start;
+    double now, start, clock_offset;
     char label[512], value[512];
     struct { uint64_t frame; char label[512], value[512]; int fired; } tests[32];
     unsigned count;
@@ -30,6 +30,7 @@ static struct {
 static double now(void) {
     return osd.window ? SDL_GetPerformanceCounter()*1000.0/SDL_GetPerformanceFrequency() : osd.now;
 }
+double host_osd_now(void) { return now()+osd.clock_offset; }
 static uint8_t opacity(void) {
     double age=now()-osd.start, a;
     if (!osd.enabled || !*osd.label) return 0;
@@ -59,12 +60,12 @@ void host_osd_configure(int enabled,const char *tests) {
 }
 void host_osd_clock(double milliseconds) { osd.window=0; osd.now=milliseconds; }
 void host_osd_pause(int paused) {
-    double age;
+    double age,stamp;
     if (!!paused==osd.paused) return;
-    age=now()-osd.start;
+    age=now()-osd.start; stamp=host_osd_now();
     if (paused) { osd.saved_window=osd.window; osd.window=1; }
     else osd.window=osd.saved_window;
-    osd.start=now()-age; osd.paused=!!paused;
+    osd.start=now()-age; osd.clock_offset=stamp-now(); osd.paused=!!paused;
 }
 void host_osd_frame(int window,uint64_t frame) {
     unsigned i;
@@ -136,21 +137,28 @@ host_rect_t host_osd_area(host_viewport_t v) {
     host_rect_t area={x0,y0,x1-x0,y1-y0};
     return area.w>0 && area.h>0 ? area : v.frame;
 }
+static const int cell_heights[]={16,24,32,48,64};
+static int font_index(int height) {
+    int chosen=0,best=abs(cell_heights[0]*45-height);
+    for (int i=1;i<5;++i) {
+        int distance=abs(cell_heights[i]*45-height);
+        if (distance<best) { best=distance; chosen=i; }
+    }
+    return chosen;
+}
+float host_osd_corner_radius(int height) { return cell_heights[font_index(height)]*0.3f; }
 const host_osd_panel_t *host_osd_panel(int width,int height,host_rect_t area) {
-    static const int heights[]={16,24,32,48,64}, widths[]={8,12,16,12,32};
+    static const int widths[]={8,12,16,12,32};
     static const uint8_t dim[]={165,165,175}, bright[]={242,242,242};
     const uint32_t *fonts[]={&spleen_16[0][0],&spleen_24[0][0],&spleen_32[0][0],&spleen_24[0][0],&spleen_64[0][0]};
-    int i,best=0,distance,chosen=0,padx,pady,cw,ch,scale,x,y;
+    int chosen,padx,pady,cw,ch,scale,x,y;
     uint8_t a=opacity();
     if (!a || width<=0 || height<=0) return NULL;
     osd.panel.opacity=a;
     osd.panel.x=area.x+(int)(area.h*0.03+0.5); osd.panel.y=area.y+(int)(area.h*0.03+0.5);
     if (!osd.dirty && width==osd.width && height==osd.height) return &osd.panel;
-    for (i=0;i<5;++i) {
-        distance=abs(heights[i]*45-height);
-        if (!i || distance<best) { best=distance; chosen=i; }
-    }
-    ch=heights[chosen]; scale=chosen==3 ? 2 : 1; cw=widths[chosen]*scale;
+    chosen=font_index(height);
+    ch=cell_heights[chosen]; scale=chosen==3 ? 2 : 1; cw=widths[chosen]*scale;
     padx=(int)(ch*0.75+0.5); pady=(int)(ch*0.4+0.5);
     osd.panel.w=2*padx+(cells(osd.label)+(*osd.value ? 1+cells(osd.value) : 0))*cw;
     osd.panel.h=2*pady+ch; osd.panel.cell_w=cw; osd.panel.cell_h=ch;

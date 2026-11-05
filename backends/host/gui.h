@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 typedef enum { HOST_GUI_HIDDEN, HOST_GUI_SETUP, HOST_GUI_HUB, HOST_GUI_OVERLAY } host_gui_mode_t;
-typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_CONTROLS, HOST_GUI_RA } host_gui_pane_t;
+typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_CONTROLS, HOST_GUI_RA, HOST_GUI_ACHIEVEMENTS } host_gui_pane_t;
 typedef enum { HOST_GUI_RUNNING, HOST_GUI_PLAY, HOST_GUI_QUIT, HOST_GUI_RECREATE, HOST_GUI_ERROR } host_gui_result_t;
 typedef enum { HOST_GUI_KEYBOARD, HOST_GUI_MOUSE, HOST_GUI_PAD } host_gui_input_t;
 typedef struct {

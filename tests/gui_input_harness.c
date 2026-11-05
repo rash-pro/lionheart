@@ -1,6 +1,7 @@
 /* Real SDL controller events and SIO replies across the display's modal seam. */
 #include "display.h"
 #include "gui_internal.h"
+#include "viewport.h"
 #include "input.h"
 #include "screenshot.h"
 #include "hw.h"
@@ -15,6 +16,7 @@ static host_input_t input;
 static SDL_JoystickID controller;
 static unsigned port,opens,paused_frames,pauses,resumes;
 static int visible,requested,result;
+static host_gui_pane_t requested_pane;
 static uint64_t paused_frame;
 static void pause_audio(void) { ++pauses; }
 static void resume_audio(void) { ++resumes; }
@@ -47,8 +49,10 @@ static void button(unsigned id,int down) { queue_button(id,down); pump(); }
  * ImGui widgets and screen navigation are exercised by --gui-test runs. */
 int host_gui_enabled(void) { return 1; }
 int host_gui_visible(void) { return visible; }
+int host_gui_toast_visible(void) { return 0; }
+void host_gui_toast_frame(unsigned w,unsigned h,host_rect_t area) { (void)w;(void)h;(void)area; }
 int host_gui_requested(void) { return requested; }
-void host_gui_request(host_gui_pane_t pane) { (void)pane; requested=1; }
+void host_gui_request(host_gui_pane_t pane) { requested_pane=pane; requested=1; }
 host_gui_result_t host_gui_result(void) { return (host_gui_result_t)result; }
 void host_gui_close(void) { visible=0; result=HOST_GUI_PLAY; }
 void host_gui_open(void) {
@@ -122,8 +126,20 @@ int main(void) {
         queue_axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT,0); pump(); reply(0);
     }
     assert(pauses==2 && resumes==2 && !host_input_state());
+    host_display_hotkeys(0,1);
+    button(SDL_CONTROLLER_BUTTON_GUIDE,1);
+    button(SDL_CONTROLLER_BUTTON_A,1);
+    assert(opens==3 && requested_pane==HOST_GUI_ACHIEVEMENTS);
+    reply(0);
+    button(SDL_CONTROLLER_BUTTON_A,0); button(SDL_CONTROLLER_BUTTON_GUIDE,0);
+    assert(opens==3);
+    SDL_Event key; SDL_zero(key); key.type=SDL_KEYDOWN; key.key.keysym.scancode=SDL_SCANCODE_F10;
+    assert(SDL_PushEvent(&key)==1); pump();
+    assert(opens==4 && requested_pane==HOST_GUI_ACHIEVEMENTS);
+    key.type=SDL_KEYUP; assert(SDL_PushEvent(&key)==1); pump(); reply(0);
+    assert(pauses==4 && resumes==4);
     assert(SDL_JoystickDetachVirtual(virtual_index)==0); pump();
     assert(host_display_shutdown(gpu)); sio_destroy(cpu); hw_destroy(cpu); free(cpu); free(gpu);
-    puts("Guide taps opened; chords never opened; paused SIO replies were released; held input cleared");
+    puts("Guide taps opened; Guide+Cross and F10 opened achievements; paused SIO replies were released; held input cleared");
     return 0;
 }
