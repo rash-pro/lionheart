@@ -73,3 +73,14 @@ existing asynchronous submission path. Optional counters measure wall time and
 count for actual Vulkan pipeline creation calls.
 
 These patches are original project changes under MIT.
+
+## Portable color conversion
+
+The primitive and programmable-feedback fragment shaders explicitly truncate
+8-bit color codes before writing UNORM attachments. The former half-code bias
+assumed round-to-nearest conversion, which Vulkan does not require. The existing
+0.01-code integer-boundary margin is retained; no pixel-test tolerance changes.
+The eleven affected fragment shader includes were rebuilt with local `glslc`.
+The three SABR filter widths have distinct identifiers again, preserving the
+45/30/60-degree constants and uses encoded in the original prebuilt SPIR-V.
+
