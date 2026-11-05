@@ -23,6 +23,8 @@ void host_osd_configure(int enabled, const char *tests);
 void host_osd_frame(int window, uint64_t frame);
 /* Controllable milliseconds for unit tests and offscreen preview tools. */
 void host_osd_clock(double milliseconds);
+double host_osd_now(void);
+float host_osd_corner_radius(int height);
 /* Switch to wall time during a host menu without advancing diagnostic frames. */
 void host_osd_pause(int paused);
 void host_osd_post(const char *label, const char *value, int persistent);

@@ -155,6 +155,8 @@ void host_gui_test_tick(uint64_t guest_frame) {
         script.finished=1; fprintf(stderr,"GUI test complete: %s (%u lines)\n",script.source,script.line);
     } else if (!strcmp(command,"open") && !*args) {
         if (!host_gui_visible()) key(SDL_SCANCODE_ESCAPE,1);
+    } else if (!strcmp(command,"open") && !strcmp(args,"achievements")) {
+        if (!host_gui_visible()) key(SDL_SCANCODE_F10,1);
     } else if (!strcmp(command,"close") && !*args) {
         if (script.measure) { if (fclose(script.measure)) failure("cannot finish timing CSV"); script.measure=NULL; }
         if (script.measure_gpu) { if (fclose(script.measure_gpu)) failure("cannot finish GPU timing CSV"); script.measure_gpu=NULL; }
@@ -260,7 +262,7 @@ void host_gui_test_tick(uint64_t guest_frame) {
             !(script.measure_gpu=fopen(gpu_path,"w")) || fprintf(script.measure_gpu,"sample,gui_gpu_ms\n")<0) { failure("cannot create GPU timing CSV"); return; }
         script.measure_remaining=(unsigned)count; script.measure_frame=script.measure_gpu_frame=0;
     } else if (!strcmp(command,"capture")) {
-        if (!host_gui_visible() || !argument(args,script.capture,sizeof(script.capture)) || !*script.capture)
+        if ((!host_gui_visible() && !host_gui_toast_visible()) || !argument(args,script.capture,sizeof(script.capture)) || !*script.capture)
             failure("capture requires a visible GUI and a path");
     } else if (!strcmp(command,"assert-focus")) {
         if (!*args || strlen(args)>=sizeof(script.id)) failure("invalid focus id");

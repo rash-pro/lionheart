@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-typedef struct { int x, y, w, h; } host_rect_t;
+typedef struct host_rect { int x, y, w, h; } host_rect_t;
 typedef struct { host_rect_t frame, content; } host_viewport_t;
 /* frame is the TV aperture/clip, content is the positioned scanout texture.
  * Width/height are gpu_display's hardware-rounded source pixel dimensions. */

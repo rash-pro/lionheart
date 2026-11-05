@@ -206,7 +206,7 @@ target_link_libraries(ff8 PRIVATE ff8_state_bridge)
 if(FF8_RCHEEVOS)
   add_library(ff8_ra backends/host/ra.c backends/host/ra_http.c backends/host/ra_store.c backends/host/ra_badge.c)
   target_include_directories(ff8_ra PUBLIC backends/host runtime PRIVATE "${RCHEEVOS_DIR}/src/api" "${RCHEEVOS_DIR}/src/client")
-  target_compile_definitions(ff8_ra PUBLIC FF8_RCHEEVOS PRIVATE FF8_VERSION="${PROJECT_VERSION}"
+  target_compile_definitions(ff8_ra PRIVATE FF8_RCHEEVOS FF8_VERSION="${PROJECT_VERSION}"
     RC_HASH_NO_ROM RC_HASH_NO_ZIP RC_HASH_NO_ENCRYPTED)
   target_compile_options(ff8_ra PRIVATE -Wall -Wextra -Wpedantic)
   if(FF8_SANITIZE)
@@ -220,6 +220,7 @@ if(FF8_RCHEEVOS)
     target_link_libraries(ff8_ra PRIVATE PkgConfig::CURL)
   endif()
   target_link_libraries(ff8 PRIVATE ff8_ra)
+  set_property(SOURCE backends/host/main.c APPEND PROPERTY COMPILE_DEFINITIONS FF8_RCHEEVOS)
 endif()
 option(FF8_RECORD_GPU "Record a GPU replay to FF8_GPU_STREAM" OFF)
 if(FF8_PLAYER AND FF8_RECORD_GPU)
@@ -411,6 +412,7 @@ if(FF8_GUI)
     DEPENDS tools/embed_gui_assets.py third_party/chakra-petch/ChakraPetch-Regular.ttf
       third_party/chakra-petch/ChakraPetch-SemiBold.ttf assets/branding/icon-128.png VERBATIM)
   add_library(ff8_gui STATIC backends/host/gui.c backends/host/gui_media.c backends/host/gui_browser.c
+    backends/host/gui_achievements.c
     backends/host/gui_ini.c backends/host/gui_test.c backends/host/gui_imgui.cpp "${GUI_ASSETS}"
     third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
     third_party/imgui/imgui_widgets.cpp third_party/imgui/backends/imgui_impl_sdl2.cpp
@@ -420,6 +422,10 @@ if(FF8_GUI)
   target_compile_definitions(ff8_gui PRIVATE FF8_VERSION="${PROJECT_VERSION}" IMGUI_DISABLE_DEFAULT_FONT)
   target_compile_options(ff8_gui PRIVATE -Wall -Wextra -Wpedantic)
   target_link_libraries(ff8_gui PUBLIC ff8_options ff8_osd ff8_screenshot PkgConfig::SDL2)
+  if(FF8_RCHEEVOS)
+    target_link_libraries(ff8_gui PUBLIC ff8_ra)
+    target_compile_definitions(ff8_gui PRIVATE FF8_RCHEEVOS)
+  endif()
   target_link_libraries(ff8_display PUBLIC ff8_gui)
   # Identifiers/media are host services, also needed by GUI contract tools.
   target_sources(ff8_gui PRIVATE backends/host/disc_id.c backends/host/disc_iso.c)
@@ -442,6 +448,12 @@ if(FF8_GUI)
     target_include_directories(ff8_gui PRIVATE third_party/parallel-psx)
     target_compile_definitions(ff8_vulkan PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK)
     target_compile_definitions(ff8_gui PRIVATE FF8_VULKAN)
+  endif()
+  if(FF8_RCHEEVOS)
+    add_executable(ra_gui_contract tests/ra_gui_host.c backends/host/states_disabled.c)
+    target_link_libraries(ra_gui_contract PRIVATE ff8_display ff8_ra)
+    target_compile_definitions(ra_gui_contract PRIVATE FF8_RCHEEVOS)
+    target_compile_options(ra_gui_contract PRIVATE -Wall -Wextra -Wpedantic -Werror)
   endif()
 endif()
 

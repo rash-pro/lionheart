@@ -298,7 +298,7 @@ def test_gui_pause_real_controller_events_and_guest_sio_wire(tmp_path):
                    cwd=ROOT, check=True, capture_output=True)
     result = subprocess.run([str(binary)], env=ENV, cwd=ROOT, text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'Guide taps opened; chords never opened; paused SIO replies were released; held input cleared' in result.stdout
+    assert 'Guide taps opened; Guide+Cross and F10 opened achievements; paused SIO replies were released; held input cleared' in result.stdout
 
 
 @pytest.fixture(scope='module')

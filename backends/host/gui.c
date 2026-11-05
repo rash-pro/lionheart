@@ -4,6 +4,7 @@
 #include "display.h"
 #include "osd.h"
 #include "screenshot.h"
+#include "ra.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +21,7 @@ static struct {
     host_options_t *options; host_gui_services_t services;
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
     host_gui_result_t result; host_gui_input_t input;
-    int configured,game,want_open,modal,setup_step,ra_form,ra_error;
+    int configured,game,want_open,modal,setup_step,ra_form,ra_error,ra_seen;
     int force_hub,first_focus,focus_rail,keyboard,keyboard_first,shift,symbols,pick_slot,drop_active;
     int card_imported[2];
     unsigned focus_epoch;
@@ -87,6 +88,10 @@ static void changed(const char *key,const char *value) {
 }
 static void changed_number(const char *key,unsigned value) { char number[32]; snprintf(number,sizeof(number),"%u",value); changed(key,number); }
 static void change_pane(host_gui_pane_t pane) { gui.pane=pane; gui.focus_rail=0; request_focus(); gui.keyboard=0; gui.edit=NULL; }
+static void section(int direction) {
+    static const host_gui_pane_t panes[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
+    for (unsigned i=0;i<7;++i) if (gui.pane==panes[i]) { change_pane(panes[(i+(direction>0 ? 1 : 6))%7]); return; }
+}
 int host_gui_enabled(void) { return gui.configured; }
 int host_gui_visible(void) { return gui.configured && gui.mode!=HOST_GUI_HIDDEN; }
 host_gui_mode_t host_gui_mode(void) { return gui.mode; }
@@ -110,7 +115,7 @@ void host_gui_startup_error(host_gui_pane_t pane,const char *detail) {
 void host_gui_hub(void) { gui.force_hub=1; }
 int host_gui_configure(host_options_t *options,const char *data,const host_gui_services_t *services,const char *script) {
     if (gui.configured) host_gui_shutdown();
-    memset(&gui,0,sizeof(gui)); gui.options=options;
+    memset(&gui,0,sizeof(gui)); gui.options=options; gui_achievements_reset();
     if (services) gui.services=*services;
     if (data) snprintf(gui.data,sizeof(gui.data),"%s",data);
     gui.input=HOST_GUI_KEYBOARD; gui.mode=HOST_GUI_HIDDEN; gui.result=HOST_GUI_RUNNING;
@@ -163,6 +168,7 @@ static void back(int controller) {
         gui.modal=MODAL_NONE; request_focus(); return;
     }
     if (gui.modal!=MODAL_NONE) { gui.modal=MODAL_NONE; request_focus(); return; }
+    if (gui.pane==HOST_GUI_ACHIEVEMENTS && gui_achievements_back()) return;
     if (gui.ra_form) { close_form(); request_focus(); return; }
     if (gui.mode==HOST_GUI_SETUP && gui.setup_step) { gui.setup_step=0; request_focus(); return; }
     if (!gui.focus_rail && gui.mode!=HOST_GUI_SETUP) { gui.focus_rail=1; gui_ui_focus(overlay() ? "nav.game" : "nav.play"); return; }
@@ -244,13 +250,14 @@ void host_gui_event(const SDL_Event *event) {
     if (event->type==SDL_CONTROLLERBUTTONDOWN || event->type==SDL_CONTROLLERBUTTONUP) gui.input=HOST_GUI_PAD;
     if (event->type==SDL_CONTROLLERAXISMOTION && ((event->caxis.axis<=SDL_CONTROLLER_AXIS_RIGHTY && abs(event->caxis.value)>8000) || (event->caxis.axis>SDL_CONTROLLER_AXIS_RIGHTY && event->caxis.value>8000))) gui.input=HOST_GUI_PAD;
     if (!host_gui_visible()) return;
+    if (gui.pane==HOST_GUI_ACHIEVEMENTS && !gui.modal && !gui.keyboard) gui_achievements_event(event);
     gui_ui_event(event);
     if (event->type==SDL_KEYDOWN || event->type==SDL_TEXTINPUT) {
         gui.input=HOST_GUI_KEYBOARD; gui.keyboard=0;
         if (event->type==SDL_KEYDOWN && !event->key.repeat) {
             SDL_Keycode key=event->key.keysym.sym;
             if (key==SDLK_ESCAPE && !keyboard_was_open) back(0);
-            if (!gui.modal && !gui.keyboard && !gui_ui_wants_text() && (key==SDLK_q || key==SDLK_e)) change_pane((host_gui_pane_t)((gui.pane+(key==SDLK_e ? 1 : 5))%6));
+            if (!gui.modal && !gui.keyboard && !gui_ui_wants_text() && (key==SDLK_q || key==SDLK_e)) section(key==SDLK_e ? 1 : -1);
         }
     }
     if (event->type==SDL_MOUSEBUTTONDOWN || event->type==SDL_MOUSEMOTION || event->type==SDL_MOUSEWHEEL) gui.input=HOST_GUI_MOUSE;
@@ -268,7 +275,7 @@ void host_gui_event(const SDL_Event *event) {
                     unsigned slot=0; if (sscanf(gui_ui_focused(),"disc.%u.",&slot)==1 && slot) remove_disc(slot-1);
                 }
             }
-            if (!gui.modal && !gui.keyboard && (button==SDL_CONTROLLER_BUTTON_LEFTSHOULDER || button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) change_pane((host_gui_pane_t)((gui.pane+(button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ? 1 : 5))%6));
+            if (!gui.modal && !gui.keyboard && (button==SDL_CONTROLLER_BUTTON_LEFTSHOULDER || button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) section(button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ? 1 : -1);
             if (button==SDL_CONTROLLER_BUTTON_START && !gui.modal) {
                 if (gui.mode==HOST_GUI_SETUP) setup_next();
                 else play();
@@ -347,7 +354,8 @@ static void setup_next(void) {
     } else if (*gui.options->cards[0]) { gui.mode=HOST_GUI_HUB; gui.pane=HOST_GUI_GAME; request_focus(); }
 }
 static void rail(void) {
-    static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.controls","nav.ra"};
+    static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.controls","nav.ra","nav.achievements"};
+    static const unsigned order[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
     gui_ui_panel(R(0,0,gui.rail,gui.height-56),0x101016ff,0);
     gui_ui_emblem(R(28,26,48,48)); label("app.name",86,32,gui.rail-98,GUI_TITLE,GUI_TEXT);
 #ifdef _WIN32
@@ -356,11 +364,12 @@ static void rail(void) {
     const char *platform=S("platform.linux");
 #endif
     char version[128]; snprintf(version,sizeof(version),S("app.version"),FF8_VERSION,platform); text("app.version",version,32,88,gui.rail-48,GUI_SUB,GUI_MUTED);
-    for (unsigned i=0;i<6;++i) {
+    for (unsigned row=0;row<7;++row) {
+        unsigned i=order[row];
         const char *id=i==0 && overlay() ? "nav.game" : ids[i];
-        if (gui_ui_row(id,S(id),NULL,R(0,142+(float)i*46,gui.rail,44),gui.pane==(host_gui_pane_t)i ? GUI_SELECTED : 0)) change_pane((host_gui_pane_t)i);
+        if (gui_ui_row(id,S(id),NULL,R(0,142+(float)row*46,gui.rail,44),gui.pane==(host_gui_pane_t)i ? GUI_SELECTED : 0)) change_pane((host_gui_pane_t)i);
     }
-    if (gui_ui_row("nav.quit",S("nav.quit"),NULL,R(0,446,gui.rail,44),0)) { gui.modal=MODAL_QUIT; request_focus(); }
+    if (gui_ui_row("nav.quit",S("nav.quit"),NULL,R(0,492,gui.rail,44),0)) { gui.modal=MODAL_QUIT; request_focus(); }
 }
 static void hints(void) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_XBOXONE;
@@ -379,7 +388,8 @@ static void hints(void) {
         gui_ui_keycap("hint.shift",S(secondary),S("hint.shift"),R(510,gui.height-40,200,24));
         gui_ui_keycap("hint.done",S(back_key),S("hint.done"),R(730,gui.height-40,200,24));
     } else {
-        gui_ui_keycap("hint.select",S(select),S("hint.select"),R(48,gui.height-40,230,24));
+        if (gui.pane==HOST_GUI_ACHIEVEMENTS) gui_ui_keycap("hint.filter",S(gui.input==HOST_GUI_PAD ? "hint.pad.filter" : "hint.key.filter"),S("hint.filter"),R(48,gui.height-40,230,24));
+        else gui_ui_keycap("hint.select",S(select),S("hint.select"),R(48,gui.height-40,230,24));
         gui_ui_keycap("hint.back",S(back_key),S(gui.modal==MODAL_BROWSER && gui.input==HOST_GUI_PAD ? "hint.up" : "hint.back"),R(310,gui.height-40,300,24));
         if (gui.input==HOST_GUI_PAD && gui.modal==MODAL_BROWSER) gui_ui_keycap("hint.places",S(secondary),S("hint.places"),R(gui.width-310,gui.height-40,260,24));
         else if (gui.mode!=HOST_GUI_SETUP && !gui.modal) gui_ui_keycap("hint.section",S(section),S("hint.section"),R(gui.width-350,gui.height-40,300,24));
@@ -514,6 +524,7 @@ static void draw_game(void) {
         if (gui_ui_row("game.save",S("game.save"),NULL,R(x,316,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F5); }
         if (gui_ui_row("game.load",S("game.load"),available ? NULL : S("game.load.empty"),R(x,378,width,64),available ? 0 : GUI_DISABLED)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F7); }
         if (gui_ui_row("game.shot",S("game.shot"),NULL,R(x,446,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F12); }
+        if (gui_ui_row("btn.view_ach",S("btn.view_ach"),NULL,R(x,514,width,58),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
     } else {
         pane_header("nav.play",S("hub.subtitle"));
         if (button("btn.play",x,126,170,ready_to_play() ? GUI_PRIMARY : GUI_DISABLED)) play();
@@ -529,7 +540,7 @@ static void draw_game(void) {
         snprintf(sub,sizeof(sub),S("hub.video"),S(gui.options->renderer ? "val.vulkan" : "val.soft"),(unsigned)gui.options->internal_scale,S(gui.options->crt==0 ? "val.off" : gui.options->crt==1 ? "val.pvm" : gui.options->crt==2 ? "val.tv" : "val.arcade"));
         if (gui_ui_row("hub.video",S("nav.video"),sub,R(x,354,width,68),0)) change_pane(HOST_GUI_VIDEO);
         if (gui_ui_row("hub.controls",S("nav.controls"),S(gui.options->dualshock ? "val.dualshock" : "val.digital"),R(x,426,width,68),0)) change_pane(HOST_GUI_CONTROLS);
-        if (gui_ui_row("hub.ra",S("nav.ra"),S("ra.off"),R(x,498,width,68),0)) change_pane(HOST_GUI_RA);
+        if (gui_ui_row("hub.ra",S("nav.ra"),S(gui.options->ra ? "tag.casual" : "ra.off"),R(x,498,width,68),0)) change_pane(HOST_GUI_RA);
         label("app.wip",x,606,width,GUI_SUB,GUI_MUTED);
     }
 }
@@ -625,6 +636,7 @@ static const char *pad_name(unsigned bit) {
     int ps=type==SDL_CONTROLLER_TYPE_PS3 || type==SDL_CONTROLLER_TYPE_PS4 || type==SDL_CONTROLLER_TYPE_PS5;
     int nintendo=type==SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO;
     switch (bit) {
+    case PAD_CROSS:return S(ps ? "hint.pad.ps.select" : nintendo ? "hint.pad.nintendo.select" : "hint.pad.xbox.select");
     case PAD_R1:return S(ps ? "controls.r1" : nintendo ? "controls.nintendo.r" : "controls.xbox.rb");
     case PAD_L1:return S(ps ? "controls.l1" : nintendo ? "controls.nintendo.l" : "controls.xbox.lb");
     case PAD_R2:return S(ps ? "controls.r2" : nintendo ? "controls.nintendo.zr" : "controls.xbox.rt");
@@ -663,6 +675,42 @@ static void draw_controls(void) {
 }
 static void draw_ra(void) {
     float x=gui.rail+48,width=gui.width-gui.rail-96;
+    const host_ra_status_t *status=host_ra_status();
+    if (gui.ra_seen!=(int)status->state) {
+        if (status->state==HOST_RA_REJECTED) close_form();
+        request_focus();
+    }
+    gui.ra_seen=status->state;
+    int online=status->state==HOST_RA_CONNECTED || (status->state==HOST_RA_OFFLINE && *status->username);
+    if (online || (status->state==HOST_RA_REJECTED && !gui.ra_form)) {
+        char value[1024]; close_form(); pane_header("ra.title",S("ra.site"));
+        if (online) snprintf(value,sizeof(value),S("ra.signed_in"),status->username);
+        else snprintf(value,sizeof(value),"%s",S("ra.rejected"));
+        text(online ? "ra.signed_in" : "ra.rejected",value,x+18,138,width-36,GUI_TITLE,online ? GUI_TEXT : GUI_ERROR);
+        label("tag.casual",x+18,184,width-36,GUI_SUB,GUI_CASUAL);
+        const char *state=status->state==HOST_RA_OFFLINE ? "ra.offline" : online ? "ra.connected" : "ra.rejected.sub";
+        label(state,x+18,234,width-36,GUI_REGULAR,status->state==HOST_RA_OFFLINE ? GUI_WARN : online ? GUI_OK : GUI_ERROR);
+        if (status->state==HOST_RA_OFFLINE) label("ra.offline.sub",x+18,270,width-36,GUI_SUB,GUI_DIM);
+        if (online) {
+            if (status->loading) snprintf(value,sizeof(value),"%s",S("ach.loading"));
+            else if (status->unknown_game) snprintf(value,sizeof(value),"%s",S("ach.unknown"));
+            else snprintf(value,sizeof(value),S("ra.set.sub"),status->title,status->unlocked,status->total,status->earned,status->points);
+            if (gui_ui_row("btn.view_ach",S("btn.view_ach"),value,R(x,316,width,76),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
+            gui_ui_control_row(R(x,410,width,52));
+            int next=gui_ui_toggle("ra.notify",R(x+width-100,410,100,52),gui.options->ra_notify,1);
+            control_label("ra.notify","ra.notify",x+18,422,width-140,GUI_REGULAR,GUI_TEXT);
+            if (next!=gui.options->ra_notify) changed_number("ra-notify",(unsigned)next);
+            if (gui.first_focus) gui_ui_focus("btn.view_ach");
+        } else {
+            if (button("btn.sign_in",x+18,316,160,GUI_PRIMARY)) { gui.ra_form=1; request_focus(); }
+            if (gui.first_focus) gui_ui_focus("btn.sign_in");
+        }
+        if (button("btn.sign_out",x+18,494,160,0)) { host_ra_signout(); changed_number("ra",0); request_focus(); }
+        label("ra.signout.sub",x+18,550,width-36,GUI_SUB,GUI_DIM);
+        if (status->storage_failed) label("ra.err.storage",x+18,598,width-36,GUI_SUB,GUI_ERROR);
+        return;
+    }
+    if (gui.options->ra && status->state!=HOST_RA_UNAVAILABLE) gui.ra_form=1;
     pane_header("ra.title",gui.ra_form ? S("ra.form.sub") : S("ra.site"));
     if (!gui.ra_form) {
         label("ra.off",x+18,148,width-36,GUI_TITLE,GUI_TEXT);
@@ -675,9 +723,14 @@ static void draw_ra(void) {
     label("ra.user",x+18,198,380,GUI_SUB,GUI_DIM); gui_ui_edit("ra.user",R(x+18,226,380,48),gui.username,sizeof(gui.username),0);
     label("ra.pass",x+18,292,380,GUI_SUB,GUI_DIM); gui_ui_edit("ra.pass",R(x+18,320,380,48),gui.password,sizeof(gui.password),1);
     if (gui.first_focus) gui_ui_focus("ra.user");
-    if (gui.ra_error) label("ra.err.unavailable",x+18,386,width-36,GUI_SUB,GUI_ERROR);
-    if (button("btn.sign_in",x+18,434,150,GUI_PRIMARY)) { gui.ra_error=1; memset(gui.password,0,sizeof(gui.password)); gui.keyboard=0; }
-    if (button("btn.cancel",x+180,434,128,0)) { close_form(); request_focus(); }
+    const char *error=status->error_id ? status->error_id : gui.ra_error ? "ra.err.unavailable" : NULL;
+    if (error) label(error,x+18,386,width-36,GUI_SUB,GUI_ERROR);
+    if (status->state==HOST_RA_SIGNING_IN) label("ra.signing_in",x+18,386,width-36,GUI_SUB,GUI_DIM);
+    if (button("btn.sign_in",x+18,434,150,status->state==HOST_RA_SIGNING_IN ? GUI_DISABLED : GUI_PRIMARY)) {
+        host_ra_login(gui.username,gui.password); gui.ra_error=status->state==HOST_RA_UNAVAILABLE;
+        memset(gui.password,0,sizeof(gui.password)); gui.keyboard=0; gui.edit=NULL;
+    }
+    if (button("btn.cancel",x+180,434,128,0)) { host_ra_signout(); changed_number("ra",0); close_form(); request_focus(); }
     label("ra.token_note",x+18,500,width-36,GUI_SUB,GUI_DIM);
 }
 static const char *browser_tag(const char *path,char *out,size_t capacity) {
@@ -749,7 +802,7 @@ static void draw_dialog(void) {
         for (unsigned i=0;i<5;++i) label(lines[i],x+32,y+84+(float)i*34,width-64,GUI_SUB,GUI_TEXT);
         if (button("btn.not_now",x+width-340,y+height-72,140,0)) { gui.modal=MODAL_NONE; request_focus(); }
         if (gui.first_focus) gui_ui_focus("btn.not_now");
-        if (button("btn.accept_risk",x+width-186,y+height-72,154,GUI_PRIMARY)) { gui.modal=MODAL_NONE; gui.ra_form=1; request_focus(); }
+        if (button("btn.accept_risk",x+width-186,y+height-72,154,GUI_PRIMARY)) { gui.modal=MODAL_NONE; gui.ra_form=1; changed_number("ra",1); request_focus(); }
     } else if (gui.modal==MODAL_QUIT) {
         label("quit.title",x+32,y+28,width-64,GUI_TITLE,GUI_TEXT); label("quit.body",x+32,y+86,width-64,GUI_REGULAR,GUI_DIM);
         if (button("btn.cancel",x+width-312,y+height-72,130,0)) { gui.modal=MODAL_NONE; request_focus(); }
@@ -794,6 +847,7 @@ static void draw_keyboard(void) {
 
 void host_gui_frame(unsigned width,unsigned height) {
     if (!host_gui_visible()) return;
+    host_ra_idle();
     gui.width=(float)width/gui_scale(height); gui.height=(float)height/gui_scale(height); gui.rail=gui_scale(height)<0.9f ? 240 : 300;
     apply_results();
     unsigned focus_epoch=gui.focus_epoch;
@@ -810,6 +864,7 @@ void host_gui_frame(unsigned width,unsigned height) {
         case HOST_GUI_GAME:draw_game();break; case HOST_GUI_DISCS:draw_discs();break;
         case HOST_GUI_CARD:draw_cards();break; case HOST_GUI_VIDEO:draw_video();break;
         case HOST_GUI_CONTROLS:draw_controls();break; case HOST_GUI_RA:draw_ra();break;
+        case HOST_GUI_ACHIEVEMENTS:gui_achievements_draw(gui.rail+48,gui.width-gui.rail-96,gui.height,gui.first_focus);break;
         }
         if (*gui.startup_error && gui.pane!=HOST_GUI_GAME) text("startup.error",gui.startup_error,gui.rail+66,gui.height-85,gui.width-gui.rail-114,GUI_SUB,GUI_ERROR);
         gui_ui_region_end();
@@ -818,5 +873,16 @@ void host_gui_frame(unsigned width,unsigned height) {
     if (gui.modal==MODAL_BROWSER) draw_browser();
     else if (gui.modal!=MODAL_NONE) draw_dialog();
     draw_keyboard();
+    gui_achievement_toast(width,height,(host_rect_t){0,0,(int)width,(int)height});
     gui_ui_end(); if (focus_epoch==gui.focus_epoch) gui.first_focus=0;
+}
+int host_gui_toast_visible(void) {
+    host_ra_achievement_t achievement; float opacity;
+    return gui.configured && host_ra_toast(&achievement,host_osd_now(),&opacity);
+}
+void host_gui_toast_frame(unsigned width,unsigned height,host_rect_t area) {
+    if (!host_gui_toast_visible() || host_gui_visible()) return;
+    gui_ui_begin(width,height,0);
+    gui_achievement_toast(width,height,area);
+    gui_ui_end();
 }

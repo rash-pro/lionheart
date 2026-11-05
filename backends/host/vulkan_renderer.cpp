@@ -6,7 +6,7 @@
 #include "osd.h"
 #include "screenshot.h"
 #ifdef FF8_GUI
-#include "gui.h"
+#include "gui_internal.h"
 #include "gui_vulkan.h"
 #endif
 #include "vulkan_wsi.hpp"
@@ -1117,6 +1117,12 @@ void screenshot_copy(Backend &b,ImageHandle &image,VkExtent2D extent) {
     host_screenshot_submit(frame.w,frame.h,format,shot.release(),screenshot_read,screenshot_release);
 }
 void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat format,unsigned preset) {
+#ifdef FF8_GUI
+    if (!host_gui_visible() && host_gui_toast_visible()) {
+        auto view=host_viewport(b.scanout_timing,b.native_width,b.native_height,int(extent.width),int(extent.height),presentation_mode);
+        host_gui_toast_frame(extent.width,extent.height,host_osd_area(view));
+    }
+#endif
     if (preset) crt_present(b,target,extent,format,preset);
     else {
         ensure_image(*b.device,target,extent.width,extent.height,format,
@@ -1129,7 +1135,7 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
 #endif
         ) screenshot_copy(b,target,extent);
 #ifdef FF8_GUI
-    if (host_gui_visible()) {
+    if (host_gui_visible() || host_gui_toast_visible()) {
         auto &command=*b.renderer->command_buffer_hack_fixme();
         // Start after preceding composition commands complete, and end after GUI
         // writes/transitions. The result excludes retained-picture rendering.
@@ -1177,7 +1183,7 @@ extern "C" int host_gpu_present(void) {
 #endif
         if (capture.dir || (!b.window && host_screenshot_pending())
 #ifdef FF8_GUI
-            || (host_gui_visible() && (!b.window || host_gui_test_capture()))
+            || (host_gui_visible() && !b.window) || host_gui_test_capture()
 #endif
             ) {
             present_timestamp(b,b.present_first,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
@@ -1204,7 +1210,7 @@ extern "C" int host_gpu_present(void) {
         b.acquired=true; b.present_index=index;
         if (!preset && !osd_panel(b,b.wsi->extent) && !host_screenshot_pending()
 #ifdef FF8_GUI
-            && !host_gui_visible()
+            && !host_gui_visible() && !host_gui_toast_visible()
 #endif
             ) {
             VkCommandBuffer cmd=b.renderer->command_buffer_hack_fixme()->get_command_buffer();

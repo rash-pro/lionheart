@@ -43,6 +43,16 @@ const char *gui_ui_text_for(const char *id);
 /* 1 selected, 0 cancelled, -1 unavailable (caller opens in-app browser). */
 int gui_ui_native_pick(gui_pick_t, char *path, size_t capacity);
 void gui_ui_emblem(gui_rect_t);
+void gui_ui_badge(unsigned id,gui_rect_t,int locked,float opacity);
+void gui_ui_opacity(float);
+void gui_achievements_draw(float x,float width,float height,int first_focus);
+void gui_achievements_event(const SDL_Event *);
+void gui_achievements_reset(void);
+int gui_achievements_back(void);
+struct host_rect;
+void gui_achievement_toast(unsigned width,unsigned height,struct host_rect);
+int host_gui_toast_visible(void);
+void host_gui_toast_frame(unsigned width,unsigned height,struct host_rect);
 void gui_ui_scroll_begin(const char *id, gui_rect_t);
 void gui_ui_scroll_end(void);
 void gui_ui_region_begin(const char *id, gui_rect_t);

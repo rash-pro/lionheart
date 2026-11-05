@@ -204,6 +204,9 @@ static int action(unsigned key,int down) {
         else if (!host_input_fast()) host_osd_clear(HOST_OSD_FAST);
     }
     if (!down) return 1;
+#ifdef FF8_GUI
+    if (key==SDL_SCANCODE_F10 && host_gui_enabled()) host_gui_request(HOST_GUI_ACHIEVEMENTS);
+#endif
     if (key>=SDL_SCANCODE_F1 && key<=SDL_SCANCODE_F4) host.disc_request=key-SDL_SCANCODE_F1+1;
     if (key==SDL_SCANCODE_F5) host.state_action=1;
     if (key==SDL_SCANCODE_F7) host.state_action=2;
@@ -699,9 +702,20 @@ static void present(gpu_t *g, int capture) {
                 if (!ok) { fail("cannot write scaled PNG"); return; }
             }
         }
-        if (host.video || presented || host_screenshot_pending()) {
+        if (host.video || presented || host_screenshot_pending()
+#ifdef FF8_GUI
+            || host_gui_test_capture()
+#endif
+            ) {
             if (!host_gpu_scanout(g) || !host_gpu_present()) goto gpu_fallback;
         }
+#ifdef FF8_GUI
+        if (host_gui_test_capture()) {
+            const uint8_t *rgb; int cw,ch;
+            int ok=host_gpu_gui_rgb(&rgb,&cw,&ch) && host_png(host_gui_test_capture(),rgb,cw,ch);
+            host_gui_test_captured(ok);
+        }
+#endif
 #ifdef FF8_GUI
         /* Diagnostic overlays still need the preceding guest image when no WSI
          * or ordinary presented dump is active. Composition waits for the menu. */
@@ -768,7 +782,20 @@ gpu_fallback:
             fail(SDL_GetError()); return;
         }
         if (host_screenshot_pending()) soft_screenshot(view.frame);
+#ifdef FF8_GUI
+        if (host_gui_toast_visible() && host_display_gui_attach()) {
+            host_gui_toast_frame((unsigned)rw,(unsigned)rh,host_osd_area(view));
+            gui_ui_soft_render(host.renderer);
+        }
+#endif
         if (!soft_osd(view,rw,rh)) return;
+#ifdef FF8_GUI
+        if (host_gui_test_capture()) {
+            uint8_t *rgb=malloc((size_t)rw*rh*3);
+            int ok=rgb && !SDL_RenderReadPixels(host.renderer,NULL,SDL_PIXELFORMAT_RGB24,rgb,rw*3) && host_png(host_gui_test_capture(),rgb,rw,rh);
+            free(rgb); host_gui_test_captured(ok);
+        }
+#endif
         if (capture && host.presented && host.frame>=host.capture_from && (!host.capture_step || host.frame%host.capture_step==0)) {
             uint8_t *rgb=malloc((size_t)rw*rh*3);
             size_t n=strlen(host.presented)+40; char *path=malloc(n);
