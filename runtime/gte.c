@@ -232,6 +232,7 @@ static void project_xy(cpu_t *c, uint32_t xy, int64_t x, int64_t y, uint32_t dep
 
 static void project(cpu_t *c, unsigned v, unsigned shift, int lm, int last,
                     const gte_matrix_t *prepared) {
+    FRAME_ORACLE(frame_oracle_projection(c, v));
     int64_t raw[3], depth, x, y;
     int32_t z_ir, sx, sy;
     uint32_t q;
@@ -265,6 +266,7 @@ static void project(cpu_t *c, unsigned v, unsigned shift, int lm, int last,
     sx = clamp(c, asr(x, 16), -1024, 1023, 14);
     sy = clamp(c, asr(y, 16), -1024, 1023, 13);
     project_xy(c, ((uint32_t)sx & 65535u) | ((uint32_t)sy << 16), x, y, (uint32_t)depth);
+    FRAME_TAGS(frame_tags_project(c, v, ((uint32_t)sx & 65535u) | ((uint32_t)sy << 16), x, y, (uint32_t)depth));
     if (last) {
         int64_t n = (int64_t)q * signed16(c->gte_ctrl[27]) + signed32(c->gte_ctrl[28]);
         mac0(c, n);

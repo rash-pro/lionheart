@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "perf_stats.h"
+#include "frame_tags.h"
+#include "frame_oracle.h"
 
 #define CYCLES_PER_INSN 2u
 #define RAM_SIZE 0x200000u
@@ -62,6 +64,13 @@ typedef struct {
 typedef struct { uint32_t pc; uint64_t epoch, hits; } poll_t;
 
 struct cpu {
+#if defined(FF8_RECORD_FRAME_ORACLE)
+    struct frame_oracle *frame_oracle;
+#endif
+#if defined(FF8_FRAME_PROVENANCE)
+    struct frame_tags *frame_tags;
+    struct frame_tags *frame_tags_paused;
+#endif
     struct hw *hw;
     uint32_t r[32], hi, lo, pc, cop0[32], gte_data[32], gte_ctrl[32];
     uint32_t load_reg, load_value;
@@ -281,6 +290,8 @@ static inline uint32_t ram_read(const cpu_t *c, uint32_t p, unsigned width) {
 
 static inline void ram_write(cpu_t *c, uint32_t p, unsigned width, uint32_t value) {
     p &= RAM_SIZE - 1;
+    FRAME_TAGS(frame_tags_invalidate(c, p, width));
+    FRAME_ORACLE(frame_oracle_write(c, p, width));
     if (c->code_watched[p >> CODE_PAGE_SHIFT]) code_invalidate(c, p, width);
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if (width == 4) ((ram_word_t *)c->ram)[p >> 2] = value;

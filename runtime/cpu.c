@@ -181,6 +181,7 @@ void cpu_stop(cpu_t *c, const char *format, ...) {
 }
 
 void cpu_exception(cpu_t *c, unsigned code, uint32_t bad_address) {
+    FRAME_TAGS(frame_tags_exception(c));
     /* A faulting instruction does not cancel the preceding delayed load. */
     if (c->load_reg) c->r[c->load_reg] = c->load_value;
     c->load_reg = c->load_value = 0;
@@ -889,6 +890,8 @@ void mem_slow_write(cpu_t *c, uint32_t address, unsigned width, uint32_t value) 
         return;
     }
     if (p >= 0x1f800000 && p + width <= 0x1f800400) {
+        FRAME_TAGS(frame_tags_invalidate(c, p, width));
+        FRAME_ORACLE(frame_oracle_write(c, p, width));
         scratch_write(c, p, width, value);
         return;
     }

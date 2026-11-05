@@ -11,6 +11,7 @@ int main(int argc, char **argv) {
     if (getenv("FF8_TEST_OSD")) printf("osd=%d tests=%s",o.osd,o.osd_tests);
     if (getenv("FF8_TEST_HOTKEYS")) printf("hotkey=%d directory=%s frames=%s",o.pad_hotkey,o.screenshot_dir,o.screenshot_at);
     if (getenv("FF8_TEST_CARDS")) printf("cards=%s\n",o.snapshot_cards ? "snapshot" : "live");
+    if (getenv("FF8_TEST_INTERPOLATION")) printf("frame-interpolation=%d\n",o.frame_interpolation);
     if (getenv("FF8_TEST_CRT")) printf("crt=%d present=%llux%llu presented=%s\n",o.crt,
         (unsigned long long)(o.present_size & 0xffffffffu),(unsigned long long)(o.present_size >> 32),o.presented_frames);
     return 0;

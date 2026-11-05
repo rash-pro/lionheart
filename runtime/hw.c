@@ -108,6 +108,7 @@ struct hw *hw_get(cpu_t *c) {
     if (!c->hw) { cpu_stop(c, "cannot allocate hardware"); abort(); }
     c->hw->gpu = gpu_create();
     if (!c->hw->gpu) { cpu_stop(c, "cannot allocate GPU"); abort(); }
+    FRAME_TAGS(gpu_frame_tags_bind(c->hw->gpu, c));
     mdec_init(&c->hw->mdec);
     cdrom_audio_init(&c->hw->cd);
     c->hw->spu = spu_create();
@@ -158,6 +159,8 @@ struct hw *hw_get(cpu_t *c) {
 }
 
 void hw_destroy(cpu_t *c) {
+    FRAME_TAGS(frame_tags_destroy(c));
+    FRAME_ORACLE(frame_oracle_destroy(c));
     if (!c->hw) return;
     if (c->hw->cd.file) fclose(c->hw->cd.file);
     free(c->hw->cd.lba_reads); free(c->hw->cd.lba_dma);
@@ -500,7 +503,11 @@ void hw_write(cpu_t *c, uint32_t address, unsigned width, uint32_t value) {
     } else if (address >= 0x1f801800 && address < 0x1f801804) {
         for (i = 0; i < width; ++i) cdrom_write(c, (address + i) & 3, value >> (8 * i));
     } else if (address == 0x1f801810) {
+#if defined(FF8_FRAME_PROVENANCE)
+        gpu_gp0_tagged(h->gpu, value, frame_tags_port_read(c));
+#else
         gpu_gp0(h->gpu, value);
+#endif
         if (gpu_status(h->gpu) & (1u << 24)) {
             hw_irq_raise(c, 1);
             hw_reschedule(c);

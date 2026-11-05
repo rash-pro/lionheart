@@ -618,7 +618,21 @@ static void draw_video(void) {
     text("video.movies.path",*gui.options->movies ? base_name(gui.options->movies) : S("video.none"),x+18,554,width-260,GUI_MONO,GUI_DIM);
     if (gui_ui_button("video.movies.browse",S("btn.browse"),R(x+width-254,516,160,38),vulkan ? 0 : GUI_DISABLED)) pick(GUI_PICK_MOVIES,0);
     if (gui_ui_button("video.movies.clear",S("btn.clear"),R(x+width-84,516,76,38),vulkan && *gui.options->movies ? 0 : GUI_DISABLED)) changed("movies","");
-    value=toggle("video.osd","video.osd",gui.options->osd,590,1,0); if (value!=gui.options->osd) changed_number("osd",(unsigned)value);
+    for (int i=0;i<2;++i) {
+        const char *id=i ? "video.osd" : "video.interpolation";
+        float half=(width-12)/2, left=x+i*(half+12);
+        int enabled=i || vulkan, current=i ? gui.options->osd : gui.options->frame_interpolation;
+#if !defined(FF8_FRAME_PROVENANCE) || !defined(FF8_VULKAN)
+        if (!i) enabled=0;
+#endif
+        gui_ui_control_row(R(left,590,half,52));
+        control_label(id,id,left+18,605,half-100,GUI_REGULAR,enabled ? GUI_TEXT : GUI_MUTED);
+        value=gui_ui_toggle(id,R(left+half-64,603,46,26),current,enabled);
+        if (value!=current) {
+            if (i) changed_number("osd",(unsigned)value);
+            else changed("frame-interpolation",value ? "on" : "off");
+        }
+    }
 }
 static const char *pad_name(unsigned bit) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_UNKNOWN;

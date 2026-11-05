@@ -34,6 +34,16 @@ def test_defaults_and_classification(options_binary):
     assert all(value == ("L" if key in ("pad", "savestate-cards") else "P") for key, value in classes.items())
 
 
+def test_frame_interpolation_default_config_and_cli(options_binary):
+    assert run(options_binary, FF8_TEST_INTERPOLATION='1').stdout.endswith('frame-interpolation=0\n')
+    path = options_binary.parent / 'interpolation.ini'
+    path.write_text('frame-interpolation=on\n')
+    assert run(options_binary, '--config', str(path), FF8_TEST_INTERPOLATION='1').stdout.endswith('frame-interpolation=1\n')
+    assert run(options_binary, '--config', str(path), '--frame-interpolation', 'off',
+               FF8_TEST_INTERPOLATION='1').stdout.endswith('frame-interpolation=0\n')
+    assert run(options_binary, '--frame-interpolation', 'yes').returncode == 2
+
+
 def test_config_and_cli_precedence(options_binary):
     path = options_binary.parent / "custom.ini"
     path.write_text(" # settings\n pad = dualshock ; comment\nrumble=0\nfullscreen=1\nscale-mode=integer\nfilter=linear\nfuture-key=yes\n")

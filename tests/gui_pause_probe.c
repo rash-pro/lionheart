@@ -16,9 +16,19 @@ void __real_host_gui_frame(unsigned, unsigned);
 
 static void frozen(void) {
     if (!guest || memcmp(guest, &snapshot, sizeof(snapshot))) {
+        const char *path = getenv("FF8_GUI_PAUSE_PROBE_FAILURE");
+        if (path) {
+            FILE *proof = fopen(path, "w");
+            if (!proof) _Exit(97);
+            fputs("guest changed inside modal loop\n", proof);
+            if (fclose(proof)) _Exit(97);
+        }
         fputs("GUI pause proof: guest changed inside modal loop\n", stderr);
         failed = 1;
-        exit(99);
+        /* The injected abort must not tear down a live graphics driver through
+         * process exit callbacks. Normal runs still exercise full shutdown. */
+        fflush(stderr);
+        _Exit(99);
     }
 }
 static void summary(void) {

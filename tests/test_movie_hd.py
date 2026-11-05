@@ -9,7 +9,7 @@ import tempfile
 import pytest
 
 from tools.iro_extract import directory, extract
-from test_vulkan import vulkan_replay
+from test_vulkan import vulkan_replay, ICD
 
 
 def archive(path, name='CRF\\movies\\disc00_00h.avi', flags=0, payload=b'owned-avi'):
@@ -71,7 +71,7 @@ def test_hd_upload_keeps_native_reads_and_draw_order(vulkan_replay, tmp_path, rg
                     '-t', '1', '-an', '-vf', 'scale=out_color_matrix=bt709', '-colorspace', 'bt709',
                     '-c:v', 'ffv1', '-f', 'matroska', str(tmp_path / 'disc00_00h.avi')], check=True, timeout=30)
     run = subprocess.run([str(host / 'movie_contract'), str(tmp_path), str(rgb24), str(tmp_path / 'stats.csv'), str(scale), str(msaa)],
-                         env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json'),
+                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
                          text=True, capture_output=True, timeout=60)
     assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
     assert json.loads(run.stdout)['native_reads_exact']
@@ -82,7 +82,7 @@ def test_missing_hd_asset_leaves_original_available(vulkan_replay, tmp_path):
     host = vulkan_replay.parent
     subprocess.run(['cmake', '--build', str(host), '--target', 'movie_contract', '-j4'], check=True, capture_output=True, timeout=120)
     run = subprocess.run([str(host / 'movie_contract'), str(tmp_path), '2', str(tmp_path / 'stats.csv')],
-                         env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json'),
+                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
                          text=True, capture_output=True, timeout=30)
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout)['missing_falls_back']
@@ -95,7 +95,7 @@ def test_missing_leading_source_frame_uses_original(vulkan_replay, tmp_path):
     subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=green:size=640x448:rate=30',
                     '-t', '1', '-an', '-c:v', 'ffv1', str(tmp_path / 'disc01_00h.avi')], check=True, timeout=30)
     run = subprocess.run([str(host / 'movie_contract'), str(tmp_path), '3', str(tmp_path / 'stats.csv')],
-                         env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json'),
+                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
                          text=True, capture_output=True, timeout=30)
     assert run.returncode == 0, (run.returncode, run.stderr)
     assert json.loads(run.stdout)['negative_offset_fallback']

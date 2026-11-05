@@ -11,7 +11,7 @@ import pytest
 from test_gpu import read_png
 
 ROOT = Path(__file__).resolve().parents[1]
-ICD = Path('/usr/share/vulkan/icd.d/lvp_icd.json')
+ICD = Path(os.environ.get('FF8_TEST_VULKAN_ICD', '/usr/share/vulkan/icd.d/lvp_icd.json'))
 
 
 @pytest.fixture(scope='module')

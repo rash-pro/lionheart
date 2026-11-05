@@ -835,6 +835,56 @@ ImageHandle Renderer::scanout_vram_to_texture(bool scaled)
 	return reuseable_scanout;
 }
 
+void Renderer::host_state(const HostState &state)
+{
+	set_draw_field(state.field);
+	set_draw_rect(state.render.draw_rect);
+	set_texture_window(state.render.texture_window);
+	set_texture_offset(state.render.texture_offset_x, state.render.texture_offset_y);
+	set_palette_offset(state.render.palette_offset_x, state.render.palette_offset_y);
+	set_texture_mode(state.render.texture_mode);
+	render_state = state.render;
+}
+
+void Renderer::host_copy_from(Renderer &source)
+{
+	assert(scaling == source.scaling && msaa == source.msaa);
+	source.atlas.pipeline_barrier(STATUS_ALL);
+	source.flush(false);
+	atlas.pipeline_barrier(STATUS_ALL);
+	ensure_command_buffer();
+	cmd->full_barrier();
+	cmd->copy_image(*framebuffer, *source.framebuffer);
+	// Only level zero is authoritative; scanout's optional mip chain is derived.
+	const VkImageSubresourceLayers level = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	cmd->copy_image(*scaled_framebuffer, *source.scaled_framebuffer, {0,0,0}, {0,0,0},
+	                {FB_WIDTH * scaling, FB_HEIGHT * scaling, 1}, level, level);
+	if (msaa > 1) cmd->copy_image(*scaled_framebuffer_msaa, *source.scaled_framebuffer_msaa);
+	cmd->full_barrier();
+	atlas = source.atlas;
+	atlas.set_hazard_listener(this);
+	atlas.notify_external_barrier(STATUS_ALL);
+	render_state = source.render_state;
+	draw_field = source.draw_field;
+	host_movie_rgb24 = source.host_movie_rgb24;
+	last_scanout.reset();
+	flush(false);
+}
+
+void Renderer::host_display_barrier(const Rect &rect, bool bpp24)
+{
+	atlas.flush_render_pass();
+	unsigned w = std::min(bpp24 ? (rect.width * 3 + 1) / 2 : rect.width, FB_WIDTH);
+	unsigned h = std::min(rect.height, FB_HEIGHT);
+	unsigned xend = std::min(rect.x + w, FB_WIDTH), yend = std::min(rect.y + h, FB_HEIGHT);
+	for (unsigned yi = 0; yi < 2; ++yi) for (unsigned xi = 0; xi < 2; ++xi) {
+		Rect part(xi ? 0 : rect.x, yi ? 0 : rect.y,
+		          xi ? rect.x + w - xend : xend - rect.x,
+		          yi ? rect.y + h - yend : yend - rect.y);
+		if (part.width && part.height) atlas.read_fragment(bpp24 ? Domain::Unscaled : Domain::Scaled, part);
+	}
+}
+
 ImageHandle Renderer::host_scanout(const Rect &rect, bool bpp24, bool true_color, bool enabled, ImageHandle target)
 {
 	atlas.flush_render_pass();
@@ -1384,10 +1434,11 @@ void Renderer::build_attribs(BufferVertex *output, const Vertex *vertices, unsig
 	{
 		if (render_state.texture_window.mask_x == 0xffu && render_state.texture_window.mask_y == 0xffu)
 		{
-			unsigned min_u = render_state.UVLimits.min_u;
-			unsigned min_v = render_state.UVLimits.min_v;
-			unsigned max_u = render_state.UVLimits.max_u;
-			unsigned max_v = render_state.UVLimits.max_v;
+			const auto &limits = host_bounded_texture ? host_texture_bounds : render_state.UVLimits;
+			unsigned min_u = limits.min_u;
+			unsigned min_v = limits.min_v;
+			unsigned max_u = limits.max_u;
+			unsigned max_v = limits.max_v;
 			unsigned width = max_u - min_u + 1;
 			unsigned height = max_v - min_v + 1;
 
@@ -1713,6 +1764,27 @@ void Renderer::draw_line(const Vertex *vertices)
 	Vertex vert[4];
 	build_line_quad(vert, vertices);
 	draw_quad(vert);
+}
+
+void Renderer::host_draw_triangle(const Vertex *vertices)
+{
+	unsigned min_u=255,min_v=255,max_u=0,max_v=0;
+	bool bounded=true;
+	for (unsigned i=0;i<3;++i) {
+		const auto &v=vertices[i];
+		bounded=bounded && v.u<=255 && v.v<=255 && v.w>0;
+		min_u=std::min(min_u,unsigned(v.u)); min_v=std::min(min_v,unsigned(v.v));
+		max_u=std::max(max_u,unsigned(v.u)); max_v=std::max(max_v,unsigned(v.v));
+	}
+	// Positive perspective weights keep UV inside the vertex bounds. Include a
+	// texel of margin for sample rounding; wrapping/windowed reads stay conservative.
+	if (min_u==0 || max_u>=255) { min_u=0; max_u=255; }
+	if (min_v==0 || max_v>=255) { min_v=0; max_v=255; }
+	host_texture_bounds={uint16_t(min_u ? min_u-1 : 0),uint16_t(min_v ? min_v-1 : 0),
+	                     uint16_t(std::min(255u,max_u+1)),uint16_t(std::min(255u,max_v+1))};
+	host_bounded_texture=bounded;
+	draw_triangle(vertices);
+	host_bounded_texture=false;
 }
 
 void Renderer::draw_triangle(const Vertex *vertices)

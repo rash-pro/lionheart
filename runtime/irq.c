@@ -9,7 +9,16 @@ uint32_t bios_guest_call(cpu_t *c, uint32_t address) {
     uint32_t load_reg = c->load_reg, load_value = c->load_value;
     unsigned flow = c->flow, kind = c->flow_kind;
     uint32_t back = c->flow_return;
+#if defined(FF8_FRAME_PROVENANCE)
+    unsigned gc_hold;
+    frame_tag_t ra_tag = c->frame_tags ? frame_tags_registers(c)->r[31] : 0;
+    frame_tag_t ra_location = c->frame_tags ? frame_tags_registers(c)->location[31] : 0;
+    frame_tag_t load_location = c->frame_tags ? frame_tags_registers(c)->load_location : 0;
+    frame_tag_t load_tag = c->frame_tags ? frame_tags_registers(c)->load : 0;
+#endif
     if (!address) return 0;
+    FRAME_TAGS(gc_hold = frame_tags_gc_hold(c));
+    FRAME_TAGS(if (c->frame_tags) { frame_tags_registers(c)->r[31] = 0; frame_tags_registers(c)->load = 0; frame_tags_registers(c)->location[31] = 0; frame_tags_registers(c)->load_location = 0; });
     c->load_reg = c->load_value = 0; c->flow = 0;
     c->r[31] = IRQ_RETURN;
     if (c_enter(c, address, IRQ_RETURN)) { dispatch(c, address); c_leave(c); }
@@ -17,7 +26,9 @@ uint32_t bios_guest_call(cpu_t *c, uint32_t address) {
     if (!c->halted) {
         c->pc = pc; c->r[31] = ra; c->load_reg = load_reg; c->load_value = load_value;
         c->flow = flow; c->flow_kind = kind; c->flow_return = back;
+        FRAME_TAGS(if (c->frame_tags) { frame_tags_registers(c)->r[31] = ra_tag; frame_tags_registers(c)->load = load_tag; frame_tags_registers(c)->location[31] = ra_location; frame_tags_registers(c)->load_location = load_location; });
     }
+    FRAME_TAGS(frame_tags_gc_release(c, gc_hold));
     return value;
 }
 
@@ -53,9 +64,16 @@ void bios_exception(cpu_t *c, uint32_t cause) {
         unsigned branch_pending, branch_kind, in_delay_slot, flow, flow_kind, depth, dispatch_depth;
         unsigned fault_counted, native_pin_count; uint32_t fault_instructions;
     } saved;
+#if defined(FF8_FRAME_PROVENANCE)
+    unsigned gc_hold;
+    frame_register_tags_t saved_tags;
+    if (c->frame_tags) saved_tags = *frame_tags_registers(c);
+#endif
     unsigned i;
     volatile uint32_t old_tcb = mem_read32(c, mem_read32(c, 0x108));
     if (h->in_exception) return;
+    FRAME_TAGS(gc_hold = frame_tags_gc_hold(c));
+    FRAME_ORACLE(frame_oracle_irq(c, 1));
     bios_thread_pipeline_save(c, old_tcb, c->pc);
     memcpy(saved.r, c->r, sizeof(saved.r)); memcpy(saved.cop0, c->cop0, sizeof(saved.cop0));
     saved.hi = c->hi; saved.lo = c->lo; saved.pc = c->pc;
@@ -73,6 +91,7 @@ void bios_exception(cpu_t *c, uint32_t cause) {
     c->load_reg = c->load_value = c->branch_pending = c->in_delay_slot = c->flow = 0;
     c->fault_counted = c->fault_instructions = 0;
     c->r[29] = 0x8000fff0u;
+    FRAME_TAGS(if (c->frame_tags) { frame_tags_registers(c)->r[29] = 0; frame_tags_registers(c)->load = 0; frame_tags_registers(c)->location[29] = 0; frame_tags_registers(c)->load_location = 0; });
     if (!setjmp(h->exception_return)) {
         unsigned priority, poll_pad;
         bios_card_deliver(c);
@@ -119,6 +138,9 @@ void bios_exception(cpu_t *c, uint32_t cause) {
     for (i = saved.dispatch_depth + 1; i <= c->dispatch_depth; ++i) c->trampolines[i].active = 0;
     h->in_exception = 0;
     if (c->halted) return;
+    FRAME_ORACLE(frame_oracle_irq(c, 0));
+    FRAME_TAGS(if (c->frame_tags) *frame_tags_registers(c) = saved_tags);
+    FRAME_TAGS(frame_tags_gc_release(c, gc_hold));
     memcpy(c->r, saved.r, sizeof(saved.r)); memcpy(c->cop0, saved.cop0, sizeof(saved.cop0));
     c->hi = saved.hi; c->lo = saved.lo; c->pc = saved.pc;
     c_set_sr(c, saved.cop0[12]);

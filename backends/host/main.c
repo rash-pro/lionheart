@@ -19,6 +19,8 @@
 #include "audio.h"
 #include "input.h"
 #include "options.h"
+#include "ff8_ram_layout.h"
+#include "frame_scene.h"
 #ifdef FF8_GUI
 #include "gui.h"
 #define HOST_GUI_CLEANUP() host_gui_shutdown()
@@ -53,6 +55,10 @@ static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
 static int pgxp_mode;
+static int frame_interpolation;
+#ifdef FF8_FRAME_PROVENANCE
+static int provenance_diagnostic;
+#endif
 #ifdef FF8_PLAYER
 static int player_disc_insert(cpu_t *c, const char *path, int swap, char *error, size_t size) {
     host_disc_runtime_t prepared;
@@ -83,6 +89,7 @@ static void gui_changed(void *context, const char *key, int overlay) {
     if (!strcmp(key,"fullscreen") || !strcmp(key,"scale-mode") || !strcmp(key,"filter"))
         host_display_configure(o->fullscreen,o->scale_mode,o->linear);
     else if (!strcmp(key,"crt")) host_display_crt(o->crt);
+    else if (!strcmp(key,"frame-interpolation")) frame_interpolation=o->frame_interpolation;
     else if (!strcmp(key,"osd")) host_osd_configure(o->osd,o->osd_tests);
     else if (!strcmp(key,"screenshot-dir")) host_screenshot_configure(o->screenshot_dir,o->screenshot_at);
     else if (!strcmp(key,"rumble")) input.rumble = o->rumble;
@@ -148,6 +155,16 @@ static host_gui_result_t gui_shell_display(host_options_t *o) {
 }
 #endif
 static void restored(cpu_t *c, unsigned disc) {
+#ifdef FF8_FRAME_PROVENANCE
+    int usable=0;
+#ifdef FF8_VULKAN
+    usable=host_gpu_enabled();
+#endif
+    if (c->interpreter_only && (provenance_diagnostic || (frame_interpolation && usable))) {
+        if (!frame_tags_enable(c)) cpu_stop(c,"Cannot allocate restored frame provenance");
+        else frame_tags_reset(c);
+    }
+#endif
 #ifdef FF8_PGXP
     pgxp_bind(c->hw->gpu,(pgxp_mode_t)pgxp_mode);
 #else
@@ -173,6 +190,24 @@ static void trace(void *context, const char *line) {
 
 static void present_frame(cpu_t *c, void *context) {
     (void)context;
+#ifdef FF8_FRAME_PROVENANCE
+    int usable=0;
+#ifdef FF8_VULKAN
+    usable=c->interpreter_only && host_gpu_enabled();
+#endif
+    if (c->interpreter_only && (provenance_diagnostic || (frame_interpolation && usable))) {
+        if (!c->frame_tags && !c->frame_tags_paused) {
+            if (!frame_tags_enable(c)) cpu_stop(c,"Cannot allocate frame provenance");
+            else frame_tags_reset(c);
+        }
+    } else if (c->frame_tags || c->frame_tags_paused) frame_tags_destroy(c);
+#endif
+    FRAME_TAGS(frame_tags_present(c));
+#if defined(FF8_FRAME_PROVENANCE) && defined(FF8_VULKAN)
+    unsigned mode=(unsigned)c->ram[FF8_MODE] | (unsigned)c->ram[FF8_MODE+1]<<8;
+    unsigned field=(unsigned)c->ram[FF8_FIELD_ID] | (unsigned)c->ram[FF8_FIELD_ID+1]<<8;
+    host_gpu_interpolation(c->hw->gpu,frame_interpolation && usable && c->frame_tags ? frame_scene(mode,field) : 0);
+#endif
     if (!host_audio_pump(c->hw->spu)) cpu_stop(c, "host audio dump failed");
     host_present(c->hw->gpu);
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
@@ -412,6 +447,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "State cards: --savestate-cards live|snapshot (default live; snapshot uses private copies)\n");
         fprintf(stderr, "Disc identity: --savestate-verify-disc quick|full (default quick, cached at image insertion)\n");
         fprintf(stderr, "GPU options: --renderer soft|vulkan --internal-scale 1..8 --true-color --msaa 1|2|4|8 --pgxp off|vertex|perspective --dump-scaled-frames DIR --gpu-timings CSV\n");
+        fprintf(stderr, "Frame interpolation: --frame-interpolation off|on (Vulkan and --interpreter; default off)\n");
         fprintf(stderr, "Movie options: --movies DIR --movie-stats CSV (Vulkan only; original guest audio)\n");
         fprintf(stderr, "Input options: --card1 PATH --card2 PATH --input-script FILE\n");
         fprintf(stderr, "Controller options: --pad digital|dualshock --rumble 0|1 (scripts and keyboard stay digital)\n");
@@ -665,6 +701,10 @@ int main(int argc, char **argv) {
     true_color = options.true_color;
     pgxp = options.pgxp == 1 ? "vertex" : options.pgxp == 2 ? "perspective" : "off";
     pgxp_mode = options.pgxp;
+    frame_interpolation = options.frame_interpolation;
+#ifdef FF8_FRAME_PROVENANCE
+    provenance_diagnostic = getenv("FF8_PROVENANCE_TRACE") || getenv("FF8_FRAME_ORACLE") || getenv("FF8_FRAME_PROVENANCE");
+#endif
 #ifdef FF8_GUI
     if (gui_allowed && !headless && !options.renderer) {
         internal_scale = msaa = 1; true_color = 0; pgxp = "off"; pgxp_mode = 0;
@@ -825,6 +865,27 @@ int main(int argc, char **argv) {
 #else
     if (!c->interpreter_only) fprintf(stderr, "Generated code has no validity metadata; using interpreter. Regenerate to enable recompilation.\n");
     c->interpreter_only = 1;
+#endif
+#ifdef FF8_FRAME_PROVENANCE
+    if (c->interpreter_only && (provenance_diagnostic || (frame_interpolation && options.renderer)) && !frame_tags_enable(c)) {
+        fprintf(stderr, "Cannot allocate frame provenance shadow state\n");
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
+#endif
+    if (frame_interpolation) {
+        if (!options.renderer) fprintf(stderr,"Frame interpolation: no effect with the soft renderer\n");
+        else if (!c->interpreter_only) fprintf(stderr,"Frame interpolation: requires --interpreter\n");
+#if !defined(FF8_FRAME_PROVENANCE) || !defined(FF8_VULKAN)
+        else fprintf(stderr,"Frame interpolation: unavailable in this build\n");
+#else
+        else fprintf(stderr,"Frame interpolation: battle and verified fixed-field presentation enabled; one game frame of geometry delay\n");
+#endif
+    }
+#ifdef FF8_RECORD_FRAME_ORACLE
+    if (c->interpreter_only && !frame_oracle_enable(c)) {
+        fprintf(stderr, "Cannot initialize frame correspondence oracle\n");
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
 #endif
     if (!host_states_init(c,savestate_dir,card_paths[0],load_state,save_state,save_at,
                           disc_paths,

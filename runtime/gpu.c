@@ -6,6 +6,11 @@
 #include <stdlib.h>
 
 struct gpu {
+#if defined(FF8_FRAME_PROVENANCE)
+    struct cpu *tag_cpu;
+    unsigned tag_triangle;
+    frame_tag_t packet_tags[12], incoming_tag;
+#endif
     gpu_raster_t raster;
     uint32_t packet[12], read_latch, draw_start, draw_end, draw_offset;
     unsigned count, needed, opcode;
@@ -94,11 +99,16 @@ static void execute(gpu_t *g) {
     gpu_paint_t p = paint(op);
     if (group == 1) {
         gpu_vertex_t v[4];
+#if defined(FF8_FRAME_PROVENANCE)
+        frame_tag_t tags[4];
+        uint32_t xy_words[4];
+#endif
         unsigned i, at = 1, n = (op & 8) ? 4 : 3;
         uint32_t color = w[0];
         for (i = 0; i < n; ++i) {
             uint32_t xy, uv = 0;
             if (i && (op & 16)) color = w[at++];
+            FRAME_TAGS(tags[i] = g->packet_tags[at]; xy_words[i] = w[at]);
             xy = w[at++];
             if (p.textured) {
                 uv = w[at++];
@@ -108,11 +118,14 @@ static void execute(gpu_t *g) {
             v[i] = vertex(g, xy, color, uv);
         }
         p.dither = !!(op & 16) || (p.textured && !p.raw);
+        FRAME_TAGS(frame_tags_polygon(g->tag_cpu, op, xy_words, tags, n, g->offset_x, g->offset_y));
+        FRAME_TAGS(g->tag_triangle = 0);
 #if defined(FF8_PGXP)
         pgxp_polygon(g, v, n, g->offset_x, g->offset_y);
 #endif
         gpu_raster_triangle(s, v[0], v[1], v[2], p);
         if (n == 4) {
+            FRAME_TAGS(g->tag_triangle = 1);
 #if defined(FF8_PGXP)
             pgxp_select(g, 1);
 #endif
@@ -172,6 +185,10 @@ static inline void upload_word(gpu_t *g, uint32_t word) {
 }
 
 void gpu_gp0(gpu_t *g, uint32_t word) {
+#if defined(FF8_FRAME_PROVENANCE)
+    frame_tag_t incoming = g->incoming_tag;
+    g->incoming_tag = FRAME_TAG_UNKNOWN;
+#endif
     if (g->transfer == 1) { upload_word(g, word); return; }
     if (g->polyline) {
         int gouraud = !!(g->opcode & 16);
@@ -187,6 +204,7 @@ void gpu_gp0(gpu_t *g, uint32_t word) {
         return;
     }
     if (!g->count) { g->opcode = word >> 24; g->needed = packet_size(g->opcode); }
+    FRAME_TAGS(g->packet_tags[g->count] = incoming);
     g->packet[g->count++] = word;
     if (g->count == g->needed) { execute(g); g->count = 0; }
 }
@@ -194,6 +212,27 @@ void gpu_gp0(gpu_t *g, uint32_t word) {
 static uint32_t le_word(const uint8_t *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+
+#if defined(FF8_FRAME_PROVENANCE)
+#include "cpu.h"
+void gpu_frame_tags_bind(gpu_t *g, cpu_t *c) {
+    g->tag_cpu = c; g->incoming_tag = FRAME_TAG_UNKNOWN;
+}
+int gpu_frame_tags_triangle(gpu_t *g, frame_corner_t out[3]) {
+    return frame_tags_triangle(g->tag_cpu, g->tag_triangle, out);
+}
+void gpu_gp0_tagged(gpu_t *g, uint32_t word, frame_tag_t tag) {
+    g->incoming_tag = tag;
+    gpu_gp0(g, word);
+}
+void gpu_gp0_ram(gpu_t *g, cpu_t *c, uint32_t address, unsigned words) {
+    unsigned i;
+    for (i = 0; i < words; ++i) {
+        uint32_t p = (address + i * 4) & (RAM_SIZE - 1);
+        gpu_gp0_tagged(g, le_word(c->ram + p), frame_tags_load(c, p, 4));
+    }
+}
+#endif
 
 void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
     while (words) {
@@ -218,7 +257,10 @@ void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
         if (!g->count) { g->opcode = data[3]; g->needed = packet_size(g->opcode); }
         n = g->needed - g->count;
         if (n > words) n = words;
-        for (i = 0; i < n; ++i) g->packet[g->count++] = le_word(data + i * 4);
+        for (i = 0; i < n; ++i) {
+            FRAME_TAGS(g->packet_tags[g->count] = FRAME_TAG_UNKNOWN);
+            g->packet[g->count++] = le_word(data + i * 4);
+        }
         data += n * 4; words -= n;
         if (g->count == g->needed) { execute(g); g->count = 0; }
     }
@@ -232,7 +274,7 @@ void gpu_gp1(gpu_t *g, uint32_t word) {
     case 2: g->irq = 0; break;
     case 3: g->disabled = word & 1; break;
     case 4: g->dma = word & 3; break;
-    case 5: g->display_start = word & 0x7ffff; break;
+    case 5: g->display_start = word & 0x7ffff; FRAME_TAGS(frame_tags_swap(g->tag_cpu, g->display_start)); break;
     case 6: g->horizontal = word & 0xffffff; break;
     case 7: g->vertical = word & 0xfffff; break;
     case 8: g->display_mode = word & 0x7f; break;
@@ -293,6 +335,7 @@ uint32_t gpu_status_scanline(gpu_t *g, unsigned line) {
 }
 
 void gpu_vblank(gpu_t *g) {
+    FRAME_TAGS(frame_tags_vblank(g->tag_cpu));
     g->field ^= 1; g->raster.field = (int)g->field;
 #if defined(FF8_PGXP)
     pgxp_vblank(g);

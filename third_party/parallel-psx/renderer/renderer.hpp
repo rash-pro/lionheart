@@ -289,6 +289,14 @@ public:
 	void host_movie_upload(const Rect &, unsigned ox, unsigned oy, bool rgb24, const Vulkan::Buffer &, unsigned width, unsigned height);
 	Vulkan::ImageHandle host_scanout(const Rect &, bool bpp24, bool true_color, bool enabled, Vulkan::ImageHandle target);
 
+	// Host presentation versions stay entirely on the device. Guest VRAM and
+	// texture tracking are not restored or read back by these operations.
+	struct HostState { RenderState render; int field; };
+	HostState host_state() const { return {render_state, draw_field}; }
+	void host_state(const HostState &);
+	void host_copy_from(Renderer &);
+	void host_display_barrier(const Rect &, bool bpp24);
+
 	inline void set_texture_mode(TextureMode mode)
 	{
 		render_state.texture_mode = mode;
@@ -332,6 +340,8 @@ public:
 	void clear_rect(const Rect &rect, FBColor color);
 	void draw_line(const Vertex *vertices);
 	void draw_triangle(const Vertex *vertices);
+	// Presentation replay can bound texture hazards without changing shader UV limits.
+	void host_draw_triangle(const Vertex *vertices);
 	void draw_quad(const Vertex *vertices);
 
 	SaveState save_vram_state();
@@ -531,6 +541,8 @@ private:
 	void ensure_command_buffer();
 
 	RenderState render_state;
+	bool host_bounded_texture = false;
+	UVRect host_texture_bounds{};
 
 	struct BufferVertex
 	{

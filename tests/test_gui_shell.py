@@ -11,9 +11,9 @@ from test_host_player import ROOT, real_player
 
 def test_shell_recreates_both_renderers_and_keeps_text_input(real_player, tmp_path):
     discs = [owned_disc(1)]
-    icd = Path('/usr/share/vulkan/icd.d/lvp_icd.json')
+    icd = Path(os.environ.get('FF8_TEST_VULKAN_ICD', '/usr/share/vulkan/icd.d/lvp_icd.json'))
     if not discs or not icd.is_file():
-        pytest.skip('owned Disc 1 and lavapipe are required for the player shell gate')
+        pytest.skip('owned Disc 1 and the selected Vulkan ICD are required for the player shell gate')
     movies = tmp_path / 'movies'
     movies.mkdir()
     config = tmp_path / 'lionheart.ini'
@@ -36,7 +36,7 @@ def test_shell_recreates_both_renderers_and_keeps_text_input(real_player, tmp_pa
                                  'SDL_RENDER_DRIVER': 'software', 'VK_DRIVER_FILES': str(icd),
                                  'XDG_DATA_HOME': str(tmp_path / 'data'), 'XDG_CONFIG_HOME': str(tmp_path / 'config')})
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'GUI test complete:' in result.stderr and 'Vulkan: llvmpipe' in result.stderr
+    assert 'GUI test complete:' in result.stderr and 'Vulkan: ' in result.stderr
     assert 'using native soft' not in result.stderr and 'falling back' not in result.stderr
     assert 'Hardware:' not in result.stdout, 'the shell must quit before guest execution'
     text = config.read_text()

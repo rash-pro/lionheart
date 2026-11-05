@@ -23,7 +23,11 @@ static uint32_t words(cpu_t *c, unsigned channel) {
  * dropped while the cache is isolated, as the slow path does. */
 static uint32_t media_ram_read(cpu_t *c, uint32_t address) { return ram_read(c, address, 4); }
 static void media_ram_write(cpu_t *c, uint32_t address, uint32_t value) {
-    if (!(c->cop0[12] & 0x10000u)) ram_write(c, address, 4, value);
+    if (!(c->cop0[12] & 0x10000u)) {
+        ram_write(c, address, 4, value);
+        FRAME_TAGS(frame_tags_reload(c, address, 4));
+        FRAME_ORACLE(frame_oracle_reload(c, address, 4));
+    }
 }
 
 #ifdef FF8_PLAY
@@ -149,6 +153,10 @@ static void gpu_words(cpu_t *c, uint32_t address, uint32_t count) {
     while (count) {
         uint32_t n = (RAM_SIZE - address) / 4;
         if (n > count) n = count;
+#if defined(FF8_FRAME_PROVENANCE)
+        if (c->frame_tags) gpu_gp0_ram(c->hw->gpu, c, address, n);
+        else
+#endif
         gpu_gp0_words(c->hw->gpu, c->ram + address, n);
         count -= n; address = 0;
     }
@@ -330,12 +338,24 @@ void dma_event(cpu_t *c) {
                     address = (address + count * 4) & 0x1ffffc;
                 } else for (i = 0; i < count; ++i) {
                     if (ch == 2) {
-                        if (from_ram) gpu_gp0(h->gpu, mem_read32(c, address));
-                        else mem_write32(c, address, gpu_read(h->gpu));
-                    } else if (ch == 3) mem_write32(c, address, cdrom_dma(c));
+                        if (from_ram) {
+#if defined(FF8_FRAME_PROVENANCE)
+                            gpu_gp0_tagged(h->gpu, mem_read32(c, address), frame_tags_load(c, address, 4));
+#else
+                            gpu_gp0(h->gpu, mem_read32(c, address));
+#endif
+                        }
+                        else {
+                            mem_write32(c, address, gpu_read(h->gpu));
+                            FRAME_TAGS(frame_tags_reload(c, address, 4));
+                            FRAME_ORACLE(frame_oracle_reload(c, address, 4));
+                        }
+                    } else if (ch == 3) { mem_write32(c, address, cdrom_dma(c)); FRAME_TAGS(frame_tags_reload(c, address, 4)); FRAME_ORACLE(frame_oracle_reload(c, address, 4)); }
                     else if (ch == 6) {
                         uint32_t value = i + 1 == count ? 0xffffff : (address - 4) & 0x1fffff;
                         /* OTC writes aligned RAM only, never executable device data. */
+                        FRAME_TAGS(frame_tags_invalidate(c, address, 4); frame_tags_reload(c, address, 4));
+                        FRAME_ORACLE(frame_oracle_write(c, address, 4); frame_oracle_reload(c, address, 4));
                         c->ram[address] = (uint8_t)value; c->ram[address + 1] = (uint8_t)(value >> 8);
                         c->ram[address + 2] = (uint8_t)(value >> 16); c->ram[address + 3] = (uint8_t)(value >> 24);
                     }
@@ -401,7 +421,11 @@ void dma_sync(cpu_t *c) {
     if (!h->spu_dma.remaining) return;
     while (h->spu_dma.remaining && h->spu_dma.word_due <= h->now) {
         if (h->dma[4].chcr & 1) spu_dma_write(h->spu, mem_read32(c, address));
-        else mem_write32(c, address, spu_dma_read(h->spu));
+        else {
+            mem_write32(c, address, spu_dma_read(h->spu));
+            FRAME_TAGS(frame_tags_reload(c, address, 4));
+            FRAME_ORACLE(frame_oracle_reload(c, address, 4));
+        }
         address = (address + step) & 0x1ffffc;
         if (!--h->spu_dma.block_left && ((h->dma[4].chcr >> 9) & 3) == 1) {
             h->dma[4].bcr -= 0x10000;

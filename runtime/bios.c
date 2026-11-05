@@ -163,6 +163,7 @@ void bios_thread_save(cpu_t *c, uint32_t tcb, uint32_t pc, uint32_t sr) {
     mem_write32(c, tcb + 0x88, pc);
     mem_write32(c, tcb + 0x8c, c->hi); mem_write32(c, tcb + 0x90, c->lo);
     mem_write32(c, tcb + 0x94, sr); mem_write32(c, tcb + 0x98, c->cop0[13]);
+    FRAME_TAGS(frame_tags_thread_save(c, tcb));
 }
 
 void bios_thread_restore(cpu_t *c, uint32_t tcb) {
@@ -172,6 +173,7 @@ void bios_thread_restore(cpu_t *c, uint32_t tcb) {
     c->r[0] = 0; c->pc = mem_read32(c, tcb + 0x88);
     c->hi = mem_read32(c, tcb + 0x8c); c->lo = mem_read32(c, tcb + 0x90);
     c_set_sr(c, (sr & ~15u) | ((sr >> 2) & 15));
+    FRAME_TAGS(frame_tags_thread_restore(c, tcb));
 }
 
 static unsigned thread_index(cpu_t *c, uint32_t tcb) {
@@ -183,6 +185,7 @@ void bios_thread_pipeline_save(cpu_t *c, uint32_t tcb, uint32_t pc) {
     unsigned index = thread_index(c, tcb);
     if (index >= BIOS_THREADS) return;
     c->hw->thread_pipeline[index].pc = pc;
+    FRAME_TAGS(frame_tags_pipeline_save(c, index));
 #define SAVE(f) c->hw->thread_pipeline[index].f = c->f
     SAVE(load_reg); SAVE(load_value); SAVE(branch_target); SAVE(branch_pc); SAVE(branch_return);
     SAVE(branch_pending); SAVE(branch_kind);
@@ -193,7 +196,9 @@ void bios_thread_pipeline_restore(cpu_t *c, uint32_t tcb) {
     unsigned index = thread_index(c, tcb);
     c->load_reg = c->load_value = c->branch_pending = c->in_delay_slot = c->flow = 0;
     c->fault_counted = c->fault_instructions = 0;
+    FRAME_TAGS(frame_tags_pipeline_restore(c, BIOS_THREADS));
     if (index >= BIOS_THREADS || c->hw->thread_pipeline[index].pc != c->pc) return;
+    FRAME_TAGS(frame_tags_pipeline_restore(c, index));
 #define RESTORE(f) c->f = c->hw->thread_pipeline[index].f
     RESTORE(load_reg); RESTORE(load_value); RESTORE(branch_target); RESTORE(branch_pc); RESTORE(branch_return);
     RESTORE(branch_pending); RESTORE(branch_kind);
@@ -288,8 +293,13 @@ void bios_call(cpu_t *c, unsigned table) {
     struct hw *h = hw_get(c);
     bios_event_t *e;
     static const unsigned saved[] = {31, 29, 30, 16, 17, 18, 19, 20, 21, 22, 23, 28};
+    FRAME_TAGS(frame_tags_location_retire(c, 0, 0, 0, 0); frame_tags_retire(c, 0, 0, 0, 0));
     c_retire(c, 0, 0, 0, 0);
     fn = c->r[9]; a = c->r[4]; b = c->r[5]; n = c->r[6];
+    FRAME_TAGS(if (c->frame_tags) {
+        frame_tags_registers(c)->r[2] = 0;
+        frame_tags_registers(c)->location[2] = 0;
+    });
 #ifdef FF8_STATS
     ++c->bios_counts[table][fn & 255];
 #endif
@@ -299,10 +309,22 @@ void bios_call(cpu_t *c, unsigned table) {
     if (table == 0) switch (fn) {
     case 0x0e: case 0x0f: c->r[2] = a >> 31 ? 0u - a : a; return;
     case 0x13:
-        for (i = 0; i < sizeof(saved) / sizeof(saved[0]); ++i) mem_write32(c, a + 4 * i, c->r[saved[i]]);
+        for (i = 0; i < sizeof(saved) / sizeof(saved[0]); ++i) {
+            mem_write32(c, a + 4 * i, c->r[saved[i]]);
+            FRAME_TAGS(if (c->frame_tags) {
+                frame_tags_store(c, a + 4 * i, 4, frame_tags_registers(c)->r[saved[i]]);
+                frame_tags_location_store(c, a + 4 * i, 4, frame_tags_registers(c)->location[saved[i]]);
+            });
+        }
         c->r[2] = 0; return;
     case 0x14:
-        for (i = 0; i < sizeof(saved) / sizeof(saved[0]); ++i) c->r[saved[i]] = mem_read32(c, a + 4 * i);
+        for (i = 0; i < sizeof(saved) / sizeof(saved[0]); ++i) {
+            c->r[saved[i]] = mem_read32(c, a + 4 * i);
+            FRAME_TAGS(if (c->frame_tags) {
+                frame_tags_registers(c)->r[saved[i]] = frame_tags_load(c, a + 4 * i, 4);
+                frame_tags_registers(c)->location[saved[i]] = frame_tags_location(c, a + 4 * i);
+            });
+        }
         c->r[2] = b; return;
     case 0x15: case 0x16: case 0x19: case 0x1a:
         d = a; count = 0;
@@ -311,7 +333,13 @@ void bios_call(cpu_t *c, unsigned table) {
         if (n > RAM_SIZE) { cpu_stop(c, "oversized BIOS string copy"); return; }
         for (i = 0; i < n && !c->halted; ++i) {
             value = count ? 0 : mem_read8(c, b + i);
-            mem_write8(c, d + i, value);
+            {
+#if defined(FF8_FRAME_PROVENANCE)
+                frame_tag_t tag = count ? 0 : frame_tags_load(c, b + i, 1);
+#endif
+                mem_write8(c, d + i, value);
+                FRAME_TAGS(frame_tags_store(c, d + i, 1, tag));
+            }
             if (!value) { count = 1; if (fn != 0x1a) break; }
         }
         if (fn == 0x16) mem_write8(c, d + i, 0);
@@ -336,6 +364,10 @@ void bios_call(cpu_t *c, unsigned table) {
         if (fn == 0x28) n = b;
         if (n > RAM_SIZE) { cpu_stop(c, "oversized BIOS memory operation: %u", n); return; }
         d = fn == 0x27 ? b : a; s = fn == 0x27 ? a : b;
+        if (fn != 0x29 && fn != 0x2d && fn != 0x2e) {
+            FRAME_TAGS(frame_tags_reload(c, d, n));
+            FRAME_ORACLE(frame_oracle_reload(c, d, n));
+        }
         c->r[2] = a;
         if (fn == 0x29 || fn == 0x2d || fn == 0x2e) c->r[2] = 0;
         for (i = 0; i < n && !c->halted; ++i) {
@@ -345,7 +377,13 @@ void bios_call(cpu_t *c, unsigned table) {
                 if (value) { c->r[2] = value; break; }
             } else if (fn == 0x2e) {
                 if (mem_read8(c, a + i) == (b & 255)) { c->r[2] = a + i; break; }
-            } else mem_write8(c, d + index, fn == 0x28 ? 0 : fn == 0x2b ? b : mem_read8(c, s + index));
+            } else {
+#if defined(FF8_FRAME_PROVENANCE)
+                frame_tag_t tag = fn == 0x28 || fn == 0x2b ? 0 : frame_tags_load(c, s + index, 1);
+#endif
+                mem_write8(c, d + index, fn == 0x28 ? 0 : fn == 0x2b ? b : mem_read8(c, s + index));
+                FRAME_TAGS(frame_tags_store(c, d + index, 1, tag));
+            }
         }
         return;
     case 0x2f: c->seed = c->seed * 0x41c64e6du + 12345; c->r[2] = (c->seed >> 16) & 32767; return;
@@ -359,7 +397,13 @@ void bios_call(cpu_t *c, unsigned table) {
         if (i == BIOS_HEAP_BLOCKS) { c->r[2] = 0; return; }
         n = h->heap[i].size < b ? h->heap[i].size : b;
         d = allocate(c, b);
-        if (d) { for (i = 0; i < n; ++i) mem_write8(c, d + i, mem_read8(c, a + i)); release(c, a); }
+        if (d) {
+            for (i = 0; i < n; ++i) {
+                mem_write8(c, d + i, mem_read8(c, a + i));
+                FRAME_TAGS(frame_tags_store(c, d + i, 1, frame_tags_load(c, a + i, 1)));
+            }
+            release(c, a);
+        }
         c->r[2] = d; return;
     case 0x37:
         if (b && a > RAM_SIZE / b) { c->r[2] = 0; return; }

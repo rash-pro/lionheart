@@ -18,6 +18,10 @@ extern "C" {
 #endif
 }
 #include "renderer/renderer.hpp"
+#ifdef FF8_FRAME_PROVENANCE
+#include "presentation_history.hpp"
+#include "frame_scene.h"
+#endif
 #include <SDL.h>
 #include <SDL_vulkan.h>
 #include <algorithm>
@@ -58,6 +62,73 @@ struct Options {
 } options;
 struct Backend {
     gpu_raster_t *raster=nullptr;
+#ifdef FF8_FRAME_PROVENANCE
+    gpu_t *gpu=nullptr;
+    std::unique_ptr<HostGPU::PresentationHistory> history;
+    ImageHandle temporal_scanouts[3];
+    int interpolation=FRAME_SCENE_NONE;
+    FILE *interpolation_trace=nullptr;
+    uint64_t trace_frame=UINT64_MAX;
+    uint64_t scanout_frame=UINT64_MAX;
+    void boundary() {
+        if (history && history->needs_boundary(unsigned(raster->display_x),unsigned(raster->display_y))) {
+            uploads();
+            history->boundary(*renderer,unsigned(raster->display_x),unsigned(raster->display_y),
+                              unsigned(std::max(raster->display_w,1)),unsigned(std::max(raster->display_h,1)),frame);
+        }
+    }
+    void record_draw(HostGPU::PresentationCommand::Kind kind,const Vertex *v,unsigned count,bool geometry=false) {
+        if (!history) return;
+        HostGPU::PresentationCommand command;
+        command.kind=kind; command.state=renderer->host_state();
+        std::copy(v,v+count,command.vertices.begin());
+        bool known=kind==HostGPU::PresentationCommand::Triangle && gpu_frame_tags_triangle(gpu,command.corners.data());
+        command.geometry=geometry && known;
+        const auto &s=command.state.render;
+        if (s.semi_transparent!=SemiTransparentMode::None && count>=3) {
+            float left=v[0].x,right=left,top=v[0].y,bottom=top;
+            for (unsigned i=1;i<count;++i) {
+                left=std::min(left,v[i].x); right=std::max(right,v[i].x);
+                top=std::min(top,v[i].y); bottom=std::max(bottom,v[i].y);
+            }
+            if (right-left>=raster->display_w*.9f && bottom-top>=raster->display_h*.9f)
+                history->exclude_effect();
+        }
+        if (s.texture_mode==TextureMode::Palette4bpp || s.texture_mode==TextureMode::Palette8bpp) {
+            unsigned count=s.texture_mode==TextureMode::Palette4bpp ? 16 : 256;
+            uint64_t hash=UINT64_C(1469598103934665603);
+            for (unsigned i=0;i<count;++i) {
+                hash^=raster->vram[((s.palette_offset_y&511)*1024+s.palette_offset_x+i)&(1024*512-1)];
+                hash*=UINT64_C(1099511628211);
+            }
+            command.palette=hash;
+        }
+        if (history->fixed_field() && kind==HostGPU::PresentationCommand::Quad && s.texture_mode!=TextureMode::None) {
+            unsigned u0=65535,v0=65535,u1=0,v1=0;
+            for (unsigned i=0;i<count;++i) {
+                u0=std::min(u0,unsigned(v[i].u)); u1=std::max(u1,unsigned(v[i].u));
+                v0=std::min(v0,unsigned(v[i].v)); v1=std::max(v1,unsigned(v[i].v));
+            }
+            if (u1-u0>=255) { u0=0; u1=255; }
+            if (v1-v0>=255) { v0=0; v1=255; }
+            const unsigned shift=s.texture_mode==TextureMode::Palette4bpp ? 2 :
+                                 s.texture_mode==TextureMode::Palette8bpp ? 1 : 0;
+            // Own the exact native texels used by this background version.
+            // CPU VRAM is authoritative; this never downloads a GPU image.
+            for (unsigned y=v0;y<=v1;++y) for (unsigned x=u0;x<=u1;++x) {
+                unsigned u=((x&255)&s.texture_window.mask_x)|s.texture_window.or_x;
+                unsigned tex_y=(((y&255)&s.texture_window.mask_y)|s.texture_window.or_y)+s.texture_offset_y;
+                uint16_t word=raster->vram[(tex_y&511)*1024+((s.texture_offset_x+(u>>shift))&1023)];
+                if (shift) {
+                    unsigned index=shift==2 ? (word>>((u&3)*4))&15 : (word>>((u&1)*8))&255;
+                    word=raster->vram[((s.palette_offset_y&511)*1024+s.palette_offset_x+index)&(1024*512-1)];
+                }
+                command.pixels.push_back(word);
+            }
+        }
+        history->record(std::move(command));
+    }
+#endif
     VkInstance instance=VK_NULL_HANDLE;
     VkSurfaceKHR surface=VK_NULL_HANDLE;
     SDL_Window *window=nullptr;
@@ -192,6 +263,11 @@ struct Backend {
     unsigned osd_revision=0;
     Backend() = default;
     ~Backend() {
+#ifdef FF8_FRAME_PROVENANCE
+        if (history && failed) history->abandon();
+        history.reset();
+        if (interpolation_trace) std::fclose(interpolation_trace);
+#endif
         if (renderer && failed) renderer->abandon();
         if (renderer) renderer->flush();
         if (device) device->wait_idle();
@@ -207,6 +283,9 @@ struct Backend {
         gui_samples.clear(); gui_times.clear();
 #endif
         for (auto &scanout:scanouts) scanout.reset();
+#ifdef FF8_FRAME_PROVENANCE
+        for (auto &scanout:temporal_scanouts) scanout.reset();
+#endif
         crt_lines.reset(); crt_beam.reset(); crt_glow_h.reset(); crt_glow.reset(); output.reset(); capture_output.reset();
         osd_image.reset();
         movie_buffer.reset(); movie_frame.reset(); movie_patches.clear();
@@ -255,6 +334,15 @@ struct Backend {
         if (!p) throw std::runtime_error("Native upload mapping failed");
         for (unsigned y=0;y<rect.height;++y)
             std::memcpy(p+y*rect.width,raster->vram+(rect.y+y)*1024+rect.x,rect.width*2);
+#ifdef FF8_FRAME_PROVENANCE
+        if (history) {
+            HostGPU::PresentationCommand command;
+            command.kind=HostGPU::PresentationCommand::Upload; command.state=renderer->host_state();
+            command.dst=rect; command.pixels.assign(p,p+rect.width*rect.height);
+            command.preserve_scaled=options.scale>1 || options.true_color || options.msaa>1;
+            history->record(std::move(command));
+        }
+#endif
         renderer->end_copy(b);
     }
     void uploads() {
@@ -431,6 +519,22 @@ extern "C" int host_gpu_configure(const char *name,unsigned scale,int color,unsi
     return options.enabled || (scale==1 && !color && msaa==1 && !frames && !timings);
 }
 extern "C" int host_gpu_enabled(void) { return options.enabled; }
+extern "C" void host_gpu_interpolation(gpu_t *g,int enabled) {
+#ifdef FF8_FRAME_PROVENANCE
+    if (!backend || backend->failed || backend->gpu!=g) return;
+    if (backend->interpolation==enabled && (!enabled || backend->history)) return;
+    gpu_work("frame interpolation",[&] {
+        if (enabled) {
+            backend->history.reset(new HostGPU::PresentationHistory(*backend->device,options.scale,options.msaa,
+                                  enabled==FRAME_SCENE_FIXED_FIELD));
+            backend->boundary();
+        } else if (!enabled && backend->interpolation) backend->history.reset();
+        backend->interpolation=enabled;
+    });
+#else
+    (void)g; (void)enabled;
+#endif
+}
 extern "C" const char *host_gpu_scaled_frames(void) { return options.frames; }
 extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
     if (!options.enabled) return 1;
@@ -484,6 +588,13 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
         b->prior_compile_ns=b->device->pipeline_compile_ns; b->prior_compiles=b->device->pipeline_compiles;
         b->prior_submits=b->device->queue_submissions;
         b->frame_start=Clock::now();
+#ifdef FF8_FRAME_PROVENANCE
+        if (const char *path=std::getenv("FF8_INTERPOLATION_TRACE")) {
+            b->interpolation_trace=std::fopen(path,"w");
+            if (!b->interpolation_trace) throw std::runtime_error("Cannot open interpolation trace");
+            std::fprintf(b->interpolation_trace,"frame,enabled,swap,interval,polygons,matched,cut,alpha,eligible,missing,surface,input,ambiguous,connected,background_reset\n");
+        }
+#endif
         b->window=window;
 #ifdef FF8_GUI
         b->raster=g ? gpu_raster_state(g) : nullptr;
@@ -526,6 +637,9 @@ extern "C" void host_gpu_presentation(int mode, int linear) {
 }
 extern "C" int host_gpu_resume(gpu_t *g) try {
     if (!backend || !g) return 0;
+#ifdef FF8_FRAME_PROVENANCE
+    backend->history.reset(); backend->gpu=g;
+#endif
     backend->movie_patches.clear();
     backend->movie_frame.reset(); backend->movie_buffer.reset();
     backend->dirty=false;
@@ -535,6 +649,12 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     std::memset(backend->effect_counts,0,sizeof(backend->effect_counts));
     for (auto &row:backend->effect_pixels) row.fill(0);
     backend->upload({0,0,1024,512});
+#ifdef FF8_FRAME_PROVENANCE
+    if (std::getenv("FF8_PRESENTATION_REPLAY")) {
+        backend->history.reset(new HostGPU::PresentationHistory(*backend->device,options.scale,options.msaa));
+        backend->boundary();
+    }
+#endif
     return 1;
 } catch (const std::exception &e) { degrade("host_gpu_resume",e.what()); return 0; }
 catch (...) { degrade("host_gpu_resume","unknown backend exception"); return 0; }
@@ -567,11 +687,13 @@ void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
 }
 extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex_t b,gpu_vertex_t c,gpu_paint_t p) {
     if (!active(s)) { __real_gpu_raster_triangle(s,a,b,c,p); return; }
+    FRAME_TAGS(if (backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
 #ifdef FF8_PGXP
     bool precise_draw=false;
 #endif
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
+        FRAME_TAGS(if (backend->history) backend->history->exclude_effect());
         { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
         dirty_bounds(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),
             std::max({a.x,b.x,c.x})-std::min({a.x,b.x,c.x})+1,
@@ -591,7 +713,10 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
             }
         }
 #endif
-        clipped(s,[&] { backend->renderer->draw_triangle(v); });
+        clipped(s,[&] {
+            backend->renderer->draw_triangle(v);
+            FRAME_TAGS(backend->record_draw(HostGPU::PresentationCommand::Triangle,v,3,!p.semi));
+        });
     }
     });
     { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
@@ -606,8 +731,10 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
 }
 extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w,int h,gpu_paint_t p) {
     if (!active(s)) { __real_gpu_raster_rectangle(s,a,w,h,p); return; }
+    FRAME_TAGS(if (backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
+        FRAME_TAGS(if (backend->history) backend->history->exclude_effect());
         { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
         dirty_bounds(s,a.x,a.y,w,h,true);
         return;
@@ -632,7 +759,10 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         v[2].v=uint16_t(tex_v+dv); v[3].v=v[2].v;
         backend->renderer->set_UV_limits(uint16_t(std::min(u,u+du)),uint16_t(std::min(tex_v,tex_v+dv)),
                                          uint16_t(std::max(u,u+du)),uint16_t(std::max(tex_v,tex_v+dv)));
-        clipped(s,[&] { backend->renderer->draw_quad(v); });
+        clipped(s,[&] {
+            backend->renderer->draw_quad(v);
+            FRAME_TAGS(backend->record_draw(HostGPU::PresentationCommand::Quad,v,4));
+        });
     }
     });
     { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
@@ -640,6 +770,7 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
 }
 extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex_t b,gpu_paint_t p,int skip) {
     if (!active(s)) { __real_gpu_raster_line(s,a,b,p,skip); return; }
+    FRAME_TAGS(if (backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     CpuTimer timer;
     int n=std::max(std::abs(b.x-a.x),std::abs(b.y-a.y));
     gpu_work("line",[&] {
@@ -649,7 +780,10 @@ extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex
         if (skip && n) {
             v[0].x+=float(b.x-a.x)/float(n); v[0].y+=float(b.y-a.y)/float(n);
         }
-        clipped(s,[&] { backend->renderer->draw_line(v); });
+        clipped(s,[&] {
+            backend->renderer->draw_line(v);
+            FRAME_TAGS(backend->record_draw(HostGPU::PresentationCommand::Line,v,2));
+        });
     }
     });
     { SoftTimer soft; __real_gpu_raster_line(s,a,b,p,skip); }
@@ -658,6 +792,7 @@ extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex
 
 }
 extern "C" void __wrap_gpu_raster_store(gpu_raster_t *s,int x,int y,uint16_t pixel) {
+    FRAME_TAGS(if (active(s) && backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     if (active(s) && backend->overlaps_movie(unsigned(x),unsigned(y),1))
         gpu_work("movie ordering",[&] { backend->begin(); backend->uploads(); });
     __real_gpu_raster_store(s,x,y,pixel);
@@ -667,6 +802,7 @@ extern "C" void __wrap_gpu_raster_store(gpu_raster_t *s,int x,int y,uint16_t pix
     }
 }
 extern "C" void __wrap_gpu_raster_store_span(gpu_raster_t *s,unsigned x,unsigned y,const uint8_t *data,unsigned n) {
+    FRAME_TAGS(if (active(s) && backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     if (active(s) && backend->overlaps_movie(x,y,n))
         gpu_work("movie ordering",[&] { backend->begin(); backend->uploads(); });
     __real_gpu_raster_store_span(s,x,y,data,n);
@@ -678,6 +814,7 @@ extern "C" void __wrap_gpu_raster_store_span(gpu_raster_t *s,unsigned x,unsigned
 }
 extern "C" void __wrap_gpu_raster_fill(gpu_raster_t *s,int x,int y,int w,int h,uint32_t color) {
     if (!active(s)) { __real_gpu_raster_fill(s,x,y,w,h,color); return; }
+    FRAME_TAGS(if (backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     CpuTimer timer;
     backend->effect(unsigned(x),unsigned(y),unsigned(w),unsigned(h),false);
     gpu_work("fill uploads",[&] { backend->begin(); backend->uploads(); });
@@ -690,6 +827,12 @@ extern "C" void __wrap_gpu_raster_fill(gpu_raster_t *s,int x,int y,int w,int h,u
         for (int col=0;col<w;) {
             unsigned xx=unsigned(x+col)&1023, cols=std::min(unsigned(w-col),1024-xx);
             backend->renderer->clear_rect({xx,yy,cols,rows},color & 0xffffff);
+            FRAME_TAGS(if (backend->history) {
+                HostGPU::PresentationCommand command;
+                command.kind=HostGPU::PresentationCommand::Fill; command.state=backend->renderer->host_state();
+                command.dst={xx,yy,cols,rows}; command.color=color & 0xffffff;
+                backend->history->record(std::move(command));
+            });
             col+=int(cols);
         }
         row+=int(rows);
@@ -698,6 +841,7 @@ extern "C" void __wrap_gpu_raster_fill(gpu_raster_t *s,int x,int y,int w,int h,u
 }
 extern "C" void __wrap_gpu_raster_copy(gpu_raster_t *s,int sx,int sy,int dx,int dy,int w,int h) {
     if (!active(s)) { __real_gpu_raster_copy(s,sx,sy,dx,dy,w,h); return; }
+    FRAME_TAGS(if (backend->history) gpu_work("presentation boundary",[&] { backend->boundary(); }));
     CpuTimer timer;
     bool capture=!options.true_color && (s->mask&1) && s->display_w>0 && s->display_h>0 && w==s->display_w && h==s->display_h;
     bool effect=capture || backend->effect_source(unsigned(sx),unsigned(sy),unsigned(w),unsigned(h));
@@ -712,6 +856,13 @@ extern "C" void __wrap_gpu_raster_copy(gpu_raster_t *s,int sx,int sy,int dx,int 
         backend->renderer->set_mask_test(s->mask&2); backend->renderer->set_force_mask_bit(s->mask&1);
         backend->renderer->blit_vram({unsigned(dx),unsigned(dy),unsigned(w),unsigned(h)},
                                      {unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)});
+        FRAME_TAGS(if (backend->history) {
+            HostGPU::PresentationCommand command;
+            command.kind=HostGPU::PresentationCommand::Copy; command.state=backend->renderer->host_state();
+            command.dst={unsigned(dx),unsigned(dy),unsigned(w),unsigned(h)};
+            command.src={unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)};
+            backend->history->record(std::move(command));
+        });
     }
     });
     { SoftTimer soft; __real_gpu_raster_copy(s,sx,sy,dx,dy,w,h); }
@@ -722,15 +873,48 @@ extern "C" int host_gpu_scanout(gpu_t *g) try {
     if (!backend || backend->failed || backend->raster!=gpu_raster_state(g)) return 0;
     CpuTimer timer;
     inject(4);
+    FRAME_TAGS(backend->boundary());
     int x,y,depth,enabled,nw,nh;
     gpu_display(g,&x,&y,&nw,&nh,&depth,&enabled);
     backend->scanout_timing=gpu_scanout(g); backend->native_width=nw; backend->native_height=nh;
     backend->begin(); backend->uploads();
     auto &target=backend->scanouts[backend->device->get_current_frame_context()];
-    target=backend->renderer->host_scanout({unsigned(x),unsigned(y),unsigned(std::max(nw,1)),unsigned(std::max(nh,1))},
-        depth!=0,options.true_color,enabled && nw && nh,target);
+    Rect display(unsigned(x),unsigned(y),unsigned(std::max(nw,1)),unsigned(std::max(nh,1)));
+    target=backend->renderer->host_scanout(display,depth!=0,options.true_color,enabled && nw && nh,target);
     backend->image=target;
+#ifdef FF8_FRAME_PROVENANCE
+    if (backend->history) {
+        HostGPU::PresentationCommand command;
+        command.kind=HostGPU::PresentationCommand::DisplayBarrier;
+        command.state=backend->renderer->host_state(); command.dst=display; command.color=unsigned(depth);
+        backend->history->record(std::move(command));
+    }
+    if (backend->history && !depth && !host_movies_active()) {
+        backend->renderer->flush(false);
+        if (auto temporal=backend->history->replay(backend->frame,backend->interpolation)) {
+            auto &intermediate=backend->temporal_scanouts[backend->device->get_current_frame_context()];
+            intermediate=temporal->host_scanout(display,false,options.true_color,enabled && nw && nh,intermediate);
+            temporal->flush(false); backend->image=intermediate;
+        }
+    }
+    if (backend->interpolation_trace && backend->trace_frame!=backend->frame) {
+        auto &b=*backend;
+        std::fprintf(b.interpolation_trace,"%llu,%u,%llu,%llu,%u,%u,%u,%.6f",
+            (unsigned long long)b.frame,unsigned(b.interpolation),
+            (unsigned long long)(b.history ? b.history->swap_frame : 0),
+            (unsigned long long)(b.history ? b.history->interval : 0),
+            b.history ? b.history->polygons() : 0,b.history ? b.history->matched() : 0,
+            unsigned(b.history && b.history->cut()),b.history ? b.history->fraction(b.frame) : 1);
+        if (b.history) {
+            const auto &d=b.history->diagnostics();
+            std::fprintf(b.interpolation_trace,",%u,%u,%u,%u,%u,%u,%u\n",d.eligible,d.missing,d.changed_surface,d.changed_input,d.ambiguous,d.connected,
+                         unsigned(b.history->background_reset()));
+        } else std::fprintf(b.interpolation_trace,",0,0,0,0,0,0,0\n");
+        b.trace_frame=b.frame;
+    }
+#endif
     backend->output_width=target->get_width(); backend->output_height=target->get_height();
+    FRAME_TAGS(backend->scanout_frame=backend->frame);
     return 1;
 } catch (const std::exception &e) { degrade("host_gpu_scanout",e.what()); return 0; }
 catch (...) { degrade("host_gpu_scanout","unknown backend exception"); return 0; }
@@ -767,6 +951,7 @@ namespace { int queue_present(); }
 extern "C" int host_gpu_frame(gpu_t *g) try {
     if (!backend || backend->failed || backend->raster!=gpu_raster_state(g)) return 1;
     auto &b=*backend;
+    FRAME_TAGS(if (b.interpolation && b.scanout_frame!=b.frame && !host_gpu_scanout(g)) return 0);
     inject(2);
     double cpu_start=thread_ms();
     b.begin(); b.uploads();

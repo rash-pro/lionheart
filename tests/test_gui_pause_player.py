@@ -46,7 +46,7 @@ def pause_player(real_player, tmp_path_factory):
 @pytest.mark.parametrize('renderer', ['soft', 'vulkan'])
 def test_actual_modal_loop_freezes_every_cpu_byte(pause_player, real_player, tmp_path, renderer):
     discs = [owned_disc(1)]
-    icd = Path('/usr/share/vulkan/icd.d/lvp_icd.json')
+    icd = Path(os.environ.get('FF8_TEST_VULKAN_ICD', '/usr/share/vulkan/icd.d/lvp_icd.json'))
     source = owned_path("saves/disc1-start-maxed.mcr")
     if not discs or not source.is_file() or (renderer == 'vulkan' and not icd.is_file()):
         pytest.skip('owned Disc 1/card and the selected renderer are required')
@@ -73,13 +73,17 @@ def test_actual_modal_loop_freezes_every_cpu_byte(pause_player, real_player, tmp
                'VK_DRIVER_FILES': str(icd), 'XDG_DATA_HOME': str(out / 'data')}
         if name == 'fault':
             env['FF8_GUI_PAUSE_PROBE_STEP'] = '1'
+            env['FF8_GUI_PAUSE_PROBE_FAILURE'] = str(out / 'fault.txt')
         result = subprocess.run(command, cwd=out, text=True, capture_output=True, timeout=180, env=env)
         (out / 'run.log').write_text(result.stdout + result.stderr)
         (out / 'receipt.json').write_text(json.dumps({'command': command, 'exit': result.returncode,
             'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
             'injected_retirement': name == 'fault'}, indent=2) + '\n')
         if name == 'fault':
-            assert result.returncode == 99 and 'guest changed inside modal loop' in result.stderr
+            # An intentional immediate abort cannot drain the player's async
+            # stderr tee; the synchronous proof survives without driver cleanup.
+            assert result.returncode == 99
+            assert (out / 'fault.txt').read_text() == 'guest changed inside modal loop\n'
             continue
         assert result.returncode == 0, result.stdout + result.stderr
         assert 'Stop: VBlank limit reached' in result.stdout

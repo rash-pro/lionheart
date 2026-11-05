@@ -28,6 +28,8 @@ int host_gpu_rgb(gpu_t *, const uint8_t **rgb, int *w, int *h);
 /* Explicit replay verification only; guest reads never call this API. */
 int host_gpu_download(gpu_t *, uint16_t *out, int raw_parallel);
 int host_gpu_resume(gpu_t *);
+/* A mode change or disabling discards only host presentation history. */
+void host_gpu_interpolation(gpu_t *, int enabled);
 void host_gpu_presentation(int scale_mode, int linear);
 const char *host_gpu_scaled_frames(void);
 /* CRT presets (P): 0 off, 1 pvm, 2 tv, 3 arcade; changeable at runtime. */

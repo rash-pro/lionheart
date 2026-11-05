@@ -46,6 +46,7 @@ const host_option_t host_options[] = {
     OPTION("true-color", "0|1", true_color, HOST_OPTION_PRESENTATION),
     PRESENT("msaa", "1|2|4|8", msaa, HOST_VALUE_NUMBER),
     OPTION("pgxp", "off|vertex|perspective", pgxp, HOST_OPTION_PRESENTATION),
+    OPTION("frame-interpolation", "off|on", frame_interpolation, HOST_OPTION_PRESENTATION),
     PRESENT("movies", "PATH", movies, HOST_VALUE_PATH),
     PRESENT("movie-stats", "PATH", movie_stats, HOST_VALUE_PATH),
     PRESENT("dump-scaled-frames", "PATH", scaled_frames, HOST_VALUE_PATH),

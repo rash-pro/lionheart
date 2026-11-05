@@ -1,12 +1,19 @@
 #ifndef FF8_GPU_H
 #define FF8_GPU_H
 #include <stdint.h>
+#include "frame_tags.h"
 
 typedef struct gpu gpu_t;
 gpu_t *gpu_create(void);
 void gpu_gp0(gpu_t *, uint32_t word);
 /* Contiguous little-endian RAM words, preserving partial command state. */
 void gpu_gp0_words(gpu_t *, const uint8_t *, unsigned words);
+#if defined(FF8_FRAME_PROVENANCE)
+void gpu_frame_tags_bind(gpu_t *, struct cpu *);
+int gpu_frame_tags_triangle(gpu_t *, frame_corner_t [3]);
+void gpu_gp0_tagged(gpu_t *, uint32_t, frame_tag_t);
+void gpu_gp0_ram(gpu_t *, struct cpu *, uint32_t, unsigned);
+#endif
 void gpu_gp1(gpu_t *, uint32_t word);
 uint32_t gpu_read(gpu_t *);
 uint32_t gpu_status(gpu_t *);
