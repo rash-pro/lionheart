@@ -1,0 +1,23 @@
+# Deterministic battle input from the early Disc 1 card; confirmation uses Circle.
+300 CROSS
+302 -
+600 CROSS
+602 -
+900 CROSS
+902 -
+1140 CROSS
+1148 -
+1300 CROSS
+1308 -
+1460 CROSS
+1468 -
+1700 RIGHT
+2050 -
+2500 DOWN
+2508 -
+2540 CIRCLE
+2548 -
+2580 CIRCLE
+2588 -
+2620 CIRCLE
+2628 -
