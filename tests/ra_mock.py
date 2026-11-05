@@ -28,6 +28,7 @@ class Service:
         self.set_failure = False
         self.delay = 0
         self.award_mode = 'ok'
+        self.token = 'test-token'
         self.url = ''
 
     def achievement_set(self):
@@ -63,9 +64,9 @@ class Service:
         if operation == 'awardachievement' and self.award_mode == 'offline':
             return 503, dict(Success=False, Error='Maintenance')
         if operation == 'login2':
-            if params.get('p') != 'test-password' and params.get('t') != 'test-token':
+            if params.get('p') != 'test-password' and params.get('t') != self.token:
                 return 200, dict(Success=False, Error='Invalid credentials', Code='invalid_credentials')
-            return 200, dict(Success=True, User='TestUser', Token='test-token', Score=0, SoftcoreScore=2,
+            return 200, dict(Success=True, User='TestUser', Token=self.token, Score=0, SoftcoreScore=2,
                              Messages=0, Permissions=1, AccountType='Registered')
         if operation == 'achievementsets':
             if self.set_failure:

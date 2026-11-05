@@ -125,6 +125,20 @@ def test_wrong_password(client):
     assert not (data / 'ra/credentials').exists()
 
 
+def test_new_login_replaces_saved_token(client):
+    lib, service, data = client
+    login(client)
+    service.token = 'renewed-test-token'
+    login(client)
+    token = data / 'ra/credentials'
+    assert token.read_text() == 'ra-user=TestUser\nra-token=renewed-test-token\n'
+    assert stat.S_IMODE(token.stat().st_mode) == 0o600
+    assert list(token.parent.iterdir()) == [token]
+    lib.host_ra_configure(os.fsencode(data), 1, 1)
+    until(lib, lambda: lib.ra_test_state() == CONNECTED)
+    assert service.requests[-1][1]['t'] == service.token
+
+
 @pytest.mark.parametrize('mode', ['expired', 'blocked', 'blocked-json'])
 def test_rejected_token_clears_credentials_and_stops(client, mode):
     lib, service, data = client
