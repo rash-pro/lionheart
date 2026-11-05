@@ -99,7 +99,7 @@ def test_native_primitives_batch_their_exact_pixels(vulkan_replay, tmp_path):
     stream.write_bytes(b'FF8GPUR1' + b''.join(struct.pack('<II', *word) for word in words))
     timing = tmp_path / 'timing.csv'
     run = subprocess.run([str(vulkan_replay), str(stream), '1', str(tmp_path / 'native.png'), str(timing)],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
+                         env=vulkan_env(),
                          capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr
     report = json.loads(run.stdout)
