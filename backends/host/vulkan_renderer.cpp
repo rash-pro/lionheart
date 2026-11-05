@@ -557,6 +557,10 @@ void __real_gpu_raster_store(gpu_raster_t *,int,int,uint16_t);
 void __real_gpu_raster_store_span(gpu_raster_t *,unsigned,unsigned,const uint8_t *,unsigned);
 }
 namespace {
+bool native_pixels() {
+    return options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active();
+}
+
 void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
     int l=std::max(x,s->left), r=std::min(x+w,s->right+1);
     int t=std::max(y,s->top), b=std::min(y+h,s->bottom+1);
@@ -580,7 +584,6 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
     }
     gpu_work("triangle",[&] {
     if (std::max({a.x,b.x,c.x})-std::min({a.x,b.x,c.x})<1024 && std::max({a.y,b.y,c.y})-std::min({a.y,b.y,c.y})<512) {
-        state(s,p,PrimitiveType::Polygon);
         Vertex v[]={vertex(a),vertex(b),vertex(c)};
 #ifdef FF8_PGXP
         pgxp_vertex_t precise[3];
@@ -591,11 +594,20 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
             }
         }
 #endif
+        // Native output is replaced by the exact software pixels below. Keep
+        // those writes pending until a draw that needs GPU pixels or scanout,
+        // instead of drawing and uploading the same primitive twice.
+        if (native_pixels()
+#ifdef FF8_PGXP
+            && !precise_draw
+#endif
+        ) return;
+        state(s,p,PrimitiveType::Polygon);
         clipped(s,[&] { backend->renderer->draw_triangle(v); });
     }
     });
     { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
-    if (!backend->failed && options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active()
+    if (!backend->failed && native_pixels()
 #ifdef FF8_PGXP
         && !precise_draw
 #endif
@@ -613,6 +625,7 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         return;
     }
     gpu_work("rectangle",[&] {
+    if (native_pixels()) return;
     if (w>0 && h>0) {
         state(s,p,PrimitiveType::Sprite);
         Vertex v[4]={vertex(a),vertex(a),vertex(a),vertex(a)};
@@ -636,13 +649,14 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
     }
     });
     { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
-    if (!backend->failed && options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active()) dirty_bounds(s,a.x,a.y,w,h);
+    if (!backend->failed && native_pixels()) dirty_bounds(s,a.x,a.y,w,h);
 }
 extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex_t b,gpu_paint_t p,int skip) {
     if (!active(s)) { __real_gpu_raster_line(s,a,b,p,skip); return; }
     CpuTimer timer;
     int n=std::max(std::abs(b.x-a.x),std::abs(b.y-a.y));
     gpu_work("line",[&] {
+    if (native_pixels()) return;
     if ((!skip || n) && std::abs(b.x-a.x)<1024 && std::abs(b.y-a.y)<512) {
         state(s,p,PrimitiveType::Polygon);
         Vertex v[]={vertex(a),vertex(b)};
@@ -653,7 +667,7 @@ extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex
     }
     });
     { SoftTimer soft; __real_gpu_raster_line(s,a,b,p,skip); }
-    if (!backend->failed && options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active())
+    if (!backend->failed && native_pixels())
         dirty_bounds(s,std::min(a.x,b.x)-1,std::min(a.y,b.y)-1,std::abs(b.x-a.x)+3,std::abs(b.y-a.y)+3);
 
 }

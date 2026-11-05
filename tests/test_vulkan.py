@@ -72,6 +72,42 @@ def test_vulkan_pipeline_keeps_guest_reads_native(vulkan_replay, tmp_path, scale
         assert int(row['submissions']) == 1
 
 
+def test_native_primitives_batch_their_exact_pixels(vulkan_replay, tmp_path):
+    """Overlapping native primitives retain VRAM without redundant GPU draws."""
+    words = []
+
+    def gp0(*values):
+        words.extend((0, value) for value in values)
+
+    def xy(x, y):
+        return x | (y << 16)
+
+    gp0(0xe3000000, 0xe4000000 | 1023 | (511 << 10), 0xe1000400)
+    for i in range(48):
+        gp0(0x600000ff, xy(i, i), xy(32, 32))
+        gp0(0x300000ff, xy(i, i), 0x0000ff00, xy(i + 30, i),
+            0x00ff0000, xy(i, i + 30))
+        gp0(0x4000ff00, xy(i, i), xy(i + 30, i + 30))
+    # CPU readback and texture feedback both observe the accumulated pixels.
+    gp0(0xe1000500, 0x65000000, xy(128, 0), 0, xy(64, 64))
+    gp0(0x60ff0000, xy(300, 300), xy(4, 4), 0xc0000000, xy(300, 300), xy(4, 4))
+    words.extend((3, 0x7c007c00) for _ in range(8))
+    words.extend((1, value) for value in [0x05000000, 0x06000000 | 600 | (3160 << 12),
+                                        0x07000000 | 16 | (256 << 10), 0x08000001, 0x03000000])
+    words.append((2, 0))
+    stream = tmp_path / 'native.gpu'
+    stream.write_bytes(b'FF8GPUR1' + b''.join(struct.pack('<II', *word) for word in words))
+    timing = tmp_path / 'timing.csv'
+    run = subprocess.run([str(vulkan_replay), str(stream), '1', str(tmp_path / 'native.png'), str(timing)],
+                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
+                         capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, run.stderr
+    report = json.loads(run.stdout)
+    assert report['errors'] == 0 and report['raw_mismatch_pixels'] == 0
+    rows = list(csv.DictReader(timing.open()))
+    assert rows and int(rows[0]['draw_calls']) == 0
+
+
 def test_vulkan_wsi_recovery_and_retirement(vulkan_replay):
     run = subprocess.run([str(vulkan_replay.with_name('gpu_wsi_contract'))],
                          text=True, capture_output=True, timeout=30)
