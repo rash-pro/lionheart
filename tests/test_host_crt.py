@@ -1,4 +1,4 @@
-"""CRT presentation presets: options, shaders, and synthetic patterns on lavapipe."""
+"""CRT presentation presets: options, shaders, and synthetic patterns on Vulkan."""
 import ctypes as C
 import json
 import os
@@ -15,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SHADERS = ROOT / 'backends/host/shaders'
 SHADER_NAMES = ['crt_fullscreen.vert', 'crt_lines.frag', 'crt_beam.frag', 'crt_glow.frag', 'crt_final.frag']
-ICD = Path('/usr/share/vulkan/icd.d/lvp_icd.json')
+
 PRESETS = ('pvm', 'tv', 'arcade')
 # 320x240 NTSC progressive: GP1(06h) 600..3160, GP1(07h) 16..256, GP1(08h) mode 1.
 TIMING = (600 | (3160 << 12), 16 | (256 << 10), 1)
@@ -116,9 +116,9 @@ def viewport(tmp_path_factory):
 
 
 @pytest.fixture(scope='module')
-def crt_preview(tmp_path_factory):
-    if not ICD.is_file() or not shutil.which('cmake'):
-        pytest.skip('lavapipe and CMake are required for the CRT presentation gate')
+def crt_preview(tmp_path_factory, vulkan_replay):
+    if not shutil.which('cmake'):
+        pytest.skip('CMake is required for the CRT presentation gate')
     out = tmp_path_factory.mktemp('crt')
     generated = out / 'gen'
     generated.mkdir()
@@ -143,7 +143,7 @@ def present(tool, rgb, size, preset, out_dir, timing=TIMING, filt='nearest', sca
                           '--native', str(native[0]), str(native[1]), '--timing', *map(str, timing),
                           '--size', f'{size[0]}x{size[1]}', '--crt', preset, '--filter', filt, '--scale-mode', scale_mode,
                           '--out', str(dst)],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD), SDL_VIDEODRIVER='offscreen', SDL_AUDIODRIVER='dummy'),
+                         env=dict(os.environ, SDL_VIDEODRIVER='offscreen', SDL_AUDIODRIVER='dummy'),
                          text=True, capture_output=True, timeout=300)
     assert run.returncode == 0, run.stderr
     report = json.loads(run.stdout)

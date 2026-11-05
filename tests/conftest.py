@@ -2,6 +2,8 @@
 from functools import lru_cache
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,3 +77,28 @@ def owned_path(relative):
         path = ROOT / 'build/generated/extracted' / relative
         if not path.is_file(): pytest.fail('run python tools/setup.py --disc1 DISC before owned-game tests')
     return path
+
+
+@pytest.fixture(scope='session')
+def vulkan_replay(tmp_path_factory):
+    if not shutil.which('cmake'):
+        pytest.skip('CMake is required for the optional Vulkan gate')
+    out = tmp_path_factory.mktemp('vulkan')
+    generated = out / 'gen'
+    generated.mkdir()
+    (generated / 'sources.cmake').write_text('set(GENERATED_SOURCES "")\n')
+    (generated / 'manifest.json').write_text('{}\n')
+    subprocess.run(['cmake', '-S', str(ROOT), '-B', str(out / 'host'),
+                    f'-DGENERATED_DIR={generated}', '-DFF8_PLAYER=OFF', '-DFF8_VULKAN=ON',
+                    '-DCMAKE_BUILD_TYPE=Release', '-DFF8_VULKAN_TESTING=ON', '-DFF8_PGXP=ON'], check=True, capture_output=True, timeout=120)
+    subprocess.run(['cmake', '--build', str(out / 'host'), '--target', 'gpu_replay', 'gpu_wsi_contract', '-j4'],
+                   check=True, capture_output=True, timeout=240)
+    binary = out / 'host/gpu_replay'
+    probe = subprocess.run([str(binary), '--self-test', '1'], env=dict(os.environ),
+                           text=True, capture_output=True, timeout=120)
+    if 'Vulkan warning: using native soft presentation' in probe.stderr:
+        if os.environ.get('VK_DRIVER_FILES') or os.environ.get('VK_ICD_FILENAMES'):
+            pytest.fail('The explicitly selected Vulkan driver is unavailable:\n' + probe.stderr)
+        pytest.skip('No usable Vulkan device: ' + probe.stderr)
+    assert probe.returncode == 0, probe.stderr
+    return binary

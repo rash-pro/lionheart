@@ -1,9 +1,8 @@
-"""Optional real Vulkan contracts on lavapipe; no disc or display server required."""
+"""Real Vulkan contracts using the selected ICD; no disc or display required."""
 import csv
 import json
 import os
 from pathlib import Path
-import shutil
 import struct
 import subprocess
 
@@ -11,31 +10,18 @@ import pytest
 from test_gpu import read_png
 
 ROOT = Path(__file__).resolve().parents[1]
-ICD = Path('/usr/share/vulkan/icd.d/lvp_icd.json')
 
 
-@pytest.fixture(scope='module')
-def vulkan_replay(tmp_path_factory):
-    if not ICD.is_file() or not shutil.which('cmake'):
-        pytest.skip('lavapipe and CMake are required for the optional Vulkan gate')
-    out = tmp_path_factory.mktemp('vulkan')
-    generated = out / 'gen'
-    generated.mkdir()
-    (generated / 'sources.cmake').write_text('set(GENERATED_SOURCES "")\n')
-    (generated / 'manifest.json').write_text('{}\n')
-    subprocess.run(['cmake', '-S', str(ROOT), '-B', str(out / 'host'),
-                    f'-DGENERATED_DIR={generated}', '-DFF8_PLAYER=OFF', '-DFF8_VULKAN=ON',
-                    '-DCMAKE_BUILD_TYPE=Release', '-DFF8_VULKAN_TESTING=ON', '-DFF8_PGXP=ON'], check=True, capture_output=True, timeout=120)
-    subprocess.run(['cmake', '--build', str(out / 'host'), '--target', 'gpu_replay', 'gpu_wsi_contract', '-j4'],
-                   check=True, capture_output=True, timeout=240)
-    return out / 'host/gpu_replay'
+def vulkan_env(**overrides):
+    """Keep the loader's ICD/device selection, including both standard overrides."""
+    return dict(os.environ, **overrides)
 
 
 @pytest.mark.parametrize('scale,color,msaa', [(1,0,1), (2,0,1), (3,0,1), (4,0,1), (5,0,1), (6,0,1), (7,0,1), (8,0,1), (4,1,4), (1,1,1), (1,0,4)])
 def test_vulkan_reference_readbacks_and_scaled_scanout(vulkan_replay, tmp_path, scale, color, msaa):
     png = tmp_path / 'scanout.png'
     csv = tmp_path / 'timing.csv'
-    env = dict(os.environ, VK_DRIVER_FILES=str(ICD), SDL_VIDEODRIVER='offscreen', SDL_AUDIODRIVER='dummy')
+    env = vulkan_env(SDL_VIDEODRIVER='offscreen', SDL_AUDIODRIVER='dummy')
     run = subprocess.run([str(vulkan_replay), '--self-test', str(scale), str(png), str(csv), str(color), str(msaa)],
                          env=env, text=True, capture_output=True, timeout=120)
     assert run.returncode == 0, run.stderr
@@ -61,7 +47,7 @@ def test_vulkan_replay_rejects_truncated_stream(vulkan_replay, tmp_path):
     stream = tmp_path / 'bad.gpu'
     stream.write_bytes(b'FF8GPUR1' + b'\x00')
     result = subprocess.run([str(vulkan_replay), str(stream), '1'],
-                            env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, timeout=60)
+                            env=vulkan_env(), capture_output=True, timeout=60)
     assert result.returncode == 2
 
 
@@ -71,7 +57,7 @@ def test_vulkan_pipeline_keeps_guest_reads_native(vulkan_replay, tmp_path, scale
     timing = tmp_path / 'async.csv'
     run = subprocess.run([str(vulkan_replay), '--self-test-async', str(scale),
                           str(tmp_path / 'async.png'), str(timing), '0', '1'],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
+                         env=vulkan_env(),
                          text=True, capture_output=True, timeout=120)
     assert run.returncode == 0, run.stderr
     report = json.loads(run.stdout)
@@ -97,7 +83,7 @@ def test_vulkan_wsi_recovery_and_retirement(vulkan_replay):
 def test_vulkan_c_boundaries_keep_native_state_after_failure(vulkan_replay, tmp_path, phase):
     run = subprocess.run([str(vulkan_replay), '--self-test-fault', str(phase),
                           str(tmp_path / 'unused.png'), str(tmp_path / 'fault.csv')],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD)),
+                         env=vulkan_env(),
                          text=True, capture_output=True, timeout=120)
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout)['fallback'] == 'pass'
@@ -106,7 +92,7 @@ def test_vulkan_c_boundaries_keep_native_state_after_failure(vulkan_replay, tmp_
 
 @pytest.mark.parametrize('override', ['missing-driver', 'invalid-device'])
 def test_vulkan_initialization_falls_back_to_soft(vulkan_replay, tmp_path, override):
-    env = dict(os.environ, VK_DRIVER_FILES=str(ICD))
+    env = vulkan_env()
     if override == 'missing-driver':
         env['VK_DRIVER_FILES'] = str(tmp_path / 'not-an-icd.json')
     else:
@@ -130,17 +116,21 @@ def test_vulkan_unavailable_window_uses_sdl_soft_renderer(vulkan_replay, tmp_pat
 
 
 def test_vulkan_synchronization_validation_when_installed(vulkan_replay, tmp_path):
-    layers = list(Path('/usr/share/vulkan/explicit_layer.d').glob('*khronos*validation*.json'))
-    layers += list(Path('/etc/vulkan/explicit_layer.d').glob('*khronos*validation*.json'))
+    folders = ['/usr/share/vulkan/explicit_layer.d', '/etc/vulkan/explicit_layer.d']
+    for variable in ('VK_LAYER_PATH', 'VK_ADD_LAYER_PATH'):
+        folders.extend(filter(None, os.environ.get(variable, '').split(os.pathsep)))
+    layers = [p for folder in folders for p in Path(folder).glob('*.json')
+              if 'VK_LAYER_KHRONOS_validation' in p.read_text()]
     if not layers:
         pytest.skip('VK_LAYER_KHRONOS_validation is not installed')
     run = subprocess.run([str(vulkan_replay), '--self-test-async', '4', str(tmp_path / 'sync.png')],
-                         env=dict(os.environ, VK_DRIVER_FILES=str(ICD),
+                         env=vulkan_env(
                                   VK_INSTANCE_LAYERS='VK_LAYER_KHRONOS_validation',
                                   VK_LAYER_ENABLES='VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT'),
                          text=True, capture_output=True, timeout=120)
     assert run.returncode == 0, run.stderr
-    assert 'SYNC-HAZARD' not in run.stderr and 'Validation Error' not in run.stderr
+    diagnostics = run.stdout + run.stderr
+    assert 'SYNC-HAZARD' not in diagnostics and 'Validation Error' not in diagnostics, diagnostics
 
 
 @pytest.mark.parametrize('scale,msaa', [(1, 1), (4, 1), (4, 4)])
@@ -172,7 +162,7 @@ def test_vram_copy_force_mask_is_used_by_textured_blending(vulkan_replay, tmp_pa
     png = tmp_path / 'copy-mask.png'
     result = subprocess.run([str(vulkan_replay), str(stream), str(scale), str(png),
                              str(tmp_path / 'copy-mask.csv'), '0', str(msaa), '--benchmark'],
-                            env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, text=True, timeout=120)
+                            env=vulkan_env(), capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['errors'] == 0
     width, _, rgb = read_png(png)
@@ -207,7 +197,7 @@ def test_framebuffer_feedback_preserves_15bit_truncation(vulkan_replay, tmp_path
     png = tmp_path / 'feedback.png'
     result = subprocess.run([str(vulkan_replay), str(stream), str(scale), str(png),
                              str(tmp_path / 'feedback.csv'), '0', str(msaa), '--benchmark'],
-                            env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, text=True, timeout=120)
+                            env=vulkan_env(), capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['errors'] == 0
     width, _, rgb = read_png(png)
@@ -240,7 +230,7 @@ def test_upload_releases_feedback_texture_for_scaled_geometry(vulkan_replay, tmp
     png = tmp_path / 'reuse.png'
     result = subprocess.run([str(vulkan_replay), str(stream), '4', str(png),
                              str(tmp_path / 'reuse.csv'), '0', '1', '--benchmark'],
-                            env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, text=True, timeout=120)
+                            env=vulkan_env(), capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['errors'] == 0
     width, _, rgb = read_png(png)
@@ -278,7 +268,8 @@ def test_hud_background_copy_keeps_scaled_pixels(vulkan_replay, tmp_path, scale,
     result = subprocess.run([str(vulkan_replay), str(stream), str(scale), str(tmp_path / 'last.png'),
                              str(tmp_path / 'timing.csv'), '0', str(msaa), '--benchmark',
                              '--dump-scaled-frames', str(frames)],
-                            env=dict(os.environ, VK_DRIVER_FILES=str(ICD)), capture_output=True, text=True, timeout=120)
+                            env=vulkan_env(), capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['errors'] == 0
     assert read_png(frames / 'frame-000001.png') == read_png(frames / 'frame-000002.png')
+

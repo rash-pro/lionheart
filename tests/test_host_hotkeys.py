@@ -10,7 +10,7 @@ import zlib
 import numpy as np
 import pytest
 
-from test_host_crt import crt_preview, viewport, TIMING, ICD
+from test_host_crt import crt_preview, viewport, TIMING
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = {**os.environ, 'SDL_VIDEODRIVER': 'dummy', 'SDL_AUDIODRIVER': 'dummy', 'SDL_RENDER_DRIVER': 'software', 'TZ': 'UTC'}
@@ -80,10 +80,10 @@ def png(path):
 def test_screenshot_is_presented_crop_without_osd(request, viewport, tmp_path, backend, preset, size, mode, linear):
     executable = request.getfixturevalue(f'{backend}_capture')
     subprocess.run([str(executable), backend, *map(str, size), str(mode), str(preset), str(linear), str(tmp_path), '0'],
-                   check=True, capture_output=True, env={**ENV, 'VK_DRIVER_FILES': str(ICD)}, timeout=90)
+                   check=True, capture_output=True, env=ENV, timeout=90)
     baseline = tmp_path / 'no-osd'
     subprocess.run([str(executable), backend, *map(str, size), str(mode), str(preset), str(linear), str(baseline), '2'],
-                   check=True, capture_output=True, env={**ENV, 'VK_DRIVER_FILES': str(ICD)}, timeout=90)
+                   check=True, capture_output=True, env=ENV, timeout=90)
     reference = png(baseline / 'presented/frame-000001.png')
     with_osd = png(tmp_path / 'presented/frame-000001.png')
     assert not np.array_equal(reference, with_osd)
