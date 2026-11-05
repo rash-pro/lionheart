@@ -415,7 +415,10 @@ void host_ra_configure(const char *data,int enabled,int notify) {
     if (!host_ra_http_init()) { ra.status.state=HOST_RA_UNAVAILABLE; return; }
     ra.mutex=SDL_CreateMutex(); ra.wake=SDL_CreateCond();
     if (ra.mutex && ra.wake) ra.worker=SDL_CreateThread(worker,"achievements",NULL);
-    if (!ra.worker) { SDL_DestroyCond(ra.wake); SDL_DestroyMutex(ra.mutex); host_ra_http_cleanup(); ra.status.state=HOST_RA_UNAVAILABLE; return; }
+    if (!ra.worker) {
+        SDL_DestroyCond(ra.wake); SDL_DestroyMutex(ra.mutex); ra.wake=NULL; ra.mutex=NULL;
+        host_ra_http_cleanup(); ra.status.state=HOST_RA_UNAVAILABLE; return;
+    }
     ra.configured=1; ra.enabled=enabled; ra.status.state=enabled ? HOST_RA_SIGNED_OUT : HOST_RA_OFF;
     if (enabled) {
         if (host_ra_credentials_read(ra.credentials,ra.status.username,sizeof(ra.status.username),ra.token,sizeof(ra.token))) login_token();
@@ -455,11 +458,13 @@ int host_ra_achievement(unsigned index,host_ra_achievement_t *out) {
     const rc_client_achievement_t *a=rc_client_get_achievement_info(ra.client,ra.badges[index].id);
     if (!a) return 0;
     const char *progress=a->measured_progress;
+    float percent=a->measured_percent;
     /* This pinned client's public formatter omits zero progress. Its public
      * record is the first member of the internal record; read only the target. */
     const rc_trigger_t *trigger=((const rc_client_achievement_info_t *)a)->trigger;
     if (!a->unlocked && trigger && trigger->measured_target) {
         if (!*progress) {
+            percent=0;
             snprintf(ra.badges[index].progress,sizeof(ra.badges[index].progress),
                 trigger->measured_as_percent ? "0%%" : "0 / %u",trigger->measured_target);
         } else {
@@ -470,7 +475,7 @@ int host_ra_achievement(unsigned index,host_ra_achievement_t *out) {
         progress=ra.badges[index].progress;
     }
     *out=(host_ra_achievement_t){a->id,a->points,a->title,a->description,progress,
-        a->measured_percent,a->unlock_time,!!a->unlocked,ra.badges[index].pending,ra.badges[index].badge};
+        percent,a->unlock_time,!!a->unlocked,ra.badges[index].pending,ra.badges[index].badge};
     badge_request(index,a); return 1;
 }
 const host_ra_status_t *host_ra_status(void) {
@@ -483,7 +488,7 @@ const host_ra_status_t *host_ra_status(void) {
 }
 int host_ra_toast(host_ra_achievement_t *out,double now,float *opacity) {
     if (!ra.notify || ra.toast_at>=ra.toast_count) return 0;
-    if (ra.toast_started<0) ra.toast_started=now;
+    if (ra.toast_started<0 || now<ra.toast_started) ra.toast_started=now;
     double elapsed=now-ra.toast_started;
     if (elapsed>=2220) {
         ++ra.toast_at; ra.toast_started=-1;

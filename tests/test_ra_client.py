@@ -34,7 +34,7 @@ def ra_lib(tmp_path_factory):
                '-Iruntime', '-Ibackends/host', f'-I{vendor}/include', f'-I{vendor}/src/api', f'-I{vendor}/src/client',
                'backends/host/ra.c', 'backends/host/ra_http.c', 'backends/host/ra_store.c',
                'backends/host/ra_badge.c', 'backends/host/player_paths.c', 'backends/host/achievements.c',
-               'tests/ra_harness.c', *map(str, sources), '-Wl,--wrap=SDL_GetTicks64', '-lm', '-pthread',
+               'tests/ra_harness.c', *map(str, sources), '-Wl,--wrap=SDL_GetTicks64,--wrap=SDL_CreateThread', '-lm', '-pthread',
                '-o', str(out), *flags]
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
@@ -325,3 +325,61 @@ def test_disc_change_hashes_each_loaded_disc(client, tmp_path):
         until(lib, lambda: any(p['r'] == 'gameid' and p.get('m') == hashes[-1].decode()
                               for _, p, _ in service.requests))
     assert len(set(hashes)) == 4
+
+
+def test_idle_does_not_evaluate_changed_memory(client, tmp_path):
+    lib, _, _ = client
+    load(client, tmp_path)
+    lib.ra_test_frame(0)
+    lib.ra_test_memory(7)
+    for _ in range(30):
+        lib.host_ra_idle()
+    assert lib.ra_test_unlocked() == 0 and lib.ra_test_progress(1) == 0
+    lib.ra_test_frame(7)
+    assert lib.ra_test_unlocked() == 1
+
+
+def test_pending_unlock_survives_disc_change(client, tmp_path):
+    lib, service, _ = client
+    load(client, tmp_path)
+    service.award_mode = 'offline'
+    lib.ra_test_frame(0)
+    lib.ra_test_frame(7)
+    until(lib, lambda: lib.ra_test_state() == OFFLINE)
+    assert lib.ra_test_pending(0)
+    lib.host_ra_disc(os.fsencode(disc(tmp_path / 'disc-two.bin', 2)))
+    until(lib, lambda: not lib.ra_test_loading())
+    assert lib.ra_test_unlocked() == 1 and lib.ra_test_pending_id(101)
+    service.award_mode = 'ok'
+    lib.ra_test_advance(120000)
+    until(lib, lambda: bool(service.awards) and not lib.ra_test_pending_id(101))
+
+
+def test_reset_clears_measured_display_and_toast_handles_clock_restart(client, tmp_path):
+    lib, _, _ = client
+    load(client, tmp_path)
+    lib.ra_test_frame(0)
+    lib.ra_test_frame(5)
+    assert lib.ra_test_progress(1) == 50
+    lib.host_ra_reset()
+    assert lib.ra_test_progress_text(1) == b'0 / 10' and lib.ra_test_progress(1) == 0
+    lib.ra_test_frame(0)
+    lib.ra_test_frame(7)
+    assert lib.ra_test_toast(5000) == 0
+    assert lib.ra_test_toast(5120) == 1
+    assert lib.ra_test_toast(0) == 0
+    assert lib.ra_test_toast(120) == 1
+    assert lib.ra_test_toast(2220) == -1
+
+
+def test_worker_start_failure_can_sign_out_and_reconfigure(client):
+    lib, service, data = client
+    lib.ra_test_fail_worker()
+    lib.host_ra_configure(os.fsencode(data), 1, 1)
+    assert lib.ra_test_state() == UNAVAILABLE
+    lib.host_ra_signout()
+    lib.host_ra_shutdown()
+    assert not service.requests
+    lib.host_ra_configure(os.fsencode(data), 1, 1)
+    login(client)
+    assert lib.ra_test_state() == CONNECTED
