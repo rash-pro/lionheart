@@ -8,6 +8,7 @@ enum { HOST_OPTION_PRESENTATION = 'P', HOST_OPTION_LOGIC = 'L' };
 typedef struct {
     int dualshock, rumble, fullscreen, scale_mode, linear;
     int osd, pad_hotkey;
+    int ra, ra_notify;
     char screenshot_dir[512], screenshot_at[4096];
     char osd_tests[4096];
     int renderer, true_color, pgxp, full_disc, snapshot_cards, crt;

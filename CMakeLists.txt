@@ -158,15 +158,19 @@ if(WIN32 AND FF8_PLAYER)
   set(FF8_STATE_BRIDGE OFF CACHE BOOL "Not supported on the Windows player" FORCE)
 endif()
 # Local, opt-in host telemetry and achievements. Inactive unless configured.
-option(FF8_RCHEEVOS "Build local achievements" ON)
+option(FF8_RCHEEVOS "Build casual RetroAchievements and the local evaluator" ON)
 option(FF8_STATE_BRIDGE "Build localhost state bridge" ON)
 if(FF8_RCHEEVOS)
 set(RCHEEVOS_DIR "${CMAKE_SOURCE_DIR}/third_party/rcheevos")
 file(GLOB RC_RUNTIME_SOURCES CONFIGURE_DEPENDS "${RCHEEVOS_DIR}/src/runtime/*.c")
-add_library(ff8_rcheevos STATIC ${RC_RUNTIME_SOURCES}
+file(GLOB RC_CLIENT_SOURCES CONFIGURE_DEPENDS "${RCHEEVOS_DIR}/src/client/*.c")
+add_library(ff8_rcheevos STATIC ${RC_RUNTIME_SOURCES} ${RC_CLIENT_SOURCES}
   ${RCHEEVOS_DIR}/src/util/md5.c ${RCHEEVOS_DIR}/src/util/rc_compat.c
   ${RCHEEVOS_DIR}/src/util/rc_util.c
+  ${RCHEEVOS_DIR}/src/util/rc_version.c
   ${RCHEEVOS_DIR}/src/api/rc_api_common.c
+  ${RCHEEVOS_DIR}/src/api/rc_api_user.c ${RCHEEVOS_DIR}/src/api/rc_api_runtime.c
+  ${RCHEEVOS_DIR}/src/api/rc_api_info.c
   ${RCHEEVOS_DIR}/src/hash/rc_hash.c ${RCHEEVOS_DIR}/src/hash/rc_hash_disc.c
   ${RCHEEVOS_DIR}/src/hash/rc_cdreader.c)
 target_include_directories(ff8_rcheevos PUBLIC "${RCHEEVOS_DIR}/include"
@@ -199,6 +203,24 @@ target_compile_definitions(ff8_state_bridge PRIVATE RC_HASH_NO_ROM RC_HASH_NO_ZI
 find_package(Threads REQUIRED)
 target_link_libraries(ff8_state_bridge PRIVATE Threads::Threads)
 target_link_libraries(ff8 PRIVATE ff8_state_bridge)
+if(FF8_RCHEEVOS)
+  add_library(ff8_ra backends/host/ra.c backends/host/ra_http.c backends/host/ra_store.c backends/host/ra_badge.c)
+  target_include_directories(ff8_ra PUBLIC backends/host runtime PRIVATE "${RCHEEVOS_DIR}/src/api" "${RCHEEVOS_DIR}/src/client")
+  target_compile_definitions(ff8_ra PUBLIC FF8_RCHEEVOS PRIVATE FF8_VERSION="${PROJECT_VERSION}"
+    RC_HASH_NO_ROM RC_HASH_NO_ZIP RC_HASH_NO_ENCRYPTED)
+  target_compile_options(ff8_ra PRIVATE -Wall -Wextra -Wpedantic)
+  if(FF8_SANITIZE)
+    target_compile_options(ff8_ra PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  endif()
+  target_link_libraries(ff8_ra PUBLIC ff8_state_bridge ff8_options PkgConfig::SDL2 PRIVATE ZLIB::ZLIB)
+  if(WIN32)
+    target_link_libraries(ff8_ra PRIVATE winhttp)
+  else()
+    pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl>=8)
+    target_link_libraries(ff8_ra PRIVATE PkgConfig::CURL)
+  endif()
+  target_link_libraries(ff8 PRIVATE ff8_ra)
+endif()
 option(FF8_RECORD_GPU "Record a GPU replay to FF8_GPU_STREAM" OFF)
 if(FF8_PLAYER AND FF8_RECORD_GPU)
   message(FATAL_ERROR "The player cannot include GPU recorder")
