@@ -14,9 +14,9 @@ def main():
     packages = ['build-essential', 'cmake', 'pkg-config', 'libvulkan-dev', 'glslc', 'xz-utils']
     if a.platform == 'linux':
         tools += ['ffmpeg']
-        modules += ['sdl2', 'zlib', 'libavformat', 'libavcodec', 'libavutil', 'libswscale', 'dbus-1']
+        modules += ['sdl2', 'zlib', 'libavformat', 'libavcodec', 'libavutil', 'libswscale', 'dbus-1', 'libcurl']
         packages += ['libsdl2-dev', 'zlib1g-dev', 'libavformat-dev', 'libavcodec-dev',
-                     'libavutil-dev', 'libswscale-dev', 'libdbus-1-dev', 'ffmpeg']
+                     'libavutil-dev', 'libswscale-dev', 'libdbus-1-dev', 'libcurl4-openssl-dev', 'ffmpeg']
     def ready():
         return (all(shutil.which(tool) for tool in tools) and
                 subprocess.run(['pkg-config', '--exists', *modules]).returncode == 0)
