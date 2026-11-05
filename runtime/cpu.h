@@ -48,6 +48,7 @@ typedef struct {
     int valid;
 } code_cache_t;
 typedef struct { uint32_t pc; uint64_t epoch; recompiled_fn fn; } dispatch_cache_t;
+typedef struct { uint32_t first; uint64_t end; } source_bounds_t;
 typedef struct { uint32_t pc, ret; } frame_t;
 typedef struct {
     jmp_buf jump;
@@ -122,6 +123,7 @@ struct cpu {
     const code_region_t *const *dispatch_entry_regions;
     size_t dispatch_entry_count, dispatch_overlay_count;
     dispatch_cache_t dispatch_cache[CODE_CACHE_SIZE];
+    source_bounds_t source_bounds[CODE_OVERLAYS + 1];
     /* RAM accesses at or above ram_top take the timed slow path, which keeps
      * them ordered with deferred device RAM traffic (see hw_reschedule). */
     uint32_t ram_top;

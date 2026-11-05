@@ -27,10 +27,11 @@ static int precise_host(void) {
 }
 
 static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t count,
-                                   const code_region_t *const *regions, uint32_t pc, int *registered) {
+                                   const code_region_t *const *regions, const source_bounds_t *bounds,
+                                   uint32_t pc, int *registered) {
     size_t lo = 0, hi = count;
     const code_region_t *previous = NULL;
-    if (!regions) return NULL;
+    if (!regions || (bounds && (pc < bounds->first || pc >= bounds->end))) return NULL;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         if (entries[mid].pc <= pc) lo = mid + 1; else hi = mid;
@@ -47,6 +48,25 @@ static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t cou
         }
     }
     return NULL;
+}
+
+static source_bounds_t source_bounds(const code_region_t *const *regions, size_t count) {
+    source_bounds_t bounds = {UINT32_MAX, 0};
+    const code_region_t *previous = NULL;
+    size_t i, j;
+    if (!regions) return bounds;
+    for (i = 0; i < count; ++i) {
+        const code_region_t *r = regions[i];
+        if (!r || r == previous) continue;
+        previous = r;
+        for (j = 0; j < r->count; ++j) {
+            uint64_t end = (uint64_t)r->spans[j].address + r->spans[j].size;
+            if (!r->spans[j].size) continue;
+            if (r->spans[j].address < bounds.first) bounds.first = r->spans[j].address;
+            if (end > bounds.end) bounds.end = end;
+        }
+    }
+    return bounds;
 }
 
 void c_release_overlays(cpu_t *c, unsigned keep) {
@@ -412,11 +432,13 @@ static recompiled_fn lookup_source(cpu_t *c, uint32_t pc, int *registered) {
         if (entry && registered) *registered = 1;
         if (entry && code_valid(c, o->regions[entry - o->entries])) return entry->fn;
         if (precise_host()) {
-            recompiled_fn fn = precise_source(c, o->entries, o->count, o->regions, pc, registered);
+            recompiled_fn fn = precise_source(c, o->entries, o->count, o->regions,
+                                             c->entry_regions ? &c->source_bounds[i + 1] : NULL, pc, registered);
             if (fn) return fn;
         }
     }
-    if (precise_host()) return precise_source(c, c->entries, c->entry_count, c->entry_regions, pc, registered);
+    if (precise_host()) return precise_source(c, c->entries, c->entry_count, c->entry_regions,
+                                            &c->source_bounds[0], pc, registered);
     return NULL;
 }
 
@@ -434,6 +456,12 @@ recompiled_fn lookup(cpu_t *c, uint32_t pc) {
         c->dispatch_entries = c->entries; c->dispatch_overlays = c->overlays;
         c->dispatch_entry_regions = c->entry_regions;
         c->dispatch_entry_count = c->entry_count; c->dispatch_overlay_count = c->overlay_count;
+        /* Catalog spans are immutable until the registry changes. Rejecting
+         * addresses outside their extent avoids a backward scan of every
+         * main function for an instruction in an uncatalogued effect. */
+        c->source_bounds[0] = source_bounds(c->entry_regions, c->entry_count);
+        for (size_t i = 0; i < c->overlay_count && i < CODE_OVERLAYS; ++i)
+            c->source_bounds[i + 1] = source_bounds(c->overlays[i].regions, c->overlays[i].count);
     }
     slot = &c->dispatch_cache[(pc >> 2) % CODE_CACHE_SIZE];
     if ((slot->epoch == c->code_epoch || slot->epoch == UINT64_MAX) && slot->pc == pc) return slot->fn;
