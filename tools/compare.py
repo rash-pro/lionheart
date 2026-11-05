@@ -13,7 +13,7 @@ import subprocess
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(binary, exe, discs, script, count, dest, card=None, launcher=()):
+def run(binary, exe, discs, script, count, dest, card=None, launcher=(), extra_args=()):
     dest = Path(dest).resolve()
     dest.mkdir(parents=True, exist_ok=True)
     config = dest / 'empty.ini'; config.write_text('')
@@ -31,6 +31,7 @@ def run(binary, exe, discs, script, count, dest, card=None, launcher=()):
                '--dump-state', str(dest / 'state.bin'), '--dump-frames', str(dest / 'frames'),
                '--frame-step', '1', '--log', 'NUL' if launcher else os.devnull]
     for disc in discs: command += ['--disc', str(Path(disc).resolve())]
+    command += list(extra_args)
     env = {**os.environ, 'SDL_VIDEODRIVER': 'dummy', 'SDL_AUDIODRIVER': 'dummy',
            'XDG_CONFIG_HOME': str(dest / 'config'), 'XDG_DATA_HOME': str(dest / 'data')}
     with (dest / 'run.log').open('w') as log:
@@ -67,9 +68,11 @@ def main():
     p.add_argument('--vblanks', type=int, default=15000)
     p.add_argument('--card', type=Path)
     p.add_argument('--output', type=Path, default=Path('build/exactness'))
+    p.add_argument('--before-arg', action='append', default=[], help='extra reference-player argument (repeatable)')
+    p.add_argument('--after-arg', action='append', default=[], help='extra comparison-player argument (repeatable)')
     a = p.parse_args()
-    receipts = [run(binary, a.exe, a.disc, a.script, a.vblanks, a.output / label, a.card)
-                for label, binary in [('before', a.before), ('after', a.after)]]
+    receipts = [run(binary, a.exe, a.disc, a.script, a.vblanks, a.output / label, a.card, extra_args=args)
+                for label, binary, args in [('before', a.before, a.before_arg), ('after', a.after, a.after_arg)]]
     result = compare(*receipts)
     (a.output / 'comparison.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result))
