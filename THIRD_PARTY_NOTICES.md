@@ -10,6 +10,7 @@ source or the Windows distribution. Vendored sources retain their notices;
 | Vulkan/util helpers in parallel-psx | MIT notices in the individual source headers |
 | volk | MIT: [volk.h](third_party/parallel-psx/volk/volk.h) |
 | rcheevos | MIT: [LICENSE](third_party/rcheevos/LICENSE); MD5 also retains its zlib-style notice in [md5.c](third_party/rcheevos/src/util/md5.c) |
+| libcurl (Linux, dynamically linked) | curl licence (MIT-style): [curl.txt](licenses/curl.txt) |
 | Spleen 2.2.0 | BSD-2-Clause: [LICENSE](third_party/spleen/LICENSE); compiled OSD cells |
 | Dear ImGui 1.91.9b | MIT: [LICENSE.txt](third_party/imgui/LICENSE.txt) |
 | nativefiledialog-extended 1.2.1 | zlib: [LICENSE](third_party/nativefiledialog-extended/LICENSE) |
@@ -31,3 +32,6 @@ shared libraries with compatible modified versions.
 SDL2, zlib and the compiler's exact source/archive URLs, versions and SHA-256
 values are also recorded in that lock file. Linux uses the installed system
 libraries and their distribution's licence/source packages.
+
+The RetroAchievements transport uses system libcurl on Linux and the Windows WinHTTP system API on Windows.
+The badge decoder uses the existing zlib dependency; no additional image library is shipped.
