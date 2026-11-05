@@ -31,6 +31,8 @@
 #include "states.h"
 #include "state_bridge.h"
 #include "achievements.h"
+#include "ra.h"
+#include "player_paths.h"
 #ifdef FF8_PGXP
 #include "pgxp.h"
 #endif
@@ -84,6 +86,8 @@ static void gui_changed(void *context, const char *key, int overlay) {
         host_display_configure(o->fullscreen,o->scale_mode,o->linear);
     else if (!strcmp(key,"crt")) host_display_crt(o->crt);
     else if (!strcmp(key,"osd")) host_osd_configure(o->osd,o->osd_tests);
+    else if (!strcmp(key,"ra")) host_ra_enable(o->ra);
+    else if (!strcmp(key,"ra-notify")) host_ra_notify(o->ra_notify);
     else if (!strcmp(key,"screenshot-dir")) host_screenshot_configure(o->screenshot_dir,o->screenshot_at);
     else if (!strcmp(key,"rumble")) input.rumble = o->rumble;
     else if (!strcmp(key,"pad-hotkey")) gui_hotkeys(o);
@@ -160,6 +164,8 @@ static void restored(cpu_t *c, unsigned disc) {
 #endif
     if (state_bridge) host_state_bridge_restore(state_bridge,c,c->hw->vblanks);
     if (disc) host_display_disc(disc);
+    if (disc && disc<=disc_count && disc_paths[disc-1]) host_ra_disc(disc_paths[disc-1]);
+    host_ra_reset();
     /* Local unlock progress lives outside the guest session and survives loads. */
 }
 
@@ -179,6 +185,7 @@ static void present_frame(cpu_t *c, void *context) {
     host_input_sync(c, &input);
     if (state_bridge) host_state_bridge_frame(state_bridge, c, c->hw->vblanks);
     if (achievements) host_achievements_frame(achievements, c);
+    host_ra_frame(c);
     {
         unsigned disc = sio_input_disc(c), live = host_input_disc();
         char error[256];
@@ -196,6 +203,7 @@ static void present_frame(cpu_t *c, void *context) {
             else {
                 host_states_disc(c,disc);
                 host_display_disc(disc);
+                host_ra_disc(disc_paths[disc-1]);
 #ifdef FF8_VULKAN
                 host_movies_bind(c,disc);
 #endif
@@ -383,9 +391,7 @@ int main(int argc, char **argv) {
     uint64_t frames_from = 0;
     int i, result = 0;
     host_options_t options;
-#if defined(FF8_GUI) || defined(FF8_PLAYER)
     char data_dir[4096] = {0};
-#endif
 #ifdef FF8_GUI
     int gui_allowed = 0, gui_configured = 0, startup_problem = 0;
     host_gui_pane_t startup_pane = HOST_GUI_DISCS;
@@ -599,6 +605,9 @@ int main(int argc, char **argv) {
         }
     }
 #endif
+    if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
+    host_ra_configure(data_dir,options.ra,options.ra_notify);
+    atexit(host_ra_shutdown);
 #ifdef FF8_GUI
     if (gui_allowed) {
         if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
@@ -798,6 +807,8 @@ int main(int argc, char **argv) {
         host_display_shutdown(NULL); fclose(log); hw_destroy(c); free(c); HOST_GUI_CLEANUP(); return 2;
     }
     if (bridge_port) state_bridge = host_state_bridge_open(bridge_port);
+    host_ra_frame(c);
+    if (disc_count && disc_paths[0]) host_ra_disc(disc_paths[0]);
     if (!result && achievement_path) {
         achievements = host_achievements_open(achievement_path, card_paths[0] ? card_paths[0] : card_paths[1],
             achievement_progress, disc_count ? disc_paths[0] : NULL, host_state_bridge_event, state_bridge);

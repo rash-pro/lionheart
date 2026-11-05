@@ -40,8 +40,11 @@ Register-level hardware behavior remains separate from host presentation.
 
 The software GPU owns native VRAM and produces deterministic native frames.
 Memory cards are files. Save states include runtime hardware state and require the same build identity.
-State loading preserves live cards by default. The optional localhost state bridge and local achievements
-are inactive unless configured; they contact no external service.
+State loading preserves live cards by default. The optional localhost state bridge and local evaluator
+contact no external service. The separate RetroAchievements client is opt-in and casual only: a worker handles
+HTTP, disc hashing and badge files; the host delivers responses to rc_client between frames or during the menu
+pause. Memory reads access only guest RAM and scratchpad. Authentication, badges and unlocks never enter
+the guest state. While a menu is open, rc_client_idle services requests without evaluating achievements.
 
 ## Presentation
 

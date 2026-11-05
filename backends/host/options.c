@@ -39,6 +39,8 @@ const host_option_t host_options[] = {
     PRESENT("screenshot-dir", "PATH", screenshot_dir, HOST_VALUE_PATH),
     PRESENT("screenshot-at", "FRAME", screenshot_at, HOST_VALUE_FRAMES),
     OPTION("osd", "0|1", osd, HOST_OPTION_PRESENTATION),
+    OPTION("ra", "0|1", ra, HOST_OPTION_PRESENTATION),
+    OPTION("ra-notify", "0|1", ra_notify, HOST_OPTION_PRESENTATION),
     PRESENT("osd-test", "FRAME:LABEL[:VALUE]", osd_tests, HOST_VALUE_OSD_TEST),
     OPTION("crt", "off|pvm|tv|arcade", crt, HOST_OPTION_PRESENTATION),
     OPTION("renderer", "soft|vulkan", renderer, HOST_OPTION_PRESENTATION),
@@ -53,8 +55,10 @@ const host_option_t host_options[] = {
     PRESENT("dump-presented-frames", "PATH", presented_frames, HOST_VALUE_PATH),
     PRESENT("present-size", "WxH", present_size, HOST_VALUE_SIZE),
     PRESENT("state-bridge", "PORT|fd:N", bridge, HOST_VALUE_BRIDGE),
+#ifndef FF8_PLAYER
     PRESENT("achievements", "PATH", achievements, HOST_VALUE_PATH),
     PRESENT("achievement-progress", "PATH", progress, HOST_VALUE_PATH),
+#endif
     PRESENT("savestate-dir", "PATH", state_dir, HOST_VALUE_PATH),
     PRESENT("load-state", "PATH", load_state, HOST_VALUE_PATH),
     PRESENT("save-state", "PATH", save_state, HOST_VALUE_PATH),
@@ -65,7 +69,7 @@ const host_option_t host_options[] = {
 const size_t host_option_count = sizeof(host_options) / sizeof(host_options[0]);
 
 void host_options_defaults(host_options_t *o) {
-    memset(o, 0, sizeof(*o)); o->rumble = o->osd = 1;
+    memset(o, 0, sizeof(*o)); o->rumble = o->osd = o->ra_notify = 1;
     o->internal_scale = o->msaa = 1;
     o->present_size = 1920 | (1080ull << 32);
 }
@@ -307,6 +311,6 @@ int host_options_cli(host_options_t *o, int argc, char **argv, int *i) {
     return set(o, opt, argv[++*i]) ? 1 : -1;
 }
 
-/* Reserved policy hooks for a future local achievements client. */
+/* The service client is casual only: save states and fast-forward stay enabled. */
 int host_options_ra_strict(const host_options_t *o) { (void)o; return 0; }
 int host_options_ra_validate(const host_options_t *o, int fast) { (void)o; (void)fast; return 1; }
