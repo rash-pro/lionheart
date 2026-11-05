@@ -96,15 +96,27 @@ static int top_left(gpu_vertex_t a, gpu_vertex_t b) {
     return b.y < a.y || (b.y == a.y && b.x > a.x);
 }
 
+/* The reciprocal rounds down. For a 32-bit numerator its quotient is at
+ * most one short; the remainder comparison restores exact integer division. */
+static int attribute(int64_t n, unsigned area, uint64_t reciprocal) {
+    if ((uint64_t)n <= UINT32_MAX) {
+        unsigned q = (unsigned)(((uint64_t)n * reciprocal) >> 32);
+        return (int)(q + ((uint64_t)n - (uint64_t)q * area >= area));
+    }
+    return (int)(n / area);
+}
+
 void gpu_raster_triangle(gpu_raster_t *s, gpu_vertex_t a, gpu_vertex_t b,
                          gpu_vertex_t c, gpu_paint_t p) {
     int l = min(a.x, min(b.x, c.x)), r = max(a.x, max(b.x, c.x));
     int t = min(a.y, min(b.y, c.y)), bot = max(a.y, max(b.y, c.y));
     int area, x, y, ea, eb, ec, ta, tb, tc;
+    uint64_t reciprocal;
     if (r - l >= 1024 || bot - t >= 512) return;
     area = edge(a, b, c.x, c.y);
     if (!area) return;
     if (area < 0) { gpu_vertex_t tmp = b; b = c; c = tmp; area = -area; }
+    reciprocal = (UINT64_C(1) << 32) / (unsigned)area;
     l = max(l, s->left); r = min(r, s->right);
     t = max(t, s->top); bot = min(bot, s->bottom);
     ta = top_left(b, c); tb = top_left(c, a); tc = top_left(a, b);
@@ -113,8 +125,12 @@ void gpu_raster_triangle(gpu_raster_t *s, gpu_vertex_t a, gpu_vertex_t b,
         ea = edge(b, c, l, y); eb = edge(c, a, l, y); ec = edge(a, b, l, y);
         for (x = l; x <= r; ++x) {
             if ((ea > 0 || (!ea && ta)) && (eb > 0 || (!eb && tb)) && (ec > 0 || (!ec && tc))) {
-#define ATTR(name) ((int)(((int64_t)ea * a.name + (int64_t)eb * b.name + (int64_t)ec * c.name) / area))
-                pixel(s, x, y, ATTR(r), ATTR(g), ATTR(b), ATTR(u), ATTR(v), p);
+#define ATTR(name) (a.name == b.name && a.name == c.name ? a.name : \
+    attribute((int64_t)ea * a.name + (int64_t)eb * b.name + (int64_t)ec * c.name, (unsigned)area, reciprocal))
+                int red = a.r, green = a.g, blue = a.b, u = 0, v = 0;
+                if (!p.textured || !p.raw) { red = ATTR(r); green = ATTR(g); blue = ATTR(b); }
+                if (p.textured) { u = ATTR(u); v = ATTR(v); }
+                pixel(s, x, y, red, green, blue, u, v, p);
 #undef ATTR
             }
             ea -= c.y - b.y; eb -= a.y - c.y; ec -= b.y - a.y;
