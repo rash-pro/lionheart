@@ -1222,8 +1222,10 @@ void Renderer::hazard(StatusFlags flags)
 		              VK_ACCESS_TRANSFER_WRITE_BIT;
 	}
 
-	// Invalidate render target caches.
-	if (flags & (STATUS_TRANSFER_SFB_WRITE | STATUS_COMPUTE_SFB_WRITE | STATUS_FRAGMENT_SFB_WRITE))
+	// notify_external_barrier retires both planes for each synchronized stage.
+	// Make writes visible to attachment loads even when the triggering hazard
+	// came from the native plane.
+	if (flags & (STATUS_FB_WRITE | STATUS_SFB_WRITE))
 	{
 		dst_stages |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 		dst_access |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |

@@ -84,3 +84,9 @@ The eleven affected fragment shader includes were rebuilt with local `glslc`.
 The three SABR filter widths have distinct identifiers again, preserving the
 45/30/60-degree constants and uses encoded in the original prebuilt SPIR-V.
 
+## Atlas dependencies
+
+The atlas retains both accesses of a queued VRAM copy and both writes of a
+partial host upload after any intervening barrier. Global stage barriers also
+make retired writes visible to color attachment loads for either VRAM plane.
+These are original project changes under MIT.
