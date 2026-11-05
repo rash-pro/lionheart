@@ -488,6 +488,11 @@ extern "C" void gui_ui_keycap(const char *id,const char *key_text,const char *la
     text_at(label,b,GUI_SUB,colours[GUI_DIM],false);
     observe(id,label);char key_id[160];std::snprintf(key_id,sizeof(key_id),"%s.key",id);observe(key_id,key_text);
 }
+extern "C" float gui_ui_text_width(const char *text,gui_font_t font) {
+    if (!ui.in_frame || !text) return 0;
+    ImFont *f=ui.fonts[font];
+    return f->CalcTextSizeA(f->FontSize,FLT_MAX,0,text).x/ui.scale;
+}
 extern "C" void gui_ui_panel(gui_rect_t r,unsigned colour,float radius) {
     if (ui.in_frame) { ImRect b=bounds(r);draw()->AddRectFilled(b.Min,b.Max,rgba(colour),pixel(radius)); }
 }

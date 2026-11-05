@@ -58,13 +58,17 @@ void gui_achievements_draw(float x,float width,float height,int first_focus) {
         char when[64]; date(status->downloaded,when,sizeof(when));
         snprintf(buffer,sizeof(buffer),S("ach.offline"),when);
         gui_ui_panel(R(x,24,width,64),0xe6b85c18,7);
-        gui_ui_text("ach.offline",buffer,R(x+16,32,width-32,48),GUI_SUB,GUI_WARN); y=108;
+        gui_ui_text("ach.offline",buffer,R(x+16,32,width-32,48),GUI_REGULAR,GUI_WARN); y=108;
     }
-    label("ach.title",*status->title ? status->title : S("nav.achievements"),x,y,width-116,GUI_TITLE,GUI_TEXT);
-    label("tag.casual",S("tag.casual"),x+width-100,y+7,100,GUI_SUB,GUI_CASUAL);
+    const char *title=*status->title ? status->title : S("nav.achievements");
+    float title_width=gui_ui_text_width(title,GUI_TITLE);
+    if (title_width>width-480) title_width=width-480;
+    label("ach.title",title,x,y,title_width+1,GUI_TITLE,GUI_TEXT);
+    gui_ui_panel(R(x+title_width+12,y+8,64,22),0xe6c86e29,4);
+    gui_ui_text_centred("tag.casual",S("tag.casual"),R(x+title_width+12,y+8,64,22),GUI_SUB,GUI_CASUAL);
     snprintf(buffer,sizeof(buffer),S("ach.stats"),status->unlocked,status->total,status->earned,status->points);
-    label("ach.stats",buffer,x,y+38,width,GUI_MONO,GUI_DIM);
-    y+=82;
+    label("ach.stats",buffer,x+width-380,y+12,380,GUI_MONO,GUI_DIM);
+    y+=48;
     snprintf(all,sizeof(all),S("ach.all"),status->total);
     snprintf(unlocked,sizeof(unlocked),S("ach.unlocked"),status->unlocked);
     snprintf(locked,sizeof(locked),S("ach.locked"),status->total-status->unlocked);
@@ -73,7 +77,7 @@ void gui_achievements_draw(float x,float width,float height,int first_focus) {
     if (first_focus) { gui_ui_focus("ach.filters"); view.error_dismissed=0; }
     label("ach.search.label",S("ach.search"),x+474,y-19,width-474,GUI_SUB,GUI_DIM);
     gui_ui_edit("ach.search",R(x+474,y,width-474,40),view.search,sizeof(view.search),0);
-    y+=56;
+    y+=48;
     if (!status->total) {
         const char *id=status->loading ? "ach.loading" : status->unknown_game ? "ach.unknown" :
             status->state==HOST_RA_OFF || status->state==HOST_RA_SIGNED_OUT || status->state==HOST_RA_REJECTED ? "ach.signin" : "ach.empty";
@@ -85,11 +89,11 @@ void gui_achievements_draw(float x,float width,float height,int first_focus) {
         host_ra_achievement_t a;
         if (!host_ra_achievement(i,&a) || (view.filter==1 && !a.unlocked) || (view.filter==2 && a.unlocked) ||
             (!contains(a.title,view.search) && !contains(a.description,view.search))) continue;
-        float row_y=y+shown++*90; char id[64];
+        float row_y=y+shown++*86; char id[64];
         snprintf(id,sizeof(id),"ach.%u",a.id);
-        gui_ui_row(id,S("ui.blank"),NULL,R(x,row_y,width-12,86),0);
-        if (!gui_ui_visible(R(x,row_y,width,86))) continue;
-        gui_ui_badge(a.id,R(x+14,row_y+11,64,64),!a.unlocked,1);
+        gui_ui_row(id,S("ui.blank"),NULL,R(x,row_y,width-12,82),0);
+        if (!gui_ui_visible(R(x,row_y,width,82))) continue;
+        gui_ui_badge(a.id,R(x+14,row_y+9,64,64),!a.unlocked,1);
         snprintf(id,sizeof(id),"ach.%u.title",a.id);
         label(id,a.title,x+94,row_y+10,width-386,GUI_REGULAR,a.unlocked ? GUI_TEXT : GUI_DIM);
         snprintf(id,sizeof(id),"ach.%u.description",a.id);
@@ -103,10 +107,10 @@ void gui_achievements_draw(float x,float width,float height,int first_focus) {
             label(id,buffer,x+width-230,row_y+23,218,GUI_SUB,GUI_OK);
             if (a.pending) label("ach.pending",S("ach.pending.marker"),x+width-230,row_y+48,218,GUI_SUB,GUI_WARN);
         } else if (a.progress && *a.progress) {
-            label(id,a.progress,x+width-214,row_y+16,196,GUI_MONO,GUI_DIM);
-            gui_ui_panel(R(x+width-214,row_y+53,184,6),0x2a2a33ff,3);
+            label(id,a.progress,x+width-230,row_y+29,84,GUI_MONO,GUI_DIM);
+            gui_ui_panel(R(x+width-144,row_y+40,114,6),0x2a2a33ff,3);
             float progress=a.percent<0 ? 0 : a.percent>100 ? 1 : a.percent/100;
-            gui_ui_panel(R(x+width-214,row_y+53,184*progress,6),0x9fb4d8ff,3);
+            gui_ui_panel(R(x+width-144,row_y+40,114*progress,6),0x9fb4d8ff,3);
         } else label(id,S("ach.locked.state"),x+width-214,row_y+29,196,GUI_SUB,GUI_DIM);
     }
     gui_ui_scroll_end();
