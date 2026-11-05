@@ -18,6 +18,7 @@ it runs.
 - A setup screen and an in-game menu for discs, memory cards, video and controls.
 - Save states, screenshots, and controller hotkeys for both.
 - Optional HD movies from your own files.
+- Opt-in, casual RetroAchievements with search, progress and unlock notifications (Guide + ✕ / F10).
 
 Rendering defaults to the original software output.
 
@@ -29,7 +30,7 @@ There are no prebuilt releases yet.
 
 You need:
 - a C99/C++ compiler, CMake 3.16+, Python 3.13+ and pkg-config;
-- development files for SDL2 2.0.14+, D-Bus, Vulkan, zlib and FFmpeg (libavformat, libavcodec, libavutil,
+- development files for SDL2 2.0.14+, libcurl 8+, D-Bus, Vulkan, zlib and FFmpeg (libavformat, libavcodec, libavutil,
   libswscale);
 - for Vulkan rendering, your GPU's Vulkan driver.
 
@@ -125,6 +126,8 @@ crt=tv
 | `filter` | `nearest`, `linear` |
 | `fullscreen` | `0`, `1` |
 | `osd` | `1`, `0` |
+| `ra` | `0`, `1` (accept the warning and sign in from the menu) |
+| `ra-notify` | `1`, `0` (unlock notifications) |
 | `pad` | `digital`, `dualshock` |
 | `rumble` | `1`, `0` |
 | `pad-hotkey` | `guide`, `off` |
@@ -140,8 +143,12 @@ crt=tv
 That folder holds the memory cards, save states (`states/`) and the log (`logs/lionheart.log`, plus the four
 previous sessions). Screenshots go to `Pictures/Lionheart`.
 
+RetroAchievements stores only your username and login token in `ra/credentials` (0600 on Linux), and badges in
+`ra/badges/`. Sign out removes the credentials. Passwords are never saved. This is an unapproved, casual-only
+client; save states and fast-forward remain available.
+
 For a portable setup, put an empty file named `portable` next to the executable. Config and data then stay beside
-it.
+it. RetroAchievements credentials on Windows always stay in `%APPDATA%\Lionheart`.
 
 Save states only load in the build that made them. Rely on in-game memory card saves.
 
@@ -167,7 +174,6 @@ it fits together, and [docs/debugging.md](docs/debugging.md) for tracking down r
 
 ## Roadmap
 
-- RetroAchievements (casual only) with an in-game achievements view.
 - Smoother battles: fewer frame-time spikes, and interpolated 60 fps presentation.
 - Packaged Linux and Windows releases.
 
