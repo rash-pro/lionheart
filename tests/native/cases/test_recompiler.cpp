@@ -301,7 +301,18 @@ LH_TEST_P(test_unaligned_expected, unaligned_rows()) {
         LH_BYTES_EQ(state.memory.substr(DATA & 0x1FFFFF, 4), expected_bytes);
     }
 }
-LH_PENDING(test_branch_operands_captured_before_slot);
+LH_TEST_P(test_branch_operands_captured_before_slot, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Outcome state = diff(t, h, "branch_delay", {{8, 5}, {9, 5}});
+    LH_EQ(state.state[8], 17u); LH_EQ(state.state[10], 0u);
+    state = diff(t, h, "branch_delay", {{8, 4}, {9, 5}});
+    LH_EQ(state.state[10], 22u);
+    state = diff(t, h, "load_branch", {{8, 5}, {9, 5}});
+    LH_EQ(state.state[10], 0x44332211u); LH_EQ(state.state[11], 0u);
+    state = diff(t, h, "loop", {{8, 17}, {9, 0}});
+    LH_EQ(state.state[8], 0u); LH_EQ(state.state[9], 17u);
+}
 LH_PENDING(test_call_boundary_load);
 LH_PENDING(test_dispatch_miss_hands_back_to_compiled);
 LH_PENDING(test_jalr_alternate_link);
