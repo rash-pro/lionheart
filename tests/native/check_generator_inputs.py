@@ -105,6 +105,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--build', type=Path, default=ROOT / 'build/native-tests')
     parser.add_argument('-j', type=int, default=6)
+    parser.add_argument('--files', nargs='+', default=FILES, help='a subset of the ported files')
     options = parser.parse_args()
 
     check_probes()
@@ -113,7 +114,7 @@ def main():
         records = Path(temporary) / 'records'
         records.mkdir()
         env = dict(os.environ, LH_EQUIV_DIR=str(records))
-        pattern = '^(' + '|'.join(FILES) + ')::'
+        pattern = '^(' + '|'.join(options.files) + ')::'
         subprocess.run(['ctest', '--test-dir', str(options.build), '-R', pattern, '-j', str(options.j),
                         '--output-on-failure'], env=env, check=True, stdout=subprocess.DEVNULL)
         native = collections.defaultdict(set)
@@ -128,7 +129,7 @@ def main():
                 native[case].add(line)
 
     recorder = Recorder()
-    selected = [f'tests/{stem}.py' for stem in FILES]
+    selected = [f'tests/{stem}.py' for stem in options.files]
     status = pytest.main(['-q', '-x', '-p', 'no:cacheprovider', '--rootdir', str(ROOT), '-m', 'not game and not realtime', *selected],
                          plugins=[])
     if status != 0:
@@ -154,7 +155,7 @@ def main():
     for case, programs in native.items():
         stem = case.split('::', 1)[0]
         native_union[stem] |= programs
-    for stem in FILES:
+    for stem in options.files:
         missing = python_union[stem] - native_union[stem]
         extra = native_union[stem] - python_union[stem]
         status = 'identical' if not missing and not extra else f'{len(missing)} Python-only, {len(extra)} native-only'
