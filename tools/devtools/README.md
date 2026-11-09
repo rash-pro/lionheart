@@ -38,3 +38,45 @@ completion and every frame, then compares complete state/frame/card hashes and
 cycle counts. It keeps only the final PNG after writing each receipt.
 Both `test_compare` identities protect conflicting output cards, including a
 symlink to the source card. SHA-256 uses the existing native test implementation.
+
+`build/devtools/frame-probe BUILD --output FILE [--subsystems]` relinks a
+frozen Linux x86-64 Makefiles host with the existing C observer. It reads the
+host's cache and link command, preserves argument quoting, generates specialized
+GTE wrappers from the public declarations, and removes temporary objects after
+linking. The two existing native probe identities now drive the relinker against
+a frozen synthetic host before checking sampler lifetime and exact counters.
+
+## Migration status
+
+The migration is partial. Keep the original scripts and pytest files until all
+contracts and baseline dispositions match.
+
+| Original module | Native status | Evidence |
+|---|---|---|
+| `compare.py` | Ported as `compare` | Two card-collision identities; synthetic host receipts match byte for byte |
+| `perf_report.py` | Ported as `perf-report` | Exact-boundary identity; stdout and JSON match with and without histograms |
+| `frame_probe.py` | Native relinker around existing C observer | Both lifetime identities exercise relinking; linked executables match byte for byte with and without subsystem probes |
+| `verify_host_pad.py` | Folded into `pad-support` | All five helper identities retain inputs and assertions |
+| `iro_extract.py` | Ported as `iro-extract` | Five extraction identities; listing, extraction messages and extracted bytes match |
+| `frame_bench.py` | Pending | Used by `docs/debugging.md` and `tests/test_frame_bench.py` |
+| `gte_trace.py` | Pending | Used by `docs/debugging.md` and `tests/test_gte_diff.py` |
+| `mdec_trace.py` | Pending | Instrumentation imported by `tests/test_mdec_calendar.py` |
+| `render_quality.py` | Pending | Imported by `tests/test_pgxp.py` |
+| `spu_audio_compare.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
+| `map_movies.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
+
+The last two proposals are evidence from repository reference searches, not
+permission to delete. No original script or pytest file has been removed.
+
+Validation used synthetic archives, logs and a compiled synthetic host; no
+owned-game run was performed. The selected five pytest files pass all 23 cases.
+Native registration matches their 23 inventory identities: 15 pass and the eight
+HD presentation cases skip for the explicit prerequisites described above.
+Each file detected a seeded incorrect expectation; all mutations were reverted.
+The standalone tools and full native test project configure and build without
+Python on PATH. The standard/infra selection has 233 passes and eight skips.
+This does not establish complete migration parity or game/realtime readiness.
+
+Remaining test migrations include `test_frame_bench`, `test_gte_diff`,
+`test_mdec_calendar`, `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
+No dependency was added, and no runtime, backend or generator source was changed.

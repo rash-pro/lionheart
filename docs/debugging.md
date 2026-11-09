@@ -34,13 +34,13 @@ A small synthetic MIPS regression is the preferred fix evidence when the failing
 
 ## Measuring frame spikes
 
-On Linux x86-64, `tools/frame_probe.py` relinks an existing CMake host with a diagnostic
+On Linux x86-64, `build/devtools/frame-probe` relinks an existing CMake host with a diagnostic
 object. It leaves the original binary alone and works with both the default player
 and the developer build. Relink and preserve the baseline before rebuilding:
 
 ```sh
-python tools/frame_probe.py build/player --output build/baseline/lionheart-timing
-python tools/frame_probe.py build/dev --output build/baseline/ff8-timing
+build/devtools/frame-probe build/player --output build/baseline/lionheart-timing
+build/devtools/frame-probe build/dev --output build/baseline/ff8-timing
 ```
 
 Set `FF8_FRAME_TIMINGS` to a CSV path when running a probe. Each VBlank records elapsed
