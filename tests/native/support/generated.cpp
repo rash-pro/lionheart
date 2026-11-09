@@ -148,6 +148,7 @@ std::string image_text(const Image &image, const std::vector<uint32_t> &seeds, b
     for (const auto &range : image.code_ranges) out << range.first << '-' << range.second << ',';
     out << '|' << words_of(image.entry_points) << '|' << words_of(seeds) << '|' << (scan_calls ? 1 : 0) << '|'
         << hex_of(image.data);
+    if (!image.timing_entry_points.empty()) out << "|timing-entry-points|" << words_of(image.timing_entry_points);
     return out.str();
 }
 
@@ -162,16 +163,19 @@ void fill_image(lhg_image &raw, const Image &image, std::vector<lhg_range> &rang
     raw.code_range_count = ranges.size();
     raw.entry_points = image.entry_points.empty() ? nullptr : image.entry_points.data();
     raw.entry_point_count = image.entry_points.size();
+    raw.timing_entry_points = image.timing_entry_points.data();
+    raw.timing_entry_point_count = image.timing_entry_points.size();
 }
 
-void generate(const Program &program, const fs::path &directory) {
+void emit_program(const Program &program, const fs::path &directory) {
     const std::shared_ptr<lhgt_session> session = open_session();
     lhg_image main{};
     std::vector<lhg_range> main_ranges;
     fill_image(main, program.image, main_ranges);
     lhg_functions functions{};
-    check(lhgt_discover(session.get(), &main, program.seeds.data(), program.seeds.size(), program.scan_calls, &functions),
-          session.get(), "discover");
+    if (program.discover_functions)
+        check(lhgt_discover(session.get(), &main, program.seeds.data(), program.seeds.size(), program.scan_calls, &functions),
+              session.get(), "discover");
     std::vector<lhg_image> overlay_images(program.overlays.size());
     std::vector<std::vector<lhg_range>> overlay_ranges(program.overlays.size());
     std::vector<lhg_overlay_set> sets(program.overlays.size());
@@ -189,7 +193,23 @@ void generate(const Program &program, const fs::path &directory) {
     else if (program.mode != "fast") LH_FAIL("unknown emission mode: " + program.mode);
     if (program.host_mode == "fast") options.host_mode = LHG_HOST_FAST;
     else if (program.host_mode != "precise") LH_FAIL("unknown host mode: " + program.host_mode);
-    if (program.timing != "exact") LH_FAIL("timing policy " + program.timing + " is not supported by the C generator yet");
+    if (program.timing == "block") options.timing = LHG_TIMING_BLOCK;
+    else if (program.timing == "loose") options.timing = LHG_TIMING_LOOSE;
+    else if (program.timing != "exact") LH_FAIL("unknown timing policy: " + program.timing);
+    if (options.timing != LHG_TIMING_EXACT && options.mode == LHG_MODE_TRACE)
+        LH_FAIL("experimental timing requires fast emission");
+    std::optional<RegisterCache> selection = program.register_cache;
+    if (!selection && options.timing != LHG_TIMING_EXACT)
+        selection = read_selection(build_info().root / "games/ff8-usa/play-register-cache.json");
+    lhg_register_cache cache{};
+    std::vector<const char *> names, regions;
+    if (selection) {
+        for (const auto &name : selection->functions) names.push_back(name.c_str());
+        if (selection->fuse_forward)
+            for (const auto &name : *selection->fuse_forward) regions.push_back(name.c_str());
+        cache = {selection->max_registers, names.data(), names.size(), regions.data(), regions.size()};
+        options.register_cache = &cache;
+    }
     check(lhgt_emit(session.get(), &main, &functions, directory.c_str(), sets.data(), sets.size(), &options),
           session.get(), "emit");
 }
@@ -382,7 +402,35 @@ std::string Program::canonical() const {
     out << "program|" << mode << '|' << host_mode << '|' << timing << '|' << image_text(image, seeds, scan_calls);
     for (const Overlay &overlay : overlays) out << "|overlay|" << overlay.index << '|'
         << image_text(overlay.image, overlay.seeds, overlay.scan_calls);
+    if (register_cache) {
+        out << "|register-cache|" << register_cache->max_registers << "|functions|";
+        for (const auto &name : register_cache->functions) out << name << ',';
+        out << "|fuse-forward|";
+        if (register_cache->fuse_forward)
+            for (const auto &name : *register_cache->fuse_forward) out << name << ',';
+        else out << "absent";
+    }
+    if (!discover_functions) out << "|empty-functions";
     return out.str();
+}
+
+RegisterCache read_selection(const fs::path &path) {
+    const auto session = open_session();
+    const lhg_register_cache *raw = nullptr;
+    check(lhgt_cache_read(session.get(), path.c_str(), &raw), session.get(), "read_selection");
+    RegisterCache selection;
+    selection.max_registers = raw->max_registers;
+    for (size_t i = 0; i < raw->function_count; ++i) selection.functions.emplace_back(raw->functions[i]);
+    if (raw->fuse_forward) {
+        selection.fuse_forward.emplace();
+        for (size_t i = 0; i < raw->fuse_forward_count; ++i) selection.fuse_forward->emplace_back(raw->fuse_forward[i]);
+    }
+    return selection;
+}
+
+void generate(Case &t, const Program &program, const fs::path &directory) {
+    equiv::record(t, program.canonical() + "\n");
+    emit_program(program, directory);
 }
 
 Json Compiled::manifest() const { return Json::file(directory_ / "manifest.json"); }
@@ -393,6 +441,7 @@ Build &Build::flags(std::initializer_list<std::string> values) {
     return *this;
 }
 Build &Build::flag(std::string value) { flags_.push_back(std::move(value)); return *this; }
+Build &Build::header_prefix(std::string text) { header_prefix_ = std::move(text); return *this; }
 Build &Build::runtime(std::initializer_list<std::string> names) { runtime_.insert(runtime_.end(), names); return *this; }
 Build &Build::runtime_all() { runtime_all_ = true; return *this; }
 Build &Build::source(fs::path repository_relative) { sources_.push_back(repository_relative.string()); return *this; }
@@ -438,12 +487,15 @@ Compiled Build::library() {
     std::ostringstream key_text;
     key_text << "v1\n" << compiler() << '\n' << runtime_fingerprint() << '\n' << generator_fingerprint() << '\n'
              << flag_text.str() << canonical << '\n';
+    if (program_->timing != "exact" && !program_->register_cache)
+        key_text << "default-register-cache=" << stat_signature(build_info().root / "games/ff8-usa/play-register-cache.json") << '\n';
     for (const std::string &file : runtime_files) key_text << "runtime:" << file << '\n';
     for (const std::string &source : sources_) {
         const fs::path path = build_info().root / source;
         key_text << "source:" << source << '=' << stat_signature(path) << '\n';
     }
     for (const auto &probe : probes_) key_text << "probe:" << probe.first << '\n' << probe.second << '\n';
+    if (!header_prefix_.empty()) key_text << "header-prefix:" << header_prefix_ << '\n';
     const std::string key = sha256(key_text.str());
 
     const fs::path root = cache_root();
@@ -455,7 +507,9 @@ Compiled Build::library() {
         if (!fs::exists(library_path)) {
             Publication publication(directory);
             const fs::path &work = publication.directory();
-            generate(*program_, work);
+            emit_program(*program_, work);
+            if (!header_prefix_.empty())
+                write_file(work / "generated.h", header_prefix_ + read_file(work / "generated.h"));
 
             const fs::path runtime_dir = build_info().root / "runtime";
             const std::string runtime_include = "-I" + runtime_dir.string();

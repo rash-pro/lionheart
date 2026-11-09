@@ -6,6 +6,7 @@
 #include "lh_test.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 
 extern "C" {
@@ -46,6 +47,7 @@ struct Image {
     uint32_t base, entry;
     std::vector<std::pair<int64_t, int64_t>> code_ranges;
     std::vector<uint32_t> entry_points;
+    std::vector<uint32_t> timing_entry_points;
     Image(std::string bytes, uint32_t image_base, uint32_t entry_point)
         : data(std::move(bytes)), base(image_base), entry(entry_point) {}
     static Image words(const Words &program, uint32_t base) { return Image(pack(program), base, base); }
@@ -117,6 +119,12 @@ struct Overlay {
     bool scan_calls = true;
 };
 
+struct RegisterCache {
+    int max_registers = 8;
+    std::vector<std::string> functions;
+    std::optional<std::vector<std::string>> fuse_forward;
+};
+
 struct Program {
     Image image;
     std::vector<uint32_t> seeds = {};
@@ -126,7 +134,15 @@ struct Program {
     std::vector<Overlay> overlays = {};
     explicit Program(Image program) : image(std::move(program)) {}
     std::string canonical() const;
+    std::optional<RegisterCache> register_cache;
+    // emit(image, {}, ...) bypasses discovery, including the image entry.
+    bool discover_functions = true;
 };
+
+RegisterCache read_selection(const fs::path &path);
+// Emit without compiling, for output and manifest assertions. Records the same
+// inputs as Build, including failed requests, while Python remains authoritative.
+void generate(Case &t, const Program &program, const fs::path &directory);
 
 // The compiled result: a Library plus where the generated files are.
 class Compiled : public Library {
@@ -155,6 +171,8 @@ public:
     Build &source(fs::path repository_relative);
     // A C file under tests/native/cases, after Python's .replace() calls in order.
     Build &probe(const std::string &name, std::vector<std::pair<std::string, std::string>> replacements = {});
+    // Python fixtures sometimes prepend feature defines to generated.h only.
+    Build &header_prefix(std::string text);
     Compiled library();
 private:
     Case &t_;
@@ -163,6 +181,7 @@ private:
     std::vector<std::string> runtime_;
     bool runtime_all_ = false;
     std::vector<std::pair<std::string, std::string>> probes_;
+    std::string header_prefix_;
 };
 
 } // namespace lh::gen

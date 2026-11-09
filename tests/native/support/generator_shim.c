@@ -46,6 +46,8 @@ int lhgt_emit(lhgt_session *session, const lhg_image *image, const lhg_functions
     lhg_emit_result result;
     if (setjmp(session->ctx.bail))
         return 1;
+    if (options->register_cache)
+        lhg_cache_validate(&session->ctx, options->register_cache);
     lhg_emit(&session->arena, image, functions, output, overlays, overlay_count, options, &result);
     return 0;
 }
@@ -93,5 +95,13 @@ int lhgt_load_exe(lhgt_session *session, const char *catalog_dir, const char *pa
     if (setjmp(session->ctx.bail))
         return 1;
     lhg_load_exe(&session->arena, catalog_dir, path, &program);
+    return 0;
+}
+
+int lhgt_cache_read(lhgt_session *session, const char *path, const lhg_register_cache **selection)
+{
+    if (setjmp(session->ctx.bail))
+        return 1;
+    *selection = lhg_cache_read(&session->arena, path);
     return 0;
 }

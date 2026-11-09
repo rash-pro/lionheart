@@ -297,3 +297,13 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 To work in parallel, take one row each, and within `test_recompiler` one function per commit: nothing but
 `LH_PENDING` lines and the new case bodies change, and case files are found by glob. Before adding a helper under
 `support/`, look for one that already does the job.
+
+For experimental timing, set `program.timing = "block"` or `"loose"` and optionally
+`program.register_cache = RegisterCache{8, {"f_80010000"}, std::nullopt}`. The last member is the optional
+`fuse_forward` list; an omitted selection uses the same catalog policy as Python. These options enter the
+compile-cache key and the generator-input comparison. `image.timing_entry_points` carries timing-only metadata;
+pass those points as seeds explicitly when porting `main_functions(image, timing)`.
+`generate(t, program, directory)` emits without compiling for manifest and source assertions.
+`program.discover_functions = false` represents `emit(image, {}, ...)`.
+`Build::header_prefix(text)` reproduces fixtures that prepend feature defines to `generated.h`, without changing
+the compiler flags of runtime sources.
