@@ -26,6 +26,7 @@ void host_display_disc_mask(unsigned mask);
 void host_display_disc(unsigned inserted);
 int host_display_present_capture(const char *dir, unsigned width, unsigned height);
 int host_display_running(void);
+int host_display_failed(void);
 int host_input_fast(void);
 unsigned host_input_disc(void);
 void host_input_dualshock(int enabled);

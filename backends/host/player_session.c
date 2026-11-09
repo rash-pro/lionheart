@@ -12,6 +12,8 @@
 #define pipe(fds) _pipe(fds,65536,O_BINARY)
 #endif
 
+#include "fatal_trace.h"
+
 int host_player_main(int, char **);
 typedef struct session_log {
     int read_fd, original;
@@ -49,6 +51,7 @@ static int player_entry(int argc, char **argv) {
     int fds[2], result, headless=0, error_fd=fileno(stderr);
     for (int i=1;i<argc;++i)
         if (!strcmp(argv[i],"--headless") || !strcmp(argv[i],"--gui-test")) headless=1;
+    fatal_trace_install(error_fd);
     /* Explicit card/state paths are sufficient without a discoverable data
      * directory. The player reports missing defaults after parsing its CLI. */
     if (!host_player_data(directory,sizeof(directory))) return host_player_main(argc,argv);
@@ -63,16 +66,18 @@ static int player_entry(int argc, char **argv) {
     snprintf(path,sizeof(path),"%s/logs/lionheart.log",directory);
     s.file=fopen(path,"wb");
     if (!s.file || pipe(fds)) { if (s.file) fclose(s.file); return startup_error("Cannot open Lionheart session log",headless); }
+    fatal_trace_install(fileno(s.file));
     fflush(stderr);
     s.original=dup(error_fd); s.read_fd=fds[0];
-    if (dup2(fds[1],error_fd)<0) { close(fds[0]); close(fds[1]); fclose(s.file); if (s.original>=0) close(s.original); return startup_error("Cannot redirect Lionheart stderr",headless); }
+    if (dup2(fds[1],error_fd)<0) { fatal_trace_install(error_fd); close(fds[0]); close(fds[1]); fclose(s.file); if (s.original>=0) close(s.original); return startup_error("Cannot redirect Lionheart stderr",headless); }
     close(fds[1]);
 #ifdef _WIN32
     SetStdHandle(STD_ERROR_HANDLE,(HANDLE)_get_osfhandle(error_fd));
 #endif
     thread=SDL_CreateThread(copy_stderr,"session-log",&s);
     if (!thread) {
-        close(error_fd); close(s.read_fd); fclose(s.file);
+        close(error_fd); close(s.read_fd);
+        fatal_trace_install(s.original); fclose(s.file);
         if (s.original>=0) { dup2(s.original,error_fd); close(s.original); }
 #ifdef _WIN32
         SetStdHandle(STD_ERROR_HANDLE,s.original>=0 ? (HANDLE)_get_osfhandle(error_fd) : NULL);
@@ -82,6 +87,7 @@ static int player_entry(int argc, char **argv) {
     result=host_player_main(argc,argv);
     fflush(stderr); close(error_fd); SDL_WaitThread(thread,NULL);
     if (s.original>=0) { dup2(s.original,error_fd); close(s.original); }
+    fatal_trace_install(error_fd);
     fclose(s.file);
 #ifdef _WIN32
     SetStdHandle(STD_ERROR_HANDLE,s.original>=0 ? (HANDLE)_get_osfhandle(error_fd) : NULL);
