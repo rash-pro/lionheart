@@ -84,3 +84,6 @@ LH_TEST(png_oracle_vectors_from_the_python_check) {
         LH_EQ(lh::str(image.width, " ", image.height, " ", lh::sha256(image.rgb)), expected);
     }
 }
+
+#include "vulkan.h"
+LH_TEST(vulkan_fixture_preserves_loader_selection) { LH_CHECK(lh::fs::is_regular_file(lh::vulkan_replay(t))); }
