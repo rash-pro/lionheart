@@ -18,6 +18,17 @@ typedef enum { LHG_TIMING_EXACT = 0, LHG_TIMING_BLOCK = 1, LHG_TIMING_LOOSE = 2 
 /* Returns nonzero to cancel. Called between units of work on the caller's thread. */
 typedef int (*lhg_progress_fn)(void *user, const char *stage, unsigned long done, unsigned long total);
 
+/* Selected generated symbols, including their owning overlay prefix. The
+ * selection is borrowed for the duration of lhg_generate. */
+typedef struct {
+    /* 1..8. Functions must be nonempty and unique; fused names are a subset. */
+    int max_registers;
+    const char *const *functions;
+    size_t function_count;
+    const char *const *fuse_forward;
+    size_t fuse_forward_count;
+} lhg_register_cache;
+
 typedef struct {
     /* Directory holding overlays.json, overlays-all.json and files-disc*.json. */
     const char *catalog_dir;
@@ -34,6 +45,9 @@ typedef struct {
     lhg_timing timing;
     lhg_progress_fn progress;
     void *progress_user;
+    /* NULL uses the catalog's play-register-cache.json for experimental timing.
+     * Exact timing accepts a selection but does not apply the lowering. */
+    const lhg_register_cache *register_cache;
 } lhg_options;
 
 typedef struct {

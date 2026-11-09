@@ -33,6 +33,8 @@ typedef struct {
     size_t code_range_count;
     const uint32_t *entry_points;
     size_t entry_point_count;
+    const uint32_t *timing_entry_points;
+    size_t timing_entry_point_count;
     const lhg_image_meta *meta;
 } lhg_image;
 

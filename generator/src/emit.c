@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "locals.h"
 #include "platform.h"
 #include "sha1.h"
 
@@ -485,11 +486,27 @@ static void remove_stale(lhg_ctx *ctx, void *user, const char *name)
 }
 
 static void emit_function_text(lhg_arena *arena, const lhg_function *f, const lhg_available *available, const lhg_emit_options *options,
-                               int poll_forward, int direct_memory, lhg_text *raw)
+                               int poll_forward, int direct_memory, int hot, int fused, lhg_text *raw)
 {
     lhg_analysis analysis;
     lhg_analyze(arena, f, &analysis);
     lhg_text_clear(raw);
+    if (options->timing != LHG_TIMING_EXACT) {
+        lhg_emit_timing(arena, &analysis, available, options->timing, hot || f->insn_count <= 32, fused, raw);
+        if (hot && lhg_cache_qualify(f)) {
+            lhg_text cached;
+            lhg_text_init(&cached, raw->ctx);
+            lhg_text_adds(&cached, "#ifdef FF8_PLAY_REG_CACHE\n");
+            lhg_cache_lower(arena, raw, options->register_cache->max_registers, &cached);
+            lhg_text_adds(&cached, "#else\n");
+            lhg_text_add(&cached, raw->data, raw->size);
+            lhg_text_adds(&cached, "#endif\n");
+            lhg_text_clear(raw);
+            lhg_text_add(raw, cached.data, cached.size);
+            lhg_text_free(&cached);
+        }
+        return;
+    }
     int trace = options->mode == LHG_MODE_TRACE;
     if (trace) {
         lhg_emit_fast_variant(arena, &analysis, available, 1, 0, 0, 0, raw);
@@ -518,8 +535,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
               lhg_emit_result *result)
 {
     lhg_ctx *ctx = arena->ctx;
-    if (options->timing != LHG_TIMING_EXACT)
-        lhg_fail(ctx, "only exact timing is implemented by the native generator");
+    if (options->timing != LHG_TIMING_EXACT && options->mode == LHG_MODE_TRACE)
+        lhg_fail(ctx, "experimental timing requires fast emission");
     lhg_make_directories(ctx, output);
 
     size_t set_count = overlay_count + 1;
@@ -560,6 +577,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     lhg_json *units_json = lhg_json_new_array(&json_arena);
     size_t main_instructions = 0, main_entries = 0, main_compact_entries = 0;
     unsigned profile_lines = 0;
+    string_set used_forward;
+    string_set_init(&used_forward, &json_arena);
 
     for (size_t set_index = 0; set_index < set_count; set_index++) {
         emit_set *set = &sets[set_index];
@@ -590,7 +609,13 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
             string_set_init(&scan.regions, &unit_arena);
             scan.uses_poll = 0;
             for (size_t row = start; row < stop; row++) {
-                emit_function_text(&function_arena, items[row], &available, options, set->poll_forward, set->direct_memory, &raw);
+                const lhg_register_cache *selection = options->register_cache;
+                const char *symbol = lhg_fmt(&function_arena, "%sf_%X", set->prefix, items[row]->entry);
+                int hot = selection && lhg_cache_contains(selection->functions, selection->function_count, symbol);
+                int fused = selection && lhg_cache_contains(selection->fuse_forward, selection->fuse_forward_count, symbol);
+                if (fused && options->timing != LHG_TIMING_EXACT)
+                    string_set_add(&used_forward, symbol, strlen(symbol));
+                emit_function_text(&function_arena, items[row], &available, options, set->poll_forward, set->direct_memory, hot, fused, &raw);
                 if (row != start)
                     lhg_text_add(&body, "\n", 1);
                 finish_function(&raw, sets, set, items[row], functions, &body, &scan);
@@ -786,8 +811,10 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     lhg_text generated;
     lhg_text_init(&generated, ctx);
     lhg_text_adds(&generated,
-                  "#ifndef FF8_GENERATED_H\n#define FF8_GENERATED_H\n#define GENERATED_HAS_OVERLAYS 1\n"
-                  "#include \"cpu.h\"\n#include \"gte.h\"\n"
+                  "#ifndef FF8_GENERATED_H\n#define FF8_GENERATED_H\n#define GENERATED_HAS_OVERLAYS 1\n");
+    if (options->timing != LHG_TIMING_EXACT)
+        lhg_text_adds(&generated, "#define FF8_COMPACT 1\n#include \"timing.h\"\n");
+    lhg_text_adds(&generated, "#include \"cpu.h\"\n#include \"gte.h\"\n"
                   "\nextern const entry_t generated_entries[];\nextern const size_t generated_count;\n"
                   "extern const code_region_t *const generated_regions[];\nextern const overlay_t generated_overlays[];\nextern const size_t generated_overlay_count;\n"
                   "extern const uint32_t generated_hash, generated_base, generated_size;\n#endif\n");
@@ -810,6 +837,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     lhg_text_addf(&dispatch, &unit_arena, "const uint32_t generated_base = %U, generated_size = %D;\n", image->base, (int64_t)image->size);
     lhg_text_addf(&dispatch, &unit_arena, "const unsigned generated_host_precise = %d;\n",
                   options->host_mode == LHG_HOST_PRECISE && options->mode != LHG_MODE_TRACE && options->timing == LHG_TIMING_EXACT);
+    if (options->timing != LHG_TIMING_EXACT)
+        lhg_text_addf(&dispatch, &unit_arena, "const uint32_t generated_timing_event_mask = %d;\n", options->timing == LHG_TIMING_LOOSE ? 255 : 0);
     lhg_write_if_changed(ctx, lhg_join_path(arena, output, "dispatch_table.c"), dispatch.data, dispatch.size);
     lhg_text_free(&dispatch);
 
@@ -844,6 +873,22 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     }
     lhg_free(ctx, seen_table);
     lhg_json_set(&json_arena, manifest, "jump_tables", jump_tables);
+    if (options->timing != LHG_TIMING_EXACT) {
+        lhg_json_set(&json_arena, manifest, "timing", lhg_json_new_str(&json_arena, options->timing == LHG_TIMING_LOOSE ? "loose" : "block"));
+        lhg_json *entries = lhg_json_new_array(&json_arena);
+        for (size_t index = 0; index < image->timing_entry_point_count; index++)
+            if (lhg_functions_find(functions, image->timing_entry_points[index]))
+                lhg_json_append(&json_arena, entries, lhg_json_new_str(&json_arena, lhg_fmt(&json_arena, "%H", (uint64_t)image->timing_entry_points[index])));
+        lhg_json_set(&json_arena, manifest, "timing_entry_points", entries);
+        if (used_forward.count) {
+            size_t count;
+            const char **names = string_set_sorted(&used_forward, &json_arena, &count);
+            lhg_json *regions = lhg_json_new_array(&json_arena);
+            for (size_t index = 0; index < count; index++)
+                lhg_json_append(&json_arena, regions, lhg_json_new_str(&json_arena, names[index]));
+            lhg_json_set(&json_arena, manifest, "forward_regions", regions);
+        }
+    }
     lhg_text manifest_text;
     lhg_text_init(&manifest_text, ctx);
     lhg_json_dump(&manifest_text, manifest);
