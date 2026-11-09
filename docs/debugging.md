@@ -25,8 +25,8 @@ An image-only difference suggests presentation or GPU output. A guest-state diff
 
 `--log PATH` records guest tracing; `--log-events` enables hardware event tracing.
 Statistics builds print interpreter/native work counts.
-`tools/gte_trace.py record --host-build build/dev --output build/gte` relinks a tracing host.
-`tools/gte_trace.py replay --output build/gte-replay` builds the trace replayer.
+`build/devtools/gte-trace record --host-build build/dev --output build/gte` relinks a tracing host.
+`build/devtools/gte-trace replay --output build/gte-replay` builds the trace replayer.
 Keep traces and extracted code under `build/`. Do not attach game dumps or generated C to public issues.
 
 Report the supported serial, input script, last matching VBlank, compiler/options, and log excerpts.
@@ -55,11 +55,11 @@ Nested device calls are charged to their innermost subsystem. These timers pertu
 hot paths: do not use a subsystem probe to report a speedup. Vulkan's separate
 `--gpu-timings CSV` reports encoding, software raster, upload and submission costs.
 
-`tools/frame_bench.py` alternates two timing probes, creates fresh card/config copies,
+`build/devtools/frame-bench` alternates two timing probes, creates fresh card/config copies,
 checks completion and identical per-frame guest work, and records load and distributions:
 
 ```sh
-python tools/frame_bench.py --before build/baseline/lionheart-timing \
+build/devtools/frame-bench --before build/baseline/lionheart-timing \
   --after build/candidate/lionheart-timing --exe build/generated/extracted/SLUS_008.92 \
   --disc /path/to/disc1.cue --card /path/to/disc1-early.mcr \
   --script tests/scripts/battle-magic.txt --first 2100 --last 4000 \
@@ -73,3 +73,14 @@ Optional `--before-state` and `--after-state` accept independently produced comp
 checkpoints; restore before `--first` to leave a warmup interval. Prove route exactness
 from boot separately with `build/devtools/compare`. A checkpoint is specific to its build,
 input script and execution mode.
+
+For MDEC observation traces, build a separate instrumented host without changing
+the runtime sources:
+
+```sh
+build/devtools/mdec-trace build --host-build build/dev --output build/mdec
+build/devtools/mdec-trace record --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+build/devtools/mdec-trace replay --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+```
+
+Use a new trace file for each recording. Keep disc-derived traces under `build/`.

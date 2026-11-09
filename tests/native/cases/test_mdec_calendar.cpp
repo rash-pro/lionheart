@@ -1,5 +1,6 @@
 // Observe the span model against the original word calendar between deadlines.
 #include "equiv.h"
+#include "../../../tools/devtools/mdec_trace.h"
 #include "lh_test.h"
 #include "mdec_calendar_model.h"
 #include "py_random.h"
@@ -34,6 +35,8 @@ std::vector<Row> rows() {
 } // namespace
 
 LH_TEST_P(test_word_calendar_observations, rows()) {
+    LH_TEXT_EQ(trace::instrument_hw(lh::read_file(t.root()/"runtime/hw.c")),
+               lh::read_file(lh::fs::path(t.harness("model_0").program()).parent_path().parent_path().parent_path()/"generated/test_mdec_calendar/hw.c"));
     const CalendarModel models[2] = {CalendarModel(t.library("model_0")), CalendarModel(t.library("model_1"))};
     void *cpus[2] = {models[0].create(p.depth, p.layout, p.control), models[1].create(p.depth, p.layout, p.control)};
     lh::PyRandom rng(1400 + p.depth * 16 + p.layout * 2 + p.control);

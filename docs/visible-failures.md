@@ -43,7 +43,7 @@ Other endings and control transfers:
 - Fatal host signals terminate by the signal; unhandled Windows exceptions continue
   searching handlers, preserving system crash reporting.
 
-`Stop:` is parsed by `build/devtools/compare`, `tools/frame_bench.py`, and boot,
+`Stop:` is parsed by `build/devtools/compare`, `build/devtools/frame-bench`, and boot,
 player, GUI-pause and PGXP tests. `Last PC:` is retained in exactly the same
 stdout summary format; no existing Python consumer parses that label directly.
 
