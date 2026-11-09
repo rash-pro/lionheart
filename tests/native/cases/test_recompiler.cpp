@@ -484,7 +484,12 @@ LH_TEST_P(test_dispatch_cache_follows_registry_changes, kVariantRows) {
     h.test_registry_count(cpu.get(), 0, count);
     h.test_run(cpu.get(), callee, 0); LH_EQ(h.test_count(cpu.get(), 0), before);
 }
-LH_PENDING(test_jump_table_words_invalidate_compiled_function);
+LH_TEST_P(test_jump_table_words_invalidate_compiled_function, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "jump_table", {{4, 0}}, {{table().table, table().table_pc + 44}});
+    LH_EQ(state.state[2], 77u); LH_CHECK(state.counts[0] > 0);
+}
 LH_PENDING(test_overlay_data_write_does_not_change_code_epoch);
 LH_PENDING(test_deep_guest_recursion_resumes_compiled_returns);
 LH_PENDING(test_nonlocal_reentry_discards_abandoned_call_frames);
