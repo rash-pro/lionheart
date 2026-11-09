@@ -11,7 +11,7 @@ option(LIONHEART_GENERATOR_SANITIZE "Build the generator with address and undefi
 add_library(lionheart_generator STATIC
   src/base.c src/platform.c src/sha1.c src/json.c src/disc.c src/lzs.c
   src/decode.c src/discover.c src/catalog.c
-  src/effects.c src/fast.c src/precise.c src/emit.c src/generator.c)
+  src/effects.c src/fast.c src/precise.c src/locals.c src/emit.c src/generator.c)
 target_include_directories(lionheart_generator PUBLIC include PRIVATE src)
 
 add_executable(lionheart-gen cli/main.c)

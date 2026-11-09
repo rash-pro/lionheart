@@ -7,11 +7,13 @@ import random
 import shutil
 import struct
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from recomp.discover import Image, discover
 from recomp.emit import emit
+from recomp.locals import cache_registers, lower, qualify, read_selection
 from test_recompiler import BASE, CASES, PCS, RET, imm, j, r, table, table_pc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,8 +26,8 @@ def tools():
     configure = ['cmake', '-S', str(ROOT / 'generator'), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release']
     if SANITIZE:
         configure.append('-DLIONHEART_GENERATOR_SANITIZE=ON')
-    subprocess.run(configure, check=True, capture_output=True)
-    subprocess.run(['cmake', '--build', str(build), '-j', '4'], check=True, capture_output=True)
+    subprocess.run(['nice', '-n', '10', *configure], check=True, capture_output=True)
+    subprocess.run(['nice', '-n', '10', 'cmake', '--build', str(build), '-j', '4'], check=True, capture_output=True)
     return build / 'lionheart-gen-spec', build / 'lionheart-gen'
 
 
@@ -36,7 +38,8 @@ def image_spec(data, base=BASE, entry=None, **extra):
 def build_image(row):
     ranges = tuple(tuple(pair) for pair in row.get('code_ranges', ()))
     image = Image(bytes.fromhex(row['data']), row['base'], row['entry'],
-                  code_ranges=ranges, entry_points=tuple(row.get('entry_points', ())))
+                  code_ranges=ranges, entry_points=tuple(row.get('entry_points', ())),
+                  timing_entry_points=tuple(row.get('timing_entry_points', ())))
     if 'metadata' in row:
         image.metadata = row['metadata']
     return image
@@ -45,13 +48,15 @@ def build_image(row):
 def python_emit(spec, output):
     main = spec['main']
     image = build_image(main)
-    functions = discover(image, main.get('seeds', ()), main.get('scan_calls', True))
+    seeds = [*main.get('seeds', ()), *(image.timing_entry_points if spec.get('timing', 'exact') != 'exact' else ())]
+    functions = discover(image, seeds, main.get('scan_calls', True))
     overlays = []
     for row in spec.get('overlays', ()):
         overlay = build_image(row)
         overlays.append((row['index'], overlay, discover(overlay, row.get('seeds', ()), row.get('scan_calls', True))))
     emit(image, functions, output, mode=spec.get('mode', 'fast'), overlays=overlays,
-         host_mode=spec.get('host_mode', 'precise'))
+         host_mode=spec.get('host_mode', 'precise'), timing=spec.get('timing', 'exact'),
+         register_cache=spec.get('register_cache'))
 
 
 def tree(path):
@@ -71,11 +76,14 @@ def assert_parity(tools, spec, tmp_path, name):
     assert expected.keys() == actual.keys()
     for key in expected:
         if actual[key] != expected[key]:
-            mismatch = next(i for i, (a, b) in enumerate(zip(actual[key], expected[key])) if a != b)
+            mismatch = next((i for i, (a, b) in enumerate(zip(actual[key], expected[key])) if a != b),
+                            min(len(actual[key]), len(expected[key])))
             pytest.fail(f'{name}: {key} differs at byte {mismatch}')
 
 
-def test_recompiler_cases(tools, tmp_path):
+@pytest.mark.parametrize('timing', ['exact', 'block', 'loose'])
+@pytest.mark.parametrize('cache', [False, True])
+def test_recompiler_cases(tools, tmp_path, timing, cache):
     data = bytearray(len(CASES) * 0x200)
     for name, words in CASES.items():
         struct.pack_into(f'<{len(words)}I', data, PCS[name] - BASE, *words)
@@ -87,7 +95,12 @@ def test_recompiler_cases(tools, tmp_path):
         blob = struct.pack(f'<{len(words)}I', *words) + bytes(16)
         overlays.append(image_spec(blob, 0x80098000, index=index))
     for mode, host in (('fast', 'precise'), ('fast', 'fast'), ('trace', 'precise'), ('trace', 'fast')):
-        spec = {'mode': mode, 'host_mode': host, 'main': image_spec(data, seeds=seeds), 'overlays': overlays}
+        if timing != 'exact' and mode == 'trace':
+            continue
+        spec = {'mode': mode, 'host_mode': host, 'timing': timing, 'main': image_spec(data, seeds=seeds), 'overlays': overlays}
+        if cache:
+            spec['register_cache'] = dict(max_registers=8, functions=[f'f_{pc:08x}' for pc in seeds] +
+                                          [f'ov{row["index"]}_f_{row["entry"]:08x}' for row in overlays])
         assert_parity(tools, spec, tmp_path, f'tier1-{mode}-{host}')
 
 
@@ -107,7 +120,8 @@ def random_word(rng, base, count):
 
 
 @pytest.mark.parametrize('seed', range(24))
-def test_random_programs(tools, tmp_path, seed):
+@pytest.mark.parametrize('timing', ['exact', 'block', 'loose'])
+def test_random_programs(tools, tmp_path, seed, timing):
     rng = random.Random(0x4c48 + seed)
     count = rng.choice([64, 128, 256, 600])
     base = BASE + rng.choice([0, 4, 8])
@@ -119,11 +133,17 @@ def test_random_programs(tools, tmp_path, seed):
         data[start:start + 64] = bytes(64)
     seeds = [base + rng.randrange(count) * 4 for _ in range(rng.randrange(1, 8))]
     mode, host = rng.choice([('fast', 'precise'), ('fast', 'fast'), ('trace', 'precise'), ('trace', 'fast')])
+    if timing != 'exact':
+        mode = 'fast'
     overlay_data = bytearray(struct.pack(f'<{count // 2}I', *[random_word(rng, 0x80098000, count // 2) for _ in range(count // 2)]))
-    spec = {'mode': mode, 'host_mode': host,
+    spec = {'mode': mode, 'host_mode': host, 'timing': timing,
             'main': image_spec(data, base, base + rng.randrange(count) * 4, seeds=seeds, scan_calls=rng.random() < 0.5),
             'overlays': [image_spec(overlay_data, 0x80098000, index=rng.choice([0, 1, 27, 33, 70]),
                                     seeds=[0x80098000], scan_calls=False)]}
+    if timing != 'exact':
+        functions = discover(build_image(spec['main']), seeds, spec['main']['scan_calls'])
+        spec['register_cache'] = dict(max_registers=1 + seed % 8,
+                                      functions=[f'f_{pc:08x}' for pc in functions] or ['f_00000000'])
     assert_parity(tools, spec, tmp_path, f'random{seed}')
 
 
@@ -431,3 +451,195 @@ def test_rerun_keeps_timestamps_and_removes_stale_units(tools, tmp_path):
     assert not (output / 'functions_099.c').exists()
     assert (output / 'keepme.c').exists()
     assert {p.name: p.stat().st_mtime_ns for p in output.iterdir()} == before
+
+
+@pytest.mark.parametrize('timing', ['block', 'loose'])
+@pytest.mark.parametrize('fused', [False, True])
+def test_timing_regions_and_owners(tools, tmp_path, timing, fused):
+    words = [imm(4, 0, 0, 2), imm(43, 20, 8, 0), imm(9, 0, 9, 99),
+             imm(9, 0, 9, 3), imm(35, 20, 8, 0), 0, r(8, rs=31), 0]
+    data = struct.pack('<8I', *words) * 50
+    seeds = [BASE + n * 32 for n in range(50)]
+    selected = [f'f_{seeds[0]:08x}', f'f_{seeds[-1]:08x}', f'ov2_f_{BASE:08x}', 'f_00000000']
+    spec = {'timing': timing, 'main': image_spec(data, entry_points=seeds, scan_calls=False),
+            'overlays': [image_spec(data, index=2, entry_points=seeds, scan_calls=False)],
+            'register_cache': dict(max_registers=8, functions=selected, fuse_forward=selected if fused else [])}
+    assert_parity(tools, spec, tmp_path, 'regions')
+    manifest = json.loads((tmp_path / 'regions-c/manifest.json').read_text())
+    if fused:
+        assert manifest['forward_regions'] == selected[:2]
+    else:
+        assert 'forward_regions' not in manifest
+
+
+@pytest.mark.parametrize('size', [31, 32, 33, 512, 513])
+@pytest.mark.parametrize('timing', ['block', 'loose'])
+def test_timing_inline_and_region_bounds(tools, tmp_path, size, timing):
+    words = [imm(9, 8, 8, 1)] * (size - 2) + RET
+    data = struct.pack(f'<{size}I', *words)
+    selected = dict(max_registers=8, functions=[f'f_{BASE:08x}'], fuse_forward=[f'f_{BASE:08x}'])
+    spec = {'timing': timing, 'main': image_spec(data), 'register_cache': selected}
+    if size == 513:
+        assert_spec_error(tools, spec, tmp_path, 'exceeds 512 instructions')
+        with pytest.raises(ValueError, match='exceeds 512 instructions'):
+            python_emit(spec, tmp_path / 'python')
+    else:
+        assert_parity(tools, spec, tmp_path, 'bounded')
+    spec['register_cache'] = dict(max_registers=8, functions=['f_00000000'])
+    assert_parity(tools, spec, tmp_path, 'cold')
+    source = (tmp_path / 'cold-c/functions_000.c').read_text()
+    assert ('#ifdef FF8_TIMING_INLINE' in source) == (size <= 32)
+
+
+@pytest.mark.parametrize('timing', ['exact', 'block', 'loose'])
+def test_timing_entries_and_public_cache_option(tools, tmp_path, timing):
+    words = [*RET, 0, 0, imm(9, 8, 8, 1), *RET]
+    data = struct.pack('<7I', *words)
+    exe = tmp_path / 'program.exe'
+    exe.write_bytes(valid_exe(data))
+    catalog = tmp_path / 'catalog'
+    catalog.mkdir()
+    (catalog / 'overlays.json').write_text(json.dumps(dict(exe_sha1=hashlib.sha1(exe.read_bytes()).hexdigest(),
+        main_code_ranges=[[hex(BASE), hex(BASE + len(data))]], timing_entry_points=[hex(BASE + 16)])))
+    spec = {'timing': timing, 'main': image_spec(data, code_ranges=[[BASE, BASE + len(data)]],
+                                               timing_entry_points=[BASE + 16]),
+            'exe_path': str(exe), 'catalog_dir': str(catalog),
+            'register_cache': dict(max_registers=1, functions=[f'f_{BASE + 16:08x}'])}
+    assert_parity(tools, spec, tmp_path, 'public-api')
+    source = (tmp_path / 'public-api-c/functions_000.c').read_text()
+    assert ('#ifdef FF8_PLAY_REG_CACHE' in source) == (timing != 'exact')
+
+
+@pytest.mark.parametrize('timing', ['block', 'loose'])
+def test_cache_qualification(tools, tmp_path, timing):
+    shapes = [(struct.pack('<3I', imm(9, 8, 8, 1), *RET), True),
+              (struct.pack('<2I', r(8, rs=8), 0), False),
+              (struct.pack('<2I', r(9, rs=8, rd=31), 0), False),
+              (jump_table_program(3), True)]
+    for index, (data, expected) in enumerate(shapes):
+        image = build_image(image_spec(data))
+        assert qualify(discover(image)[BASE]) == expected
+        spec = {'timing': timing, 'main': image_spec(data),
+                'register_cache': dict(max_registers=8, functions=[f'f_{BASE:08x}'])}
+        name = f'qualify{index}'
+        assert_parity(tools, spec, tmp_path, name)
+        source = (tmp_path / f'{name}-c/functions_000.c').read_text()
+        assert ('#ifdef FF8_PLAY_REG_CACHE' in source) == expected
+
+
+@pytest.mark.parametrize('timing', ['block', 'loose'])
+def test_wait_hint_and_memory_variants(tools, tmp_path, timing):
+    words = [imm(35, 20, 8, 0), 0, imm(5, 8, 0, -3), 0, *RET]
+    for opcode in [32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 46, 50, 58]:
+        for reg in [0, 1, 7, 15, 23, 28, 31]:
+            words += [imm(opcode, 20, reg, 3), *RET]
+    data = struct.pack(f'<{len(words)}I', *words)
+    seeds = [BASE] + [BASE + n * 4 for n in range(6, len(words), 3)]
+    spec = {'timing': timing, 'main': image_spec(data, seeds=seeds, scan_calls=False),
+            'register_cache': dict(max_registers=8, functions=[f'f_{pc:08x}' for pc in seeds])}
+    assert_parity(tools, spec, tmp_path, 'memory')
+    source = (tmp_path / 'memory-c/functions_000.c').read_text()
+    assert ('c_timing_idle(c)' in source) == (timing == 'loose')
+
+
+@pytest.mark.parametrize('cap', range(1, 9))
+def test_lowering_register_limit_and_helper_order(tools, tmp_path, cap):
+    source = ('void f_80010000(cpu_t *c) {\n' +
+              '\n'.join(f'c->r[{reg}] += c->r[{reg}];' for reg in [9, 8, 7, 6, 5, 4, 3, 2, 1]) +
+              '\nc->r[9]++;\n'
+              'c_timing_block(c, c_merge_value(c, 8), 0, &code_80010000);\n'
+              'if (code_valid(c, &code_80010000)) c_tick(c, 0);\n'
+              'gte_write(c, 15, ram_read(c, c->r[8], 4), 0);\n'
+              'cpu_stop(c, "quote: \\\" ( )");\nreturn;\n}\n')
+    expected, registers = lower(source, cap)
+    assert registers == cache_registers(source, cap)
+    assert registers == tuple(sorted([8, 9, 1, 2, 3, 4, 5, 6, 7][:cap]))
+    spec_path = tmp_path / 'lower.json'
+    spec_path.write_text(json.dumps(dict(lower_source=source, max_registers=cap)))
+    subprocess.run([str(tools[0]), str(spec_path), str(tmp_path / 'native')], check=True, capture_output=True)
+    assert (tmp_path / 'native/lowered.c').read_bytes() == expected.encode()
+
+
+def assert_spec_error(tools, spec, tmp_path, message):
+    path = tmp_path / 'invalid.json'
+    path.write_text(json.dumps(spec))
+    result = subprocess.run([str(tools[0]), str(path), str(tmp_path / 'invalid-output')], capture_output=True, text=True)
+    assert result.returncode > 0 and message in result.stderr, result.stderr
+    assert 'Sanitizer' not in result.stderr and 'runtime error' not in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize('source,message', [
+    ('void f(cpu_t *c) { c->r[1]++; unknown(c); }', 'unclassified register-cache helper: unknown'),
+    ('void f(cpu_t *c) { c->r[1]++; c_tick(c, 0; }', 'unclosed generated helper call'),
+])
+def test_lowering_rejects_unclassified_or_unclosed_calls(tools, tmp_path, source, message):
+    with pytest.raises(ValueError, match=message):
+        lower(source)
+    assert_spec_error(tools, dict(lower_source=source, max_registers=8), tmp_path, message)
+
+
+@pytest.mark.parametrize('source', [
+    '',
+    'void f(cpu_t *c) { c->r[0]++; unknown(c); return; }',
+    'void f(cpu_t *c) { c->r[08]++; c_tick(c, 0); return; }',
+    'void f(cpu_t *c) { c->r[1]++; cpu_stop(c, "return;"); return; }',
+    'void f(cpu_t *c) { c->r[1]++; xcode_valid(c, 0); }',
+])
+def test_lowering_textual_matches(tools, tmp_path, source):
+    if 'xcode_valid' in source:
+        with pytest.raises(ValueError, match='unclassified register-cache helper: xcode_valid'):
+            lower(source)
+        assert_spec_error(tools, dict(lower_source=source, max_registers=8), tmp_path,
+                          'unclassified register-cache helper: xcode_valid')
+        return
+    expected, _ = lower(source)
+    path = tmp_path / 'source.json'
+    path.write_text(json.dumps(dict(lower_source=source, max_registers=8)))
+    subprocess.run([str(tools[0]), str(path), str(tmp_path / 'native')], check=True, capture_output=True)
+    assert (tmp_path / 'native/lowered.c').read_bytes() == expected.encode()
+
+
+@pytest.mark.parametrize('fused,cache', [(False, False), (False, True), (True, False), (True, True)])
+def test_native_forward_region_behavior(tools, tmp_path, monkeypatch, fused, cache):
+    import test_timing_regions as regions
+
+    def native_emit(image, functions, output, **options):
+        spec = {'main': image_spec(image.data, image.base, image.entry, seeds=list(functions)),
+                'timing': options['timing'], 'host_mode': options.get('host_mode', 'fast'),
+                'register_cache': options['register_cache']}
+        path = tmp_path / 'behavior.json'
+        path.write_text(json.dumps(spec))
+        subprocess.run([str(tools[0]), str(path), str(output)], check=True, capture_output=True)
+
+    monkeypatch.setattr(regions, 'emit', native_emit)
+    forward = regions.forward.__wrapped__(SimpleNamespace(param=(fused, cache)), tmp_path)
+    regions.test_mmio_flushes_the_complete_forward_prefix(forward)
+    regions.test_region_event_changes_survive_cached_continuation(forward)
+
+
+@pytest.mark.parametrize('selection,message', [
+    ([], 'register selection needs'), ({}, 'register selection needs'),
+    (dict(max_registers=8, functions=['f_80010000'], extra=1), 'register selection needs'),
+    (dict(max_registers=8, functions=['f_80010000'], **{'fuse_forward\0extra': []}), 'register selection needs'),
+    *[(dict(max_registers=cap, functions=['f_80010000']), 'max_registers') for cap in [0, 9, True, 1.5]],
+    *[(dict(max_registers=8, functions=names), 'functions must') for names in
+      [[], ['f_80010000', 'f_80010000'], ['f_8001000A'], ['f_80010000\0'], ['ov_f_80010000'], [1]]],
+    *[(dict(max_registers=8, functions=['f_80010000'], fuse_forward=regions), 'fuse_forward') for regions in
+      [None, 'f_80010000', {}, [[]], [{}], ['f_80010000', 'f_80010000'], ['f_80010004']]],
+])
+def test_invalid_cache_selections(tools, tmp_path, selection, message):
+    path = tmp_path / 'selection.json'
+    path.write_text(json.dumps(selection))
+    with pytest.raises(ValueError, match=message):
+        read_selection(path)
+    assert_spec_error(tools, dict(main=image_spec(bytes(8)), register_cache=selection), tmp_path, message)
+
+
+@pytest.mark.parametrize('timing', ['block', 'loose'])
+def test_experimental_trace_rejected(tools, tmp_path, timing):
+    spec = dict(main=image_spec(bytes(8)), timing=timing, mode='trace')
+    with pytest.raises(ValueError, match='experimental timing requires fast emission'):
+        python_emit(spec, tmp_path / 'python')
+    assert_spec_error(tools, spec, tmp_path, 'experimental timing requires fast emission')
+    message = run_cli(tools, '--mode', 'trace', '--timing', timing, 'unused.exe', cwd=tmp_path)
+    assert 'experimental timing requires fast emission' in message
