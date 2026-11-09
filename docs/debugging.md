@@ -3,10 +3,13 @@
 Use your own supported discs and run contributor setup first.
 Keep one baseline executable and a native executable built after your change.
 Use a fresh private copy of the same card, an explicit empty config, the same script and the same VBlank count.
-`tools/compare.py` handles those copies and compares complete dumps and every native software PNG:
+Build the host tools first with `cmake -S tools/devtools -B build/devtools` and
+`cmake --build build/devtools -j4`.
+
+`build/devtools/compare` handles those copies and compares complete dumps and every native software PNG:
 
 ```sh
-python tools/compare.py --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/debug-compare
+build/devtools/compare --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/debug-compare
 ```
 
 To diagnose native code against the interpreter, run the same developer executable twice,
@@ -68,5 +71,5 @@ with `--interpreter`. For Vulkan, select the intended ICD in the environment.
 The benchmark does not capture images, dump state, or enable subsystem profiling.
 Optional `--before-state` and `--after-state` accept independently produced compatible
 checkpoints; restore before `--first` to leave a warmup interval. Prove route exactness
-from boot separately with `tools/compare.py`. A checkpoint is specific to its build,
+from boot separately with `build/devtools/compare`. A checkpoint is specific to its build,
 input script and execution mode.

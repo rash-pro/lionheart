@@ -31,3 +31,10 @@ build/devtools/perf-report --log build/profile/world.txt --first 1800 \
 The native `test_perf_tools` identity retains the four expected counter deltas
 and rejects a missing exact boundary. Candidate sorting remains stable for ties.
 Histogram output preserves input order for equal instruction counts.
+
+`build/devtools/compare` takes the same options as the previous comparison
+script. It copies the source card, isolates configuration and saves, verifies
+completion and every frame, then compares complete state/frame/card hashes and
+cycle counts. It keeps only the final PNG after writing each receipt.
+Both `test_compare` identities protect conflicting output cards, including a
+symlink to the source card. SHA-256 uses the existing native test implementation.

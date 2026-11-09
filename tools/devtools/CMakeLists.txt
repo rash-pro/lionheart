@@ -9,3 +9,5 @@ get_filename_component(LH_TOOLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUT
 target_compile_definitions(iro-extract PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
 add_executable(perf-report perf_report.cpp)
 target_compile_features(perf-report PRIVATE cxx_std_17)
+add_executable(compare compare.cpp)
+target_compile_features(compare PRIVATE cxx_std_17)
