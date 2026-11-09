@@ -382,7 +382,28 @@ LH_TEST_P(test_exception_expected, exception_rows()) {
     LH_EQ(state.state[53], table().pcs.at(p.name));
     LH_EQ(bool(state.state[52] >> 31), p.name == "exception_slot");
 }
-LH_PENDING(test_delay_paths_and_isolation);
+LH_TEST_P(test_delay_paths_and_isolation, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Outcome state = diff(t, h, "load_slot_taken");
+    LH_EQ(state.state[10], 0xAABBCCDDu); LH_EQ(state.state[11], 0x44332211u);
+    state = diff(t, h, "load_slot_fallthrough");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    state = diff(t, h, "load_slot_overwrite"); LH_EQ(state.state[8], 77u);
+    state = diff(t, h, "load_slot_twice");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x88776655u);
+    state = diff(t, h, "call_return_load");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    state = diff(t, h, "pending_overflow", {{9, 0x7FFFFFFF}, {10, 1}});
+    LH_EQ(state.state[8], 0x44332211u); LH_CHECK(state.state[37]);
+    state = diff(t, h, "isolation", {{8, 0x10000}, {9, 0x12345678}});
+    LH_EQ(state.state[10], 0x44332211u); LH_EQ(state.state[11], 0x12345678u);
+    LH_BYTES_EQ(state.memory.substr(0x100000, 8), std::string("\x11\x22\x33\x44\x78\x56\x34\x12", 8));
+    state = diff(t, h, "call_indirect", {{21, table().pcs.at("incoming_load_twice")}});
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x88776655u);
+    state = diff(t, h, "load_merge_address", {{8, DATA}}, {{DATA, 0x12345678}});
+    LH_EQ(state.state[8], 0x12345678u);
+}
 LH_PENDING(test_generated_memory_mirrors_and_scratchpad);
 LH_PENDING(test_stop_unwinds_before_following_instruction);
 LH_PENDING(test_instruction_budget_stops_loop);
