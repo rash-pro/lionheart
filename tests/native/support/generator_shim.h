@@ -13,6 +13,7 @@
 #include "discover.h"
 #include "emit.h"
 #include "json.h"
+#include "locals.h"
 #include "sha1.h"
 
 typedef struct {
@@ -35,5 +36,6 @@ int lhgt_infer_effect_base(lhgt_session *session, const uint8_t *data, size_t si
                            uint32_t *base, const lhg_json **evidence);
 int lhgt_load_legacy_disc(lhgt_session *session, const char *catalog_dir, const char *cue, const char *assets_dir,
                           lhg_program *program);
+int lhgt_cache_read(lhgt_session *session, const char *path, const lhg_register_cache **selection);
 
 #endif

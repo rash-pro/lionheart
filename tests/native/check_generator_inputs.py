@@ -46,7 +46,10 @@ def image_text(image, seeds, scan_calls):
     ranges = ''.join(f'{lo}-{hi},' for lo, hi in image.code_ranges)
     points = ''.join(f'{p},' for p in image.entry_points)
     seed_text = ''.join(f'{s},' for s in seeds)
-    return f'{image.base}|{image.entry}|{ranges}|{points}|{seed_text}|{int(bool(scan_calls))}|{bytes(image.data).hex()}'
+    text = f'{image.base}|{image.entry}|{ranges}|{points}|{seed_text}|{int(bool(scan_calls))}|{bytes(image.data).hex()}'
+    if image.timing_entry_points:
+        text += '|timing-entry-points|' + ''.join(f'{p},' for p in image.timing_entry_points)
+    return text
 
 
 class Recorder:
@@ -57,26 +60,56 @@ class Recorder:
         import recomp.emit
         self.programs = collections.defaultdict(set)
         self.discoveries = {}
+        self.images = {}
+        self.emit_depth = 0
         self.real_discover = recomp.discover.discover
         self.real_emit = recomp.emit.emit
         recomp.discover.discover = self.discover
         recomp.emit.emit = self.emit
+        from recomp.timing import TimingEmitter
+        real_timing_emit = TimingEmitter.emit
+        def timing_emit(emitter):
+            # Direct TimingEmitter tests bypass emit(), but lower the same
+            # discovered function with the same block/loose policy.
+            if not self.emit_depth:
+                functions = emitter.functions
+                _, seeds, scan = self.discoveries[id(functions)]
+                image = self.images[id(functions)]
+                mode = 'loose' if emitter.loose else 'block'
+                current = os.environ['PYTEST_CURRENT_TEST'].split(' ')[0]
+                self.programs[current].add(f'program|fast|fast|{mode}|{image_text(image, seeds, scan)}')
+            return real_timing_emit(emitter)
+        TimingEmitter.emit = timing_emit
 
     def discover(self, image, seeds=(), scan_calls=True, *args, **kwargs):
         result = self.real_discover(image, seeds, scan_calls, *args, **kwargs)
         self.discoveries[id(result)] = (result, tuple(seeds), scan_calls)
+        self.images[id(result)] = image
         return result
 
     def emit(self, image, functions, output, mode='fast', overlays=(), host_mode='fast', timing='exact', register_cache=None):
         current = os.environ['PYTEST_CURRENT_TEST'].split(' ')[0]
-        _, seeds, scan = self.discoveries[id(functions)]
+        empty = not functions and id(functions) not in self.discoveries
+        _, seeds, scan = (None, (), True) if empty else self.discoveries[id(functions)]
         text = f'program|{mode}|{host_mode}|{timing}|{image_text(image, seeds, scan)}'
         for index, overlay, funcs in overlays:
             _, overlay_seeds, overlay_scan = self.discoveries[id(funcs)]
             text += f'|overlay|{index}|{image_text(overlay, overlay_seeds, overlay_scan)}'
+        if register_cache is not None:
+            text += f'|register-cache|{register_cache["max_registers"]}|functions|'
+            text += ''.join(f'{name},' for name in register_cache['functions'])
+            text += '|fuse-forward|'
+            text += (''.join(f'{name},' for name in register_cache['fuse_forward'])
+                     if 'fuse_forward' in register_cache else 'absent')
+        if empty:
+            text += '|empty-functions'
         self.programs[current].add(text)
-        return self.real_emit(image, functions, output, mode=mode, overlays=overlays, host_mode=host_mode,
-                              timing=timing, register_cache=register_cache)
+        self.emit_depth += 1
+        try:
+            return self.real_emit(image, functions, output, mode=mode, overlays=overlays, host_mode=host_mode,
+                                  timing=timing, register_cache=register_cache)
+        finally:
+            self.emit_depth -= 1
 
 
 def native_name(node):
