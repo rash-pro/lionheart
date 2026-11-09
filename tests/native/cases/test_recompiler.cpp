@@ -525,6 +525,15 @@ LH_TEST_P(test_nonlocal_reentry_discards_abandoned_call_frames, nonlocal_rows())
     LH_EQ(state.state[8], 0u); LH_CHECK(!state.state[37]);
     if (p.name == "nonlocal_child") LH_EQ(state.counts[0], 0u);
 }
-LH_PENDING(test_bios_longjmp_resumes_compiled_return_site);
+LH_TEST_P(test_bios_longjmp_resumes_compiled_return_site, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Words saved = Words{table().pcs.at("bios_longjmp") + 8, 0x801FFFF0, 0xFFFFFFFF} + Words(9, 0);
+    Pairs memory;
+    for (unsigned i = 0; i < saved.size(); ++i) memory.emplace_back(DATA + i * 4, saved[i]);
+    const Outcome state = diff(t, h, "bios_longjmp", {{4, DATA}, {5, 1}}, memory);
+    LH_EQ(state.state[2], 1u); LH_EQ(state.state[10], 77u); LH_CHECK(!state.state[37]);
+    LH_EQ(state.counts[0], 0u);
+}
 
 } // namespace
