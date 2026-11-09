@@ -2,6 +2,7 @@
 // code with backends/host or zlib, which the display code is linked against, so a
 // bug there cannot cancel itself out here. It accepts only the one format the
 // runtime writes (RGB8, no interlace, filter None) and fails on anything else.
+// Screenshot callers can also opt into filter Up, reconstructed independently.
 #pragma once
 
 #include <array>
@@ -190,7 +191,7 @@ struct PngImage {
     std::string rgb;
 };
 
-inline PngImage read_png(const std::string &data) {
+inline PngImage read_png(const std::string &data, bool allow_up = false) {
     const auto be32 = [&](size_t at) {
         if (at + 4 > data.size()) throw std::runtime_error("PNG oracle: truncated chunk");
         return uint32_t(static_cast<uint8_t>(data[at])) << 24 | uint32_t(static_cast<uint8_t>(data[at + 1])) << 16 |
@@ -228,8 +229,12 @@ inline PngImage read_png(const std::string &data) {
     if (raw.size() != stride * image.height) throw std::runtime_error("PNG oracle: wrong decompressed size");
     image.rgb.reserve(raw.size());
     for (size_t row = 0; row < image.height; ++row) {
-        if (raw[row * stride] != 0) throw std::runtime_error("PNG oracle: unexpected filter byte");
+        const unsigned filter = static_cast<uint8_t>(raw[row * stride]);
+        if (filter != 0 && !(allow_up && filter == 2)) throw std::runtime_error("PNG oracle: unexpected filter byte");
+        const size_t start = image.rgb.size();
         image.rgb.append(raw, row * stride + 1, stride - 1);
+        if (filter == 2 && row) for (size_t x = 0; x < stride - 1; ++x)
+            image.rgb[start + x] = char(uint8_t(image.rgb[start + x]) + uint8_t(image.rgb[start + x - (stride - 1)]));
     }
     return image;
 }
