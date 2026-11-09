@@ -177,7 +177,9 @@ static void extract_disc(lhg_arena *arena, const char *cue, const char *work, co
         const char *image = lhg_json_str(ctx, lhg_json_require(ctx, member->value, "image", "disc"), "image");
         if (lookup_exact(&disc, exe) && lookup_exact(&disc, image)) {
             info = member->value;
-            number = atoi(member->key);
+            if (member->key_length != 1 || member->key[0] < '1' || member->key[0] > '4')
+                lhg_fail(ctx, "overlays.json: disc numbers must be 1 to 4");
+            number = member->key[0] - '0';
             matches++;
         }
     }
@@ -218,11 +220,17 @@ static void extract_disc(lhg_arena *arena, const char *cue, const char *work, co
     size_t set_count = 0, set_capacity = 0;
     for (size_t position = 0; position < expected_count; position++) {
         const lhg_json *row = expected[position];
-        int index = (int)lhg_json_int(ctx, lhg_json_require(ctx, row, "index", "overlay"), "overlay index");
+        int64_t raw_index = lhg_json_int(ctx, lhg_json_require(ctx, row, "index", "overlay"), "overlay index");
+        if (raw_index < 0 || raw_index > 0xFFFF)
+            lhg_fail(ctx, "overlay index out of range");
+        int index = (int)raw_index;
         int64_t lba, size;
         const lhg_json *sector = lhg_json_find(row, "img_sector");
         if (sector) {
-            lba = (int64_t)image_record->record.lba + lhg_json_int(ctx, sector, "img_sector");
+            int64_t offset = lhg_json_int(ctx, sector, "img_sector");
+            if (offset < -(int64_t)UINT32_MAX || offset > (int64_t)UINT32_MAX)
+                lhg_fail(ctx, "overlay %d is outside the disc", index);
+            lba = (int64_t)image_record->record.lba + offset;
             size = lhg_json_int(ctx, lhg_json_require(ctx, row, "stored_size", "overlay"), "stored_size");
         } else {
             if (index < 0 || index >= 256)
@@ -607,7 +615,9 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
                 lhg_fail(ctx, "%s has no inventory entry on disc %d", path, disc);
             const lhg_json *locator = lhg_json_require(ctx, inventory_entry, "locator", "inventory entry");
             int has_top = !strcmp(lhg_json_str(ctx, lhg_json_require(ctx, locator, "table", "locator"), "table"), "top");
-            int top = has_top ? (int)lhg_json_int(ctx, lhg_json_require(ctx, locator, "index", "locator"), "index") : -1;
+            int64_t raw_top = has_top ? lhg_json_int(ctx, lhg_json_require(ctx, locator, "index", "locator"), "index") : -1;
+            /* Anything outside a top table's slots is simply not a known loader index. */
+            int top = raw_top >= 0 && raw_top < 256 ? (int)raw_top : -1;
             int index = has_top && is_legacy_top(top) ? (disc - 1) * 32 + top : extra;
             /* Comparing the result rather than the path mirrors how indices were assigned. */
             if (index == extra)

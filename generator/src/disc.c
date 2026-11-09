@@ -64,6 +64,8 @@ uint8_t *lhg_disc_read(lhg_disc *disc, uint32_t lba, int64_t size)
     if (size < 0)
         lhg_fail(disc->ctx, "disc read with a negative size");
     /* Checked before allocating: a corrupt size must not become a giant buffer. */
+    if (size > disc->bin_size)
+        lhg_fail(disc->ctx, "truncated disc image");
     int64_t last_sector = (int64_t)lba + (size + USER_SECTOR - 1) / USER_SECTOR;
     if (last_sector * RAW_SECTOR > disc->bin_size + RAW_SECTOR)
         lhg_fail(disc->ctx, "truncated disc image");
@@ -252,7 +254,9 @@ void lhg_ff8_image_close(lhg_ff8_image *image)
 uint8_t *lhg_ff8_image_read(lhg_ff8_image *image, int64_t sector, int64_t size)
 {
     lhg_ctx *ctx = image->disc.ctx;
-    if (sector < 0 || size < 0 || sector * USER_SECTOR + size > (int64_t)image->record.size)
+    /* Catalog values are untrusted; the first two limits keep the sum from overflowing. */
+    if (sector < 0 || size < 0 || sector > (int64_t)image->record.size || size > (int64_t)image->record.size ||
+        sector * USER_SECTOR + size > (int64_t)image->record.size)
         lhg_fail(ctx, "IMG read outside image: sector=%lld, size=%lld", (long long)sector, (long long)size);
     return lhg_disc_read(&image->disc, image->record.lba + (uint32_t)sector, size);
 }

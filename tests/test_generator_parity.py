@@ -1,4 +1,5 @@
 """Byte parity between the C generator and the Python recompiler, and its error handling."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -344,6 +345,76 @@ def test_malformed_inputs_end_with_a_message(tools, tmp_path):
         run_cli(tools, exe, '--catalog', bad, '-o', out, cwd=tmp_path)
     (bad / 'overlays.json').write_bytes(b'{"exe_sha1": "\xff\xfe"}')
     run_cli(tools, exe, '--catalog', bad, '-o', out, cwd=tmp_path)
+
+
+def directory_record(name, lba, size):
+    encoded = name.encode()
+    length = 33 + len(encoded) + (1 - len(encoded) % 2)
+    record = bytearray(length)
+    record[0] = length
+    struct.pack_into('<I', record, 2, lba)
+    struct.pack_into('<I', record, 10, size)
+    record[32] = len(encoded)
+    record[33:33 + len(encoded)] = encoded
+    return bytes(record)
+
+
+def synthetic_ff8_disc(tmp_path):
+    """A disc holding only an executable and a well-formed, otherwise empty IMG."""
+    disc = tmp_path / 'ff8.bin'
+    write_disc(disc, 32)
+    data = bytearray(disc.read_bytes())
+    exe = valid_exe()
+    def put(sector, payload):
+        for index in range(0, len(payload), 2048):
+            start = (sector + index // 2048) * 2352 + 24
+            data[start:start + len(payload[index:index + 2048])] = payload[index:index + 2048]
+    put(18, directory_record('SLUS_008.92;1', 20, len(exe)) + directory_record('FF8DISC1.IMG;1', 24, 4096))
+    put(20, exe)
+    put(24, struct.pack('<266I', *[1] * 266))
+    disc.write_bytes(bytes(data))
+    cue = tmp_path / 'ff8.cue'
+    cue.write_text('FILE "ff8.bin" BINARY\n')
+    return cue, hashlib.sha1(exe).hexdigest()
+
+
+def catalog_dir(tmp_path, sha1, overlay_rows, locations):
+    directory = tmp_path / 'catalog'
+    directory.mkdir(exist_ok=True)
+    (directory / 'overlays.json').write_text(json.dumps({
+        'exe_sha1': sha1, 'main_code_ranges': [['0x80010000', '0x80010400']],
+        'discs': {'1': {'exe': 'SLUS_008.92', 'image': 'FF8DISC1.IMG', 'overlays': overlay_rows}}}))
+    (directory / 'files-disc1.json').write_text(json.dumps({
+        'exe': {'name': 'SLUS_008.92'}, 'image': {'lba': 24, 'size': 4096}, 'entries': []}))
+    (directory / 'overlays-all.json').write_text(json.dumps({'overlays': [
+        {'name': 'x', 'names': ['x'], 'paths': ['x'], 'sha1': '0' * 40, 'size': 1, 'locations': locations}]}))
+    return directory
+
+
+@pytest.mark.parametrize('sector,size,message', [
+    (2 ** 62, 16, 'outside image'), (2 ** 63 - 1, 16, 'outside image'), (-1, 16, 'outside image'),
+    (0, 2 ** 62, 'outside image'), (0, 2 ** 63 - 1, 'outside image'), (1, 2 ** 63 - 1, 'outside image'),
+    (0, 16, 'catalog bytes disagree')])
+def test_catalog_locations_are_bounded(tools, tmp_path, sector, size, message):
+    cue, sha1 = synthetic_ff8_disc(tmp_path)
+    location = {'disc': 1, 'path': 'x', 'sector': sector, 'size': size, 'read_size': 16, 'compressed': False,
+                'sha1_stored': '0' * 40, 'loaded_sha1': '0' * 40, 'loaded_size': 16, 'load_address': '0x80098000'}
+    catalog = catalog_dir(tmp_path, sha1, [], [location])
+    assert message in run_cli(tools, '--disc', cue, '--catalog', catalog, '-o', tmp_path / 'out', cwd=tmp_path)
+
+
+@pytest.mark.parametrize('row,message', [
+    ({'index': 2 ** 40, 'img_sector': 0, 'stored_size': 16}, 'overlay index'),
+    ({'index': 2 ** 31 - 1, 'img_sector': 0, 'stored_size': 16}, 'overlay index'),
+    ({'index': 0, 'img_sector': 2 ** 63 - 1, 'stored_size': 16}, 'outside the disc'),
+    ({'index': 0, 'img_sector': -30, 'stored_size': 16}, 'outside the disc'),
+    ({'index': 0, 'img_sector': 0, 'stored_size': 2 ** 63 - 1}, 'truncated'),
+    ({'index': 0, 'img_sector': 0, 'stored_size': -1}, 'negative')])
+def test_legacy_rows_are_bounded(tools, tmp_path, row, message):
+    cue, sha1 = synthetic_ff8_disc(tmp_path)
+    full = dict(row, compressed=False, load_address='0x80098000', size=16, sha1='0' * 40)
+    catalog = catalog_dir(tmp_path, sha1, [full], [])
+    assert message in run_cli(tools, '--disc', cue, '--legacy-overlays', '--catalog', catalog, '-o', tmp_path / 'out', cwd=tmp_path)
 
 
 def test_rerun_keeps_timestamps_and_removes_stale_units(tools, tmp_path):
