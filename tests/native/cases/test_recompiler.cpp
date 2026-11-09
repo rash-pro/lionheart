@@ -490,7 +490,20 @@ LH_TEST_P(test_jump_table_words_invalidate_compiled_function, kVariantRows) {
     const Outcome state = diff(t, h, "jump_table", {{4, 0}}, {{table().table, table().table_pc + 44}});
     LH_EQ(state.state[2], 77u); LH_CHECK(state.counts[0] > 0);
 }
-LH_PENDING(test_overlay_data_write_does_not_change_code_epoch);
+LH_TEST_P(test_overlay_data_write_does_not_change_code_epoch, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    std::string blob = pack(Words{r(33, 31, 0, 25), j(3, table().pcs.at("callee")), 0,
+                                  imm(9, 0, 2, 42), r(33, 25, 0, 31)} + RET);
+    blob.append(16, '\0');
+    h.test_image(cpu.get(), 0x80098000, blob.data(), blob.size());
+    h.test_run(cpu.get(), 0x80098000, 0);
+    const uint64_t before = h.test_code_epoch(cpu.get());
+    h.test_write(cpu.get(), 0x80098028, 1, 1); LH_EQ(h.test_code_epoch(cpu.get()), before);
+    h.test_write(cpu.get(), 0x80098000, 1, 1); LH_CHECK(h.test_code_epoch(cpu.get()) > before);
+}
 LH_PENDING(test_deep_guest_recursion_resumes_compiled_returns);
 LH_PENDING(test_nonlocal_reentry_discards_abandoned_call_frames);
 LH_PENDING(test_bios_longjmp_resumes_compiled_return_site);
