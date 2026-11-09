@@ -6,6 +6,7 @@ source or the Windows distribution. Vendored sources retain their notices;
 
 | Component | Licence and shipped notice |
 | --- | --- |
+| stb_image 2.30 (host build only) | MIT: [stb_image.h](third_party/stb/stb_image.h); standalone zlib decoder |
 | parallel-psx | ISC: [COPYING](third_party/parallel-psx/COPYING) |
 | Vulkan/util helpers in parallel-psx | MIT notices in the individual source headers |
 | volk | MIT: [volk.h](third_party/parallel-psx/volk/volk.h) |
