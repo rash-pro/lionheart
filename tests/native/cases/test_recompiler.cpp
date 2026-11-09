@@ -435,7 +435,17 @@ LH_TEST_P(test_stop_unwinds_before_following_instruction, bool_rows()) {
     LH_CHECK(snapshot[37]); LH_EQ(snapshot[10], 123u);
     LH_EQ(snapshot[34], table().pcs.at("overflow_addi")); LH_EQ(h.test_count(cpu.get(), 4), 1u);
 }
-LH_PENDING(test_instruction_budget_stops_loop);
+LH_TEST_P(test_instruction_budget_stops_loop, bool_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    h.test_register(cpu.get(), 8, 1000000); h.test_limits(cpu.get(), 10000, 0);
+    h.test_run(cpu.get(), table().pcs.at("loop"), p.value);
+    LH_TEXT_EQ(h.test_reason(cpu.get()), "instruction budget exhausted");
+    const uint64_t count = h.test_count(cpu.get(), 0) + h.test_count(cpu.get(), 4);
+    LH_CHECK(count >= 10000 && count < 10004);
+}
 LH_PENDING(test_modified_source_is_interpreted);
 LH_PENDING(test_store_to_current_function_exits_before_stale_instruction);
 LH_PENDING(test_gte_store_to_current_function_exits_before_stale_instruction);
