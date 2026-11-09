@@ -504,7 +504,13 @@ LH_TEST_P(test_overlay_data_write_does_not_change_code_epoch, kVariantRows) {
     h.test_write(cpu.get(), 0x80098028, 1, 1); LH_EQ(h.test_code_epoch(cpu.get()), before);
     h.test_write(cpu.get(), 0x80098000, 1, 1); LH_CHECK(h.test_code_epoch(cpu.get()) > before);
 }
-LH_PENDING(test_deep_guest_recursion_resumes_compiled_returns);
+LH_TEST_P(test_deep_guest_recursion_resumes_compiled_returns, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "deep_recursion", {{8, 1000}});
+    LH_EQ(state.state[8], 0u); LH_EQ(state.state[29], 0x801FFFF0u); LH_CHECK(!state.state[37]);
+    LH_EQ(state.counts[0], 0u);
+}
 LH_PENDING(test_nonlocal_reentry_discards_abandoned_call_frames);
 LH_PENDING(test_bios_longjmp_resumes_compiled_return_site);
 
