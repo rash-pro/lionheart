@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <regex>
 #include <set>
+#include <dlfcn.h>
 #include <unistd.h>
 
 namespace lh {
@@ -56,6 +57,34 @@ Command Case::harness(const std::string &name) const {
     }
     if (!fs::exists(found->second)) LH_FAIL("harness " + key + " was not built (" + found->second + ")");
     return Command(found->second, true);
+}
+
+// Libraries are only ever built for the machine the runner is on: a cross build
+// has no way to load a Windows library into a Linux process, so a case asking for
+// one there records why and skips instead of pretending to have run it.
+Library Case::library(const std::string &name) const {
+    const std::string key = stem_ + "." + name;
+    const auto found = build_info().harnesses.find(key);
+    if (found == build_info().harnesses.end()) {
+        if (build_info().windows_paths || !build_info().emulator.empty()) {
+            skip("library " + key + " is only built for a native runner");
+        }
+        std::string declared;
+        for (const auto &entry : build_info().harnesses) {
+            if (entry.first.rfind(stem_ + ".", 0) == 0) declared += "\n  " + entry.first;
+        }
+        LH_FAIL("library " + key + " is not declared in " + stem_ + ".cmake; declared:" + declared);
+    }
+    if (!fs::exists(found->second)) LH_FAIL("library " + key + " was not built (" + found->second + ")");
+    void *handle = dlopen(found->second.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!handle) LH_FAIL("cannot load " + found->second + ": " + dlerror());
+    return Library(handle, key);
+}
+
+void *Library::address(const char *symbol) const {
+    void *found = dlsym(handle_, symbol);
+    if (!found) LH_FAIL("library " + name_ + " does not export " + symbol);
+    return found;
 }
 
 Command Case::player() const {
