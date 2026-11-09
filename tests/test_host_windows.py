@@ -1,6 +1,7 @@
 """Player session behavior and bounded portable hashing, without private media."""
 import hashlib
 import os
+import signal
 from pathlib import Path
 import subprocess
 
@@ -17,8 +18,14 @@ def session_binary(tmp_path_factory):
 #include <SDL.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
+#include <stdlib.h>
 int host_player_main(int argc, char **argv) {
-    (void)argc; (void)argv;
+    if (argc == 3 && !strcmp(argv[1], "--crash")) raise(atoi(argv[2]));
+    if (argc == 2 && !strcmp(argv[1], "--abnormal")) {
+        fputs("Stop: test fault\nLast PC: 80010000\n", stderr);
+        return 1;
+    }
     fputs("fatal startup: supply disc 1\n",stderr);
     for (int i=0;i<10000;++i) fputc('x',stderr);
     return 2;
@@ -94,3 +101,21 @@ def test_log_directory_failure_has_fatal_diagnostic(session_binary, tmp_path):
     assert proc.stderr == "Cannot create Lionheart log directory\n"
     assert "messagebox title=Lionheart" in proc.stdout
     assert blocked.read_text() == "owned test file"
+
+
+@pytest.mark.parametrize("number", [signal.SIGSEGV, signal.SIGABRT, signal.SIGFPE, signal.SIGILL, signal.SIGBUS])
+def test_player_session_fatal_signal(session_binary, tmp_path, number):
+    result = subprocess.run([str(session_binary), "--crash", str(number)],
+                            env={**os.environ, "XDG_DATA_HOME": str(tmp_path / "data")},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == -number
+    assert (tmp_path / "data/lionheart/logs/lionheart.log").read_text() == f"Fatal signal 0x{number:08x}\n"
+
+
+def test_player_session_abnormal_stop_has_no_dialog(session_binary, tmp_path):
+    result = subprocess.run([str(session_binary), "--abnormal"],
+                            env={**os.environ, "XDG_DATA_HOME": str(tmp_path / "data")},
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1 and result.stdout == ""
+    assert result.stderr == "Stop: test fault\nLast PC: 80010000\n"
+    assert (tmp_path / "data/lionheart/logs/lionheart.log").read_text() == result.stderr

@@ -862,6 +862,13 @@ int main(int argc, char **argv) {
 #ifdef FF8_GUI
     if (gui_allowed && host_gui_test_failed()) result = 2;
 #endif
+    /* Keep the runtime stop and its stdout summary intact for replay tools. */
+    if (strcmp(c->stop_reason, "VBlank limit reached") &&
+        strcmp(c->stop_reason, "instruction budget exhausted") &&
+        (strcmp(c->stop_reason, "host display closed or failed") || host_display_failed())) {
+        fprintf(stderr, "Stop: %s\nLast PC: %08x\n", c->stop_reason, c->pc);
+        if (!result) result = 1;
+    }
     hw_sync(c);
     summary(c);
     printf("Trace: %s\n", log_path);

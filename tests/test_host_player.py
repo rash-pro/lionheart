@@ -390,3 +390,20 @@ def test_legal_check_detects_windows_and_ignores_low_entropy():
     with pytest.raises(ValueError, match="offset 13"):
         check(bytes(13) + text[17:81] + bytes(20), text)
     assert check(bytes(200), bytes(200))["unique_guest_windows"] == 0
+
+
+@pytest.mark.parametrize("kind", ["fault", "limit"])
+def test_player_stop_log_and_status(synthetic_player, tmp_path, kind):
+    image = disc(tmp_path / "game.bin")
+    args = ["--max-instructions", "16"] if kind == "limit" else ["--stall", "4"]
+    result = play(synthetic_player, tmp_path, "--disc", image, "--fast", "--mute", *args)
+    assert result.returncode == (0 if kind == "limit" else 1), result.stderr
+    summary = result.stdout.splitlines()[:2]
+    assert summary[0].startswith("Stop: " + ("instruction budget exhausted" if kind == "limit" else "stall:"))
+    assert re.fullmatch(r"Last PC: [0-9a-f]{8}", summary[1])
+    log = (tmp_path / "data/lionheart/logs/lionheart.log").read_text()
+    if kind == "fault":
+        assert "\n".join(summary) + "\n" in log
+        assert "\n".join(summary) + "\n" in result.stderr
+    else:
+        assert "Stop:" not in log

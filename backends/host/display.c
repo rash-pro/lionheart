@@ -824,6 +824,7 @@ void host_display_recover(gpu_t *g, uint64_t vblank) {
     host.frame = vblank; present(g,0);
 }
 int host_display_running(void) { return !host.quit; }
+int host_display_failed(void) { return host.failed; }
 
 int host_display_shutdown(gpu_t *g) {
     int ok;
