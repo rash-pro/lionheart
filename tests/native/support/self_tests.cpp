@@ -53,6 +53,21 @@ LH_TEST(process_timeout_kills_the_program_and_its_children) {
     LH_CHECK_MSG(gone, "a process started by the timed-out program is still running");
 }
 
+LH_TEST(process_delivers_binary_standard_input) {
+    std::string bytes(300000, '\0');
+    for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>(i * 37 + (i >> 8));
+    auto result = t.ok(t.host("/bin/cat").input(bytes).timeout(30));
+    LH_BYTES_EQ(result.out, bytes);
+}
+
+// The input is larger than a pipe holds and the program answers before reading it.
+LH_TEST(process_input_does_not_deadlock_or_kill_the_runner) {
+    auto result = t.run(t.host("/bin/sh").args({"-c", "echo early; exit 3"})
+                         .input(std::string(1 << 20, 'x')).timeout(10));
+    LH_EQ(result.rc, 3);
+    LH_TEXT_EQ(result.out, "early\n");
+}
+
 LH_TEST(missing_program_fails_with_its_name) {
     bool reported = false;
     try {

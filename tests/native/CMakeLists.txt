@@ -34,21 +34,40 @@ define_property(GLOBAL PROPERTY LH_HARNESSES BRIEF_DOCS "Harness targets" FULL_D
 #   [INCLUDES runtime ...]   relative to the repository root
 #   [LINK_FLAGS ...]         only for the link, such as -Wl,--wrap=calloc
 #   [SANITIZE_FLAGS ...]     used only with FF8_TEST_SANITIZE, for compile and link
-#   [RUNTIME_ALL])           also link every runtime/*.c, built with the same flags
+#   [RUNTIME_ALL]            also link every runtime/*.c, built with the same flags
+#   [RUNTIME_EXCLUDE hw.c]   names to leave out of RUNTIME_ALL, for a file the fragment replaces
+#   [LIBRARY]                build a loadable module for t.library("NAME") instead of a program
+#   [LIBS ...])              libraries for the link, after the objects (-lz, -lSDL2)
 #
 # The harness is known to cases as t.harness("NAME") from the file with the same
 # stem as this fragment, so names cannot collide between files.
 function(lh_harness name)
-  cmake_parse_arguments(PARSE_ARGV 1 H "RUNTIME_ALL" "" "SOURCES;FLAGS;CXX_FLAGS;INCLUDES;LINK_FLAGS;SANITIZE_FLAGS")
+  cmake_parse_arguments(PARSE_ARGV 1 H "RUNTIME_ALL;LIBRARY" "" "SOURCES;FLAGS;CXX_FLAGS;INCLUDES;LINK_FLAGS;SANITIZE_FLAGS;LIBS;RUNTIME_EXCLUDE")
   if(H_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "lh_harness(${name}): unknown arguments ${H_UNPARSED_ARGUMENTS}")
   endif()
   get_filename_component(stem "${CMAKE_CURRENT_LIST_FILE}" NAME_WE)
   set(target "${stem}.${name}")
+  # The runner on the build machine cannot load a library built for another system.
+  if(H_LIBRARY AND CMAKE_CROSSCOMPILING)
+    return()
+  endif()
 
   set(c_flags ${H_FLAGS} -UNDEBUG)
   set(cxx_flags ${H_CXX_FLAGS} -UNDEBUG)
   set(link_flags ${H_LINK_FLAGS})
+  if(H_LIBRARY)
+    # A loadable module needs position-independent objects, including shared RUNTIME_ALL ones.
+    list(APPEND c_flags -fPIC)
+    list(APPEND cxx_flags -fPIC)
+  endif()
+  # A sanitizer named in FLAGS is mandatory for that harness, and compiling with
+  # one requires linking with it too, so the guide's flags need no second copy.
+  foreach(flag IN LISTS H_FLAGS H_CXX_FLAGS)
+    if(flag MATCHES "^-f(no-)?sanitize")
+      list(APPEND link_flags "${flag}")
+    endif()
+  endforeach()
   if(FF8_TEST_SANITIZE)
     list(APPEND c_flags ${H_SANITIZE_FLAGS})
     list(APPEND cxx_flags ${H_SANITIZE_FLAGS})
@@ -69,21 +88,29 @@ function(lh_harness name)
     endif()
   endforeach()
 
-  add_executable("${target}" ${sources})
-  set_target_properties("${target}" PROPERTIES
-    OUTPUT_NAME "${name}"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/harness/${stem}")
+  if(H_LIBRARY)
+    add_library("${target}" MODULE ${sources})
+    set_target_properties("${target}" PROPERTIES PREFIX "" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/harness/${stem}")
+  else()
+    add_executable("${target}" ${sources})
+    set_target_properties("${target}" PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/harness/${stem}")
+  endif()
+  set_target_properties("${target}" PROPERTIES OUTPUT_NAME "${name}")
   target_compile_options("${target}" PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:${c_flags}>" "$<$<COMPILE_LANGUAGE:CXX>:${cxx_flags}>")
   target_include_directories("${target}" PRIVATE ${includes})
   target_link_options("${target}" PRIVATE ${link_flags})
-  target_link_libraries("${target}" PRIVATE m)
+  target_link_libraries("${target}" PRIVATE ${H_LIBS} m)
 
   if(H_RUNTIME_ALL)
-    string(MD5 key "${c_flags};${includes}")
+    string(MD5 key "${c_flags};${includes};${H_RUNTIME_EXCLUDE}")
     set(objects "lh_runtime_${key}")
     if(NOT TARGET "${objects}")
-      add_library("${objects}" OBJECT ${LH_RUNTIME_SOURCES})
+      set(runtime_sources ${LH_RUNTIME_SOURCES})
+      foreach(excluded IN LISTS H_RUNTIME_EXCLUDE)
+        list(FILTER runtime_sources EXCLUDE REGEX "/${excluded}$")
+      endforeach()
+      add_library("${objects}" OBJECT ${runtime_sources})
       target_compile_options("${objects}" PRIVATE ${c_flags})
       target_include_directories("${objects}" PRIVATE ${includes})
     endif()
@@ -131,12 +158,13 @@ if(CMAKE_CROSSCOMPILING)
 else()
   file(GLOB LH_CASE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cases/*.cpp")
   add_executable(lionheart_tests
-    support/runner.cpp support/process.cpp support/fixtures.cpp support/self_tests.cpp
+    support/runner.cpp support/process.cpp support/fixtures.cpp support/self_tests.cpp support/oracle_self_tests.cpp
     ${LH_CASE_SOURCES})
-  target_include_directories(lionheart_tests PRIVATE support)
+  target_include_directories(lionheart_tests PRIVATE support ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_features(lionheart_tests PRIVATE cxx_std_17)
   set_target_properties(lionheart_tests PROPERTIES CXX_EXTENSIONS OFF)
   target_compile_options(lionheart_tests PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
+  target_link_libraries(lionheart_tests PRIVATE ${CMAKE_DL_LIBS})
   # Cases list themselves after each build, so a new case needs no CMake edit.
   add_custom_command(TARGET lionheart_tests POST_BUILD
     COMMAND lionheart_tests --build-info "${LH_BUILD_INFO}" --emit-ctest "${LH_CASES_FILE}"

@@ -2,6 +2,8 @@
 #include "lh_internal.h"
 
 #include <algorithm>
+#include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -69,6 +71,26 @@ void read_build_info(const fs::path &path) {
     }
 }
 
+// A loaded library can take the process down from inside a C function, so the
+// failure text has to come from the signal itself or CTest shows nothing but
+// an exit code. Write that one line, then die of the same signal.
+char crash_note[512];
+
+extern "C" void on_fatal_signal(int number) {
+    const char *name = number == SIGSEGV ? "SIGSEGV" : number == SIGABRT ? "SIGABRT"
+                     : number == SIGFPE ? "SIGFPE" : number == SIGBUS ? "SIGBUS" : "fatal signal";
+    (void)!write(1, crash_note, std::strlen(crash_note));
+    (void)!write(1, name, std::strlen(name));
+    (void)!write(1, "\n", 1);
+    signal(number, SIG_DFL);
+    raise(number);
+}
+
+void announce_crashes_for(const std::string &name) {
+    std::snprintf(crash_note, sizeof(crash_note), "FAIL %s: the case process crashed with ", name.c_str());
+    for (int number : {SIGSEGV, SIGABRT, SIGFPE, SIGBUS, SIGILL}) signal(number, on_fatal_signal);
+}
+
 Registered *find_case(const std::string &name) {
     for (Registered &entry : registry()) if (entry.name == name) return &entry;
     return nullptr;
@@ -85,6 +107,7 @@ int run_case(const std::string &name) {
     setenv("SDL_VIDEODRIVER", "dummy", 0);
     setenv("SDL_AUDIODRIVER", "dummy", 0);
     Case test(name);
+    announce_crashes_for(name);
     try {
         if (entry->tier == Tier::game) {
             const char *discs = std::getenv("LIONHEART_DISCS");

@@ -13,7 +13,8 @@ ctest --test-dir build/native-tests -j6 --output-on-failure -LE 'game|realtime'
 ```
 
 `tests/native` is its own CMake project: configuring it runs no Python, and top-level defines such as `FF8_PLAYER`
-cannot reach a harness. `build/native-tests/lionheart_tests --list` prints every case with its tier.
+cannot reach a harness. `build/native-tests/lionheart_tests --list` prints every case with its tier. On a shared machine limit the load with
+`nice` and a smaller `-j`; `parity` takes its jobs from `CTEST_PARALLEL_LEVEL`.
 
 Tiers are CTest labels: `-LE 'game|realtime'` is pytest's `-m 'not game and not realtime'`. `-L game` runs the
 owned-game cases; without `LIONHEART_DISCS` they skip with the reason in `ctest -V`. `infra` is this framework's own
@@ -23,7 +24,8 @@ self-tests and never counts toward parity.
 
 | Path | What it holds |
 |---|---|
-| `tests/native/support/` | the framework (`lh_test.h` is all a case includes) |
+| `tests/native/support/` | the framework (`lh_test.h` is all a process-style case includes; `py_random.h`, `values.h`, `equiv.h` add what internals cases need) |
+| `tests/native/oracles/` | independent references (IDCT, ADPCM, XA, PNG reading) |
 | `tests/native/identities.tsv` | every pytest identity with tier and baseline result, frozen at the import commit |
 | `tests/native/cases/test_X.cpp` | the cases of `tests/test_X.py` |
 | `tests/native/cases/test_X.cmake` | harnesses that file needs |
@@ -89,6 +91,10 @@ element gives that element its own tier, as `pytest.param(..., marks=...)` does.
 | `hashlib.sha256(...)` | `lh::sha256(bytes)`, `lh::sha256_file(path)` |
 | `owned_disc(n)`, `owned_path(rel)` | `lh::owned_disc(n)`, `lh::owned_path(rel)` |
 | `real_player` | `t.player()` (takes `FF8_PLAYER_HOST`; it fails instead of building one) |
+| `subprocess.run(input=bytes)` | `t.ok(cmd.input(bytes))` (binary is fine) |
+| `ctypes.CDLL`, `argtypes`, `restype` | `t.library(name).fn<Signature>("symbol")`, below |
+| `random.Random(n)`, its methods | `lh::PyRandom(n)`, same method names, below |
+| a Python reference inside a test | an independent header under `oracles/`, below |
 
 Pass paths as `lh::fs::path`, not strings: a Windows harness under Wine gets them as `Z:\...` automatically.
 Use `t.harness`, `t.player` or `t.target` for anything built for the target, and `t.host` only for tools that run
@@ -120,6 +126,56 @@ a self-test fails if assertions ever stop working.
 C that Python keeps in a string moves to `cases/test_X.c`, copied exactly. Where the Python generates a harness per
 test from parameters, generate the variants with a `foreach` in the fragment.
 
+`-fsanitize=...` in `FLAGS` also reaches the link, so copying a Python line with a mandatory sanitizer needs no
+`LINK_FLAGS` for it. `SANITIZE_FLAGS` remain for flags the Python only added under `FF8_TEST_SANITIZE`.
+
+## Reaching into the runtime (ctypes tests)
+
+A Python `ctypes` test becomes a native case that loads the same code as a library:
+
+```cmake
+lh_harness(model LIBRARY                # -shared -fPIC; loaded by the case, not run
+  FLAGS -std=c99 -O2 -DFF8_STATS
+  INCLUDES runtime
+  RUNTIME_ALL RUNTIME_EXCLUDE hw.c      # every runtime/*.c except a file the fragment replaces
+  LINK_FLAGS -Wl,-Bsymbolic             # each build's calls stay inside it, as the Python's did
+  LIBS z                                # -l libraries, after the objects
+  SOURCES tests/foo_harness.c "${generated}")
+```
+
+```cpp
+auto step = t.library("model").fn<void(void *, uint64_t)>("foo_step");   // argtypes/restype as a C++ signature
+```
+
+Every CTest test is its own process, so a library's globals last one case and a crash or failed `assert()` inside it
+takes down only that case, which still prints `FAIL <name>: ... crashed with SIGSEGV`. Assert with `LH_*` as usual.
+To compare two builds of the runtime, declare two libraries with `-Wl,-Bsymbolic` and load both: `RTLD_LOCAL` keeps
+their identically named symbols apart, and one build's functions can read the other's state (see `test_mdec_calendar`).
+For `static` runtime functions keep what the Python did: a small `cases/test_X.c` that `#include`s the runtime `.c`
+and exports a wrapper. Do not edit the runtime. A Windows target cannot be loaded by the Linux runner, so `t.library`
+skips there with a reason. System libraries such as SDL: `pkg_check_modules` in the fragment, as `cases/test_gpu.cmake`.
+
+### Identical random inputs
+
+`lh::PyRandom` reproduces CPython's `Random` for integer seeds: `random()`, `getrandbits(k)` for `k <= 64`,
+`randbytes(n)`, `randrange(start, stop)`, `randrange(stop)`, `randint(a, b)`. Use the same seed and the same calls in
+the same order. C++ evaluates the arguments of one call in an unspecified order, so never put two draws in one
+call; use separate declarations or a braced list. `randrange` with a step and `numpy.random` are not implemented.
+
+### Independent oracles
+
+An oracle under `oracles/` must not include, link or copy the code it judges; that independence is the point. Write
+it from the hardware rule or the Python equation, with `oracles/numeric.h` for Python's floor division and `clip`.
+`oracles/png.h` has its own inflate, so a bug in the zlib the display code links cannot cancel out.
+
+### Proving equality while Python is still here
+
+A port with random inputs or an oracle also proves itself: call `lh::equiv::record(t, ...)` for each vector, and add a
+function to `tests/native/check_against_python.py` that re-runs the real pytest body with the runtime replaced by a
+replay of those records. The replay compares inputs and returns the native oracle's answers, so the pytest assertion
+judges the native oracle; run the script after building (`python tests/native/check_against_python.py`). Delete it,
+`support/equiv.h` and the `lh::equiv::record` lines with Python.
+
 ## Done means
 
 - [ ] One native case for every row of the file in `identities.tsv`, and none extra. `--check-identities` passes,
@@ -130,13 +186,24 @@ test from parameters, generate the variants with a `foreach` in the fragment.
 - [ ] The same case fails readably after a deliberately broken expectation or harness (then undo the break).
 - [ ] `python -m pytest tests/test_X.py` still passes, and the Python file is unchanged.
 - [ ] No game bytes, generated code or private paths in the files you added.
+- [ ] Inputs and oracles, if the file has them, pass `tests/native/check_against_python.py`.
 
 Add new pytest tests to `identities.tsv` with the same commit that adds them. Rows are not regenerated: the file
 records what the suite had to match before Python was removed.
 
 ## Not covered yet
 
-Tests of the Python generator's internals, `ctypes` tests, numeric and image oracles, and the `tools/` directory are
-out of scope until their native replacements exist. Cases that need other top-level CMake targets (SDL, Vulkan) take
-them from a separate top-level build. Native tests run on Linux hosts; a Windows target is built by a cross
-configure that passes `-DLH_HOST_RUNNER=<native build>/lionheart_tests`.
+Tests of the generator's internals, `tools/`, a loopback HTTP service, NumPy image helpers and Vulkan replay are not
+covered yet. Cases that need other top-level CMake targets take them from a separate top-level build. Native tests
+run on Linux hosts; a Windows target is built by a cross configure that passes `-DLH_HOST_RUNNER=<native build>/lionheart_tests`.
+
+## What can be ported next
+
+| Group | Files | Needs beyond this guide |
+|---|---|---|
+| ctypes and identical inputs | `test_gte` (412), `test_host_viewport` | a library per the Python's `cc` line; `test_gte` also ports its equations to an oracle header |
+| checksums | `test_code_sha1` | a SHA-1 oracle next to `lh::sha256` |
+| host library tests | `test_host_crt`, `test_host_hotkeys`, `test_host_osd` | the ctypes parts are now expressible; Vulkan parts as those files decide |
+| needs the C generator | `test_scratchpad`, `test_idle`, `test_poll`, `test_poll_calendars`, `test_runtime`, `test_gte_timing`, `test_gte_diff`, `test_timing_boundaries`, `test_timing_partial_irq`, `test_timing_regions`, `test_timing_policy`, `test_recomp_configuration`, `test_perf_stats`, `test_recompiler` | wait for the C generator; the library and replay parts are ready |
+| Vulkan replay | `test_pgxp` (reuse `oracles/png.h`), `test_movie_hd`, `test_vulkan` | Vulkan fixtures |
+| service and NumPy | `test_ra_client`, `test_ra_gui`, `test_state_bridge`, `test_movie_frames` | a loopback HTTP fixture; NumPy's generator and image helpers |

@@ -64,6 +64,8 @@ public:
     Command &cwd(fs::path directory) { cwd_ = std::move(directory); return *this; }
     Command &env(std::string name, std::string value) { env_[std::move(name)] = std::move(value); return *this; }
     Command &unset(std::string name) { env_.erase(name); unset_.push_back(std::move(name)); return *this; }
+    // Standard input for the program, as bytes. Without it the program reads /dev/null.
+    Command &input(std::string bytes) { input_ = std::move(bytes); has_input_ = true; return *this; }
 
     const std::string &program() const { return program_; }
     bool target() const { return target_; }
@@ -72,6 +74,8 @@ public:
     const fs::path &working_directory() const { return cwd_; }
     const std::map<std::string, std::string> &environment() const { return env_; }
     const std::vector<std::string> &unset_names() const { return unset_; }
+    bool has_input() const { return has_input_; }
+    const std::string &input_bytes() const { return input_; }
 
 private:
     std::string program_;
@@ -81,6 +85,23 @@ private:
     fs::path cwd_, stdin_;
     std::map<std::string, std::string> env_;
     std::vector<std::string> unset_;
+    std::string input_;
+    bool has_input_ = false;
+};
+
+// A dynamically loaded harness library, for tests that call runtime functions
+// directly. Each case is its own process, so a library keeps its global state to
+// one case and a crash inside it fails only that case.
+class Library {
+public:
+    Library(void *handle, std::string name) : handle_(handle), name_(std::move(name)) {}
+    // A function with the C signature F, for example lib.fn<int(int)>("square").
+    // Like a ctypes argtypes list, F is the case's own statement of the signature.
+    template <class F> F *fn(const char *symbol) const { return reinterpret_cast<F *>(address(symbol)); }
+private:
+    void *address(const char *symbol) const;
+    void *handle_;
+    std::string name_;
 };
 
 // State for one running test. Each CTest test is one process and one Case.
@@ -107,6 +128,8 @@ public:
     Command player() const;
     // An already built game binary, such as build/dev/ff8.
     Command target(const fs::path &binary) const { return Command(binary.string(), true); }
+    // A shared library declared in this file's fragment with lh_harness(NAME LIBRARY ...).
+    Library library(const std::string &name) const;
     // A tool that always runs on the build machine.
     Command host(const std::string &program) const { return Command(program, false); }
 
