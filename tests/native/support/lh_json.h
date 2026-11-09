@@ -15,6 +15,7 @@ class Json {
     Json(bool v) : value_(v) {}
     Json(int v) : value_(int64_t(v)) {}
     Json(int64_t v) : value_(v) {}
+    Json(double v) : value_(v) {}
     Json(const char *v) : value_(std::string(v)) {}
     Json(std::string v) : value_(std::move(v)) {}
     Json(Object v) : value_(std::move(v)) {}
@@ -120,6 +121,11 @@ class Json {
             }
             return s + ']';
         }
+        case 6: {
+            std::ostringstream out;
+            out << std::setprecision(17) << std::get<double>(value_);
+            return out.str();
+        }
         default: {
             std::string s = "{";
             for (const auto &v : std::get<Object>(value_)) {
@@ -141,7 +147,7 @@ class Json {
     }
 
   private:
-    std::variant<std::monostate, bool, int64_t, std::string, Array, Object> value_;
+    std::variant<std::monostate, bool, int64_t, std::string, Array, Object, double> value_;
     static void space(const std::string &s, size_t &i) {
         while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])))
             ++i;
@@ -306,6 +312,26 @@ class Json {
             ++end;
         if (end == digits)
             throw Failure("invalid JSON value: " + s.substr(i));
+        bool fractional = false;
+        if (end < s.size() && s[end] == '.') {
+            fractional = true;
+            const size_t first = ++end;
+            while (end < s.size() && std::isdigit(static_cast<unsigned char>(s[end]))) ++end;
+            if (end == first) throw Failure("missing JSON fractional digits");
+        }
+        if (end < s.size() && (s[end] == 'e' || s[end] == 'E')) {
+            fractional = true;
+            ++end;
+            if (end < s.size() && (s[end] == '+' || s[end] == '-')) ++end;
+            const size_t first = end;
+            while (end < s.size() && std::isdigit(static_cast<unsigned char>(s[end]))) ++end;
+            if (end == first) throw Failure("missing JSON exponent digits");
+        }
+        if (fractional) {
+            auto n = std::stod(s.substr(i, end - i));
+            i = end;
+            return Json(n);
+        }
         auto n = std::stoll(s.substr(i, end - i));
         i = end;
         return Json(int64_t(n));

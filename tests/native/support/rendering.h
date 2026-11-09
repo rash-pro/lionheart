@@ -5,7 +5,8 @@
 #include <regex>
 namespace lh {
 inline int64_t json_integer(const std::string &text, const std::string &key) {
-    return Json::parse(text)[key].integer();
+    const auto report = Json::parse(text);
+    return (report.contains(key) ? report[key] : report["pgxp"][key]).integer();
 }
 inline bool json_boolean(const std::string &text, const std::string &key) {
     return Json::parse(text)[key].boolean();

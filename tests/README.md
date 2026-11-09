@@ -310,8 +310,8 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 
 | Group | Files | Needs beyond this guide |
 |---|---|---|
-| synthetic catalogs | `test_startup`, `test_host_player` | their `emit(image, {}, dir)` is an empty program; give `Program` an empty-seed form or call the shim |
-| timing policies | `test_timing_policy` (292), `test_timing_boundaries` (28), `test_timing_regions` (28), `test_timing_partial_irq` (16) | extend `generate()` and `Program` for `timing` and the register cache, which the generator now has |
+| synthetic catalogs | `test_startup`, `test_host_player` | synthetic catalogs and player/startup command-line contracts |
+| timing policies | `test_timing_policy` (292), `test_timing_boundaries` (28), `test_timing_regions` (28), `test_timing_partial_irq` (16) | exercise timing policies and register-cache combinations through the generator fixture |
 
 Before adding a helper under `support/`, look for one that already does the job.
 All other files in `identities.tsv` have complete native case files.
