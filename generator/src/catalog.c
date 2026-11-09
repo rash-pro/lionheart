@@ -124,6 +124,16 @@ static void apply_exe_metadata(lhg_arena *arena, lhg_image *image, const lhg_jso
     for (size_t index = 0; index < image->entry_point_count; index++)
         if (!lhg_image_executable(image, (int64_t)image->entry_points[index]))
             lhg_fail(ctx, "main entry point outside executable ranges");
+    points = lhg_json_find(metadata, "timing_entry_points");
+    if (points) {
+        lhg_json_list(ctx, points, "timing_entry_points");
+        size_t count = points->as.array.count;
+        uint32_t *entries = lhg_arena_alloc(arena, (count + 1) * sizeof *entries);
+        for (size_t index = 0; index < count; index++)
+            entries[index] = parse_hex32(ctx, lhg_json_str(ctx, points->as.array.items[index], "timing_entry_points"), "timing_entry_points");
+        image->timing_entry_points = entries;
+        image->timing_entry_point_count = count;
+    }
 }
 
 void lhg_load_exe(lhg_arena *arena, const char *catalog_dir, const char *path, lhg_program *program)

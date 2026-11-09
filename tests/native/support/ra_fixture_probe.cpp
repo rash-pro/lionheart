@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (argc == 4 && std::string(argv[1]) == "--disc") {
-            lh::synthetic_disc(argv[2], unsigned(std::stoul(argv[3])));
+            synthetic::disc(argv[2], synthetic::Disc{std::stoi(argv[3]), 0, {}, {}, true});
             return 0;
         }
         if (argc != 3)

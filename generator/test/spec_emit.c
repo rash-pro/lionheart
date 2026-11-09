@@ -8,6 +8,7 @@
 #include "catalog.h"
 #include "emit.h"
 #include "json.h"
+#include "locals.h"
 #include "platform.h"
 
 static uint32_t to_u32(lhg_ctx *ctx, const lhg_json *value)
@@ -57,6 +58,14 @@ static lhg_image *load_image(lhg_arena *arena, const lhg_json *spec)
         image->entry_point_count = points->as.array.count;
     }
     const lhg_json *meta = lhg_json_find(spec, "metadata");
+    points = lhg_json_find(spec, "timing_entry_points");
+    if (points) {
+        uint32_t *list = lhg_arena_alloc(arena, (points->as.array.count + 1) * sizeof *list);
+        for (size_t index = 0; index < points->as.array.count; index++)
+            list[index] = to_u32(ctx, points->as.array.items[index]);
+        image->timing_entry_points = list;
+        image->timing_entry_point_count = points->as.array.count;
+    }
     if (meta) {
         lhg_image_meta *info = lhg_arena_alloc(arena, sizeof *info);
         memset(info, 0, sizeof *info);
@@ -77,14 +86,17 @@ static lhg_image *load_image(lhg_arena *arena, const lhg_json *spec)
     return image;
 }
 
-static void discover_for_spec(lhg_arena *arena, const lhg_image *image, const lhg_json *spec, lhg_functions *functions)
+static void discover_for_spec(lhg_arena *arena, const lhg_image *image, const lhg_json *spec, int experimental, lhg_functions *functions)
 {
     lhg_ctx *ctx = arena->ctx;
     const lhg_json *seeds = lhg_json_find(spec, "seeds");
     size_t count = seeds ? seeds->as.array.count : 0;
-    uint32_t *list = lhg_arena_alloc(arena, (count + 1) * sizeof *list);
+    size_t timing_count = experimental ? image->timing_entry_point_count : 0;
+    uint32_t *list = lhg_arena_alloc(arena, (count + timing_count + 1) * sizeof *list);
     for (size_t index = 0; index < count; index++)
         list[index] = to_u32(ctx, seeds->as.array.items[index]);
+    for (size_t index = 0; index < timing_count; index++)
+        list[count++] = image->timing_entry_points[index];
     const lhg_json *scan = lhg_json_find(spec, "scan_calls");
     lhg_discover(arena, image, list, count, !scan || lhg_json_truth(scan), functions);
 }
@@ -95,18 +107,21 @@ static int run(lhg_arena *arena, const char *spec_path, const char *output)
     size_t size;
     const char *text = (const char *)lhg_read_file(ctx, spec_path, &size);
     const lhg_json *spec = lhg_json_parse(arena, text, size, spec_path);
-    const lhg_json *main_spec = lhg_json_require(ctx, spec, "main", "spec");
-    lhg_image *image = load_image(arena, main_spec);
-    lhg_functions functions;
-    discover_for_spec(arena, image, main_spec, &functions);
-    const lhg_json *overlays = lhg_json_find(spec, "overlays");
-    size_t overlay_count = overlays ? overlays->as.array.count : 0;
-    lhg_overlay_set *sets = lhg_arena_alloc(arena, (overlay_count + 1) * sizeof *sets);
-    for (size_t index = 0; index < overlay_count; index++) {
-        const lhg_json *row = overlays->as.array.items[index];
-        sets[index].index = (int)lhg_json_int(ctx, lhg_json_require(ctx, row, "index", "overlay"), "index");
-        sets[index].image = load_image(arena, row);
-        discover_for_spec(arena, sets[index].image, row, &sets[index].functions);
+    const lhg_json *source = lhg_json_find(spec, "lower_source");
+    if (source) {
+        int cap = (int)lhg_json_int(ctx, lhg_json_require(ctx, spec, "max_registers", "spec"), "max_registers");
+        if (cap < 1 || cap > 8)
+            lhg_fail(ctx, "max_registers must be in 1..8");
+        lhg_text input, lowered;
+        lhg_text_init(&input, ctx);
+        lhg_text_init(&lowered, ctx);
+        lhg_text_adds(&input, lhg_json_str(ctx, source, "lower_source"));
+        lhg_cache_lower(arena, &input, cap, &lowered);
+        lhg_make_directories(ctx, output);
+        lhg_write_if_changed(ctx, lhg_join_path(arena, output, "lowered.c"), lowered.data, lowered.size);
+        lhg_text_free(&input);
+        lhg_text_free(&lowered);
+        return 0;
     }
     lhg_emit_options options;
     memset(&options, 0, sizeof options);
@@ -114,6 +129,51 @@ static int run(lhg_arena *arena, const char *spec_path, const char *output)
     options.mode = mode && !strcmp(lhg_json_str(ctx, mode, "mode"), "trace") ? LHG_MODE_TRACE : LHG_MODE_FAST;
     const lhg_json *host = lhg_json_find(spec, "host_mode");
     options.host_mode = host && !strcmp(lhg_json_str(ctx, host, "host_mode"), "fast") ? LHG_HOST_FAST : LHG_HOST_PRECISE;
+    const lhg_json *timing = lhg_json_find(spec, "timing");
+    if (timing) {
+        const char *name = lhg_json_str(ctx, timing, "timing");
+        if (!strcmp(name, "block"))
+            options.timing = LHG_TIMING_BLOCK;
+        else if (!strcmp(name, "loose"))
+            options.timing = LHG_TIMING_LOOSE;
+        else if (strcmp(name, "exact"))
+            lhg_fail(ctx, "unknown timing policy: %s", name);
+    }
+    if (options.timing != LHG_TIMING_EXACT && options.mode == LHG_MODE_TRACE)
+        lhg_fail(ctx, "experimental timing requires fast emission");
+    const lhg_json *selection = lhg_json_find(spec, "register_cache");
+    if (selection && selection->type != LHG_JSON_NULL)
+        options.register_cache = lhg_cache_parse(arena, selection);
+    else if (options.timing != LHG_TIMING_EXACT)
+        options.register_cache = lhg_cache_read(arena, "games/ff8-usa/play-register-cache.json");
+    const lhg_json *exe = lhg_json_find(spec, "exe_path");
+    if (exe) {
+        lhg_options generate = {0};
+        generate.exe_path = lhg_json_str(ctx, exe, "exe_path");
+        generate.catalog_dir = lhg_json_str(ctx, lhg_json_require(ctx, spec, "catalog_dir", "spec"), "catalog_dir");
+        generate.output_dir = output;
+        generate.mode = options.mode;
+        generate.host_mode = options.host_mode;
+        generate.timing = options.timing;
+        generate.register_cache = options.register_cache;
+        char error[1024];
+        if (lhg_generate(&generate, NULL, error, sizeof error) != LHG_OK)
+            lhg_fail(ctx, "%s", error);
+        return 0;
+    }
+    const lhg_json *main_spec = lhg_json_require(ctx, spec, "main", "spec");
+    lhg_image *image = load_image(arena, main_spec);
+    lhg_functions functions;
+    discover_for_spec(arena, image, main_spec, options.timing != LHG_TIMING_EXACT, &functions);
+    const lhg_json *overlays = lhg_json_find(spec, "overlays");
+    size_t overlay_count = overlays ? overlays->as.array.count : 0;
+    lhg_overlay_set *sets = lhg_arena_alloc(arena, (overlay_count + 1) * sizeof *sets);
+    for (size_t index = 0; index < overlay_count; index++) {
+        const lhg_json *row = overlays->as.array.items[index];
+        sets[index].index = (int)lhg_json_int(ctx, lhg_json_require(ctx, row, "index", "overlay"), "index");
+        sets[index].image = load_image(arena, row);
+        discover_for_spec(arena, sets[index].image, row, 0, &sets[index].functions);
+    }
     lhg_emit_result result;
     lhg_emit(arena, image, &functions, output, sets, overlay_count, &options, &result);
     return 0;
@@ -130,6 +190,7 @@ int main(int argc, char **argv)
     lhg_arena arena;
     if (setjmp(ctx.bail)) {
         fprintf(stderr, "spec_emit: %s\n", ctx.error);
+        lhg_ctx_release(&ctx);
         return 1;
     }
     lhg_arena_init(&arena, &ctx);

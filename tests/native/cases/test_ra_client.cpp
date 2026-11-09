@@ -61,7 +61,7 @@ struct Client {
         login();
         LH_EQ(state(), CONNECTED);
         frame(0);
-        auto path = lh::synthetic_disc(t.temp() / "synthetic.bin");
+        auto path = synthetic::disc(t.temp() / "synthetic.bin");
         disc(path);
         until([&] {
             return total() == 3 || value("ra_test_failed") || value("ra_test_unknown");
@@ -338,7 +338,7 @@ LH_TEST(test_disc_change_hashes_each_loaded_disc) {
     c.load(t);
     std::vector<std::string> hashes{c.hash()};
     for (unsigned n : {2, 3, 4}) {
-        auto path = lh::synthetic_disc(t.temp() / ("synthetic-" + std::to_string(n) + ".bin"), n);
+        auto path = synthetic::disc(t.temp() / ("synthetic-" + std::to_string(n) + ".bin"), synthetic::Disc{int(n), 0, {}, {}, true});
         c.disc(path);
         c.until([&] { return c.hash() != hashes.back(); });
         hashes.push_back(c.hash());
@@ -371,7 +371,7 @@ LH_TEST(test_pending_unlock_survives_disc_change) {
     c.frame(7);
     c.until([&] { return c.state() == OFFLINE; });
     LH_CHECK(c.indexed("ra_test_pending", 0));
-    c.disc(lh::synthetic_disc(t.temp() / "disc-two.bin", 2));
+    c.disc(synthetic::disc(t.temp() / "disc-two.bin", synthetic::Disc{2, 0, {}, {}, true}));
     c.until([&] { return !c.value("ra_test_loading"); });
     LH_EQ(c.unlocked(), 1u);
     LH_CHECK(c.indexed("ra_test_pending_id", 101));

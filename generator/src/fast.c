@@ -136,6 +136,8 @@ typedef struct {
     const lhg_function *f;
     const lhg_available *available;
     int trace, compact, poll_forward, direct_memory;
+    lhg_timing timing;
+    int inline_blocks;
     int64_t block_start;
     const uint8_t *entries;
     uint64_t *seen;
@@ -191,6 +193,11 @@ static void export_pending(emitter *e, lhg_lines *out, int pending)
 
 static void observe(emitter *e, lhg_lines *out, const lhg_insn *i, int pending, int count, int64_t branch, int advance)
 {
+    if (e->timing != LHG_TIMING_EXACT && i->op != LHG_OP_SYSCALL) {
+        int fault = lhg_insn_flow(i) || i->op == LHG_OP_ADD || i->op == LHG_OP_ADDI || i->op == LHG_OP_SUB ||
+                    i->op == LHG_OP_BREAK || i->op == LHG_OP_RESERVED || i->op == LHG_OP_COP_UNUSABLE;
+        advance = advance && fault;
+    }
     lhg_lines_addf(out, "c->pc = %U;", i->pc);
     lhg_lines_addf(out, "c->in_delay_slot = %d;", branch != 0);
     if (branch)
@@ -202,7 +209,8 @@ static void observe(emitter *e, lhg_lines *out, const lhg_insn *i, int pending, 
         lhg_lines_addf(out, "c_recomp_budget(c, %d - ticked);", count - 1);
         lhg_lines_addf(out, "c->cycles += (uint64_t)(%d - ticked) * CYCLES_PER_INSN;", count - 1);
         lhg_lines_addf(out, "ticked = %d;", count - 1);
-        lhg_lines_add(out, "c_tick(c, 0);");
+        if (e->timing == LHG_TIMING_EXACT || i->op == LHG_OP_SYSCALL)
+            lhg_lines_add(out, "c_tick(c, 0);");
     }
     lhg_lines_addf(out, "c->fault_instructions = 1; c->fault_counted = %d;", e->trace ? 2 : 0);
 }
@@ -348,10 +356,126 @@ static int direct_instruction(emitter *e, lhg_lines *out, const lhg_insn *i, int
     return load;
 }
 
+static void timing_tick(emitter *e, lhg_lines *out, int64_t pc, const char *expr, int count, int pending, int reset, int inline_block)
+{
+    const char *target = expr ? expr : lhg_fmt(e->arena, "%U", (uint32_t)pc);
+    export_pending(e, out, pending);
+    int mask = e->timing == LHG_TIMING_LOOSE ? 255 : 0;
+    if (inline_block && e->inline_blocks) {
+        lhg_lines_add(out, "#ifdef FF8_TIMING_INLINE");
+        lhg_lines_addf(out, "if (!c_timing_charge(c, %s, %d - ticked, &code_%X, code_epoch, %du)) {", target, count, e->f->entry, mask);
+        lhg_lines_addf(out, "if (!c_timing_poll(c, &code_%X, %du)) return;", e->f->entry, mask);
+        lhg_lines_add(out, "}");
+        lhg_lines_add(out, "#else");
+    }
+    lhg_lines_addf(out, "if (!c_timing_block(c, %s, %d - ticked, &code_%X)) return;", target, count, e->f->entry);
+    if (inline_block && e->inline_blocks)
+        lhg_lines_add(out, "#endif");
+    lhg_lines_addf(out, "ticked = %d;", reset ? 0 : count);
+    lhg_lines_add(out, "code_epoch = c->code_epoch;");
+    if (pending > 0)
+        lhg_lines_add(out, "c->load_reg = c->load_value = 0;");
+}
+
+/* Experimental memory accesses flush their prefix only for MMIO/faults. The
+ * retirement and continuation still precede delivery of a device event. */
+static int timing_instruction(emitter *e, lhg_lines *out, const lhg_insn *i, int pending, int count, int64_t branch)
+{
+    lhg_op op = (lhg_op)i->op;
+    int load = (lhg_op_flags[op] & LHG_F_LOAD) ? i->rt : 0;
+    int partial = op == LHG_OP_LWL || op == LHG_OP_LWR || op == LHG_OP_SWL || op == LHG_OP_SWR;
+    int width = memory_bytes(op);
+    lhg_lines head;
+    lhg_lines_init(&head, e->arena);
+    lhg_lines_addf(&head, "uint32_t a = c->r[%d], b = c->r[%d];", (int)i->rs, (int)i->rt);
+    lhg_lines_addf(&head, "uint32_t address = a + %U;", (uint32_t)(int32_t)lhg_insn_signed_imm(i));
+    lhg_lines_addf(&head, "uint32_t aligned = %s;", partial ? "address & ~3u" : "address");
+    lhg_lines_add(&head, "uint32_t physical = aligned & 0x1fffffffu;");
+    lhg_lines_addf(&head, "int scratch = c_scratch_fast(c, physical, %d);", width);
+    lhg_lines_addf(&head, "int timed = (physical >= c->ram_limit && !scratch) || (aligned & %du);", width - 1);
+    lhg_lines_replace(&head, "c->r[0]", "0u");
+    lhg_lines_extend(out, &head);
+    if ((lhg_op_flags[op] & LHG_F_LOAD) || op == LHG_OP_LWC2) {
+        lhg_lines_add(out, "uint32_t memory;");
+        lhg_lines_add(out, "if (!timed) {");
+        lhg_lines_addf(out, "memory = scratch ? scratch_read(c, physical, %d) : ram_read(c, physical, %d);", width, width);
+        lhg_lines_add(out, "} else {");
+        observe(e, out, i, pending, count, branch, 0);
+        lhg_lines_addf(out, "memory = mem_compiled_read(c, aligned, %d, %d - ticked);", width, count - 1);
+        lhg_lines_addf(out, "ticked = %d;", count - 1);
+        observed(e, out, pending);
+        lhg_lines_add(out, "}");
+        if (op == LHG_OP_LWC2) {
+            lhg_gte_write_statement(out, i->rt, "memory", 0);
+            retire(out, pending, 0, "0", 0, "0", 0);
+        } else {
+            const char *value = op == LHG_OP_LB ? "(uint32_t)(int32_t)(int8_t)memory" :
+                                op == LHG_OP_LH ? "(uint32_t)(int32_t)(int16_t)memory" : "memory";
+            if (partial) {
+                const char *old = pending == i->rt && pending > 0 ? "delayed" : pending == -1 ?
+                                  lhg_fmt(e->arena, "c_merge_value(c, %d)", (int)i->rt) : lhg_fmt(e->arena, "c->r[%d]", (int)i->rt);
+                const char *direction = op == LHG_OP_LWL ? "<<" : ">>";
+                lhg_lines_addf(out, "unsigned shift = %s;", op == LHG_OP_LWL ? "(3 - (address & 3)) * 8" : "(address & 3) * 8");
+                lhg_lines_addf(out, "uint32_t mask = 0xffffffffu %s shift;", direction);
+                value = lhg_fmt(e->arena, "(%s & ~mask) | (memory %s shift)", old, direction);
+            }
+            lhg_lines_addf(out, "uint32_t loaded = %s;", value);
+            retire(out, pending, 0, "0", load, "loaded", load != 0);
+            if (!load)
+                lhg_lines_add(out, "(void)loaded;");
+        }
+    } else {
+        if (op == LHG_OP_SWC2) {
+            lhg_lines_addf(out, "b = %s;", lhg_gte_read_expression(e->arena, i->rt, 0));
+        }
+        lhg_lines_add(out, "if (!timed) {");
+        if (partial) {
+            lhg_lines_addf(out, "unsigned j; for (j = %s; j < %s; ++j) {", op == LHG_OP_SWL ? "0" : "address & 3",
+                          op == LHG_OP_SWL ? "(address & 3) + 1" : "4");
+            lhg_lines_addf(out, "uint32_t byte = b >> (%s);", op == LHG_OP_SWL ? "(3 - (address & 3) + j) * 8" : "(j - (address & 3)) * 8");
+            lhg_lines_add(out, "if (scratch) scratch_write(c, physical + j, 1, byte);");
+            lhg_lines_add(out, "else ram_write(c, physical + j, 1, byte);");
+            lhg_lines_add(out, "}");
+        } else {
+            lhg_lines_addf(out, "if (scratch) scratch_write(c, physical, %d, b);", width);
+            lhg_lines_addf(out, "else ram_write(c, physical, %d, b);", width);
+        }
+        lhg_lines_add(out, "} else {");
+        observe(e, out, i, pending, count, branch, 0);
+        if (partial) {
+            lhg_lines_addf(out, "c_count_recompiled(c, %U, %d - ticked);", e->f->entry, count - 1);
+            lhg_lines_addf(out, "c_recomp_budget(c, %d - ticked);", count - 1);
+            lhg_lines_add(out, "c->fault_instructions = 0;");
+            lhg_lines_addf(out, "c_tick(c, %d - ticked);", count - 1);
+            lhg_lines_add(out, "c->fault_instructions = 1;");
+            lhg_lines_addf(out, "c_%s(c, address, b);", op == LHG_OP_SWL ? "swl" : "swr");
+        } else {
+            lhg_lines_addf(out, "mem_compiled_write(c, aligned, %d, b, %d - ticked);", width, count - 1);
+        }
+        lhg_lines_addf(out, "ticked = %d;", count - 1);
+        observed(e, out, pending);
+        lhg_lines_add(out, "}");
+        retire(out, pending, 0, "0", 0, "0", 0);
+    }
+    lhg_lines_add(out, "if (timed) {");
+    timing_tick(e, out, (int64_t)i->pc + 4, branch ? "c->branch_target" : NULL, count, load, 0, 0);
+    lhg_lines_add(out, "}");
+    if ((op == LHG_OP_SWL || op == LHG_OP_SWR) && !branch) {
+        lhg_lines_addf(out, "if (code_epoch != c->code_epoch && !code_valid(c, &code_%X)) {", e->f->entry);
+        timing_tick(e, out, (int64_t)i->pc + 4, NULL, count, load, 1, 0);
+        lhg_lines_add(out, "return;");
+        lhg_lines_add(out, "}");
+        lhg_lines_add(out, "code_epoch = c->code_epoch;");
+    }
+    return load;
+}
+
 static int instruction(emitter *e, lhg_lines *out, const lhg_insn *i, int pending, int count, int64_t branch)
 {
     lhg_op op = (lhg_op)i->op;
     uint16_t flags = lhg_op_flags[op];
+    if (e->timing != LHG_TIMING_EXACT && (flags & LHG_F_MEMORY))
+        return timing_instruction(e, out, i, pending, count, branch);
     if (e->trace) {
         /* Timing/fault context is block based even in diagnostic mode. */
         observe(e, out, i, 0, count, branch, 1);
@@ -446,6 +570,10 @@ static int instruction(emitter *e, lhg_lines *out, const lhg_insn *i, int pendin
  * lookup by expression yields zero, matching a miss in the window table. */
 static void tick(emitter *e, lhg_lines *out, int64_t pc, const char *expr, int count, int pending, int reset, const char *window)
 {
+    if (e->timing != LHG_TIMING_EXACT) {
+        timing_tick(e, out, pc, expr, count, pending, reset, 1);
+        return;
+    }
     if (e->compact) {
         const char *target = expr ? expr : lhg_fmt(e->arena, "%U", (uint32_t)pc);
         export_pending(e, out, pending);
@@ -483,6 +611,11 @@ static void tick(emitter *e, lhg_lines *out, int64_t pc, const char *expr, int c
 static void jump(emitter *e, lhg_lines *out, int64_t target, int count, int pending)
 {
     if (e->compact && !e->poll_forward && body_at(e, target) && target > e->block_start) {
+        if (e->timing != LHG_TIMING_EXACT) {
+            lhg_lines_add(out, "if (code_epoch != c->code_epoch) {");
+            timing_tick(e, out, target, NULL, count, pending, 0, 0);
+            lhg_lines_add(out, "}");
+        }
         /* Carry the unflushed count into a forward successor. Only entry,
          * back edges and external transfers are polling safe points. */
         lhg_lines_addf(out, "ticked -= %d;", count);
@@ -630,8 +763,34 @@ static const char *condition_text(emitter *e, const lhg_insn *i)
     }
 }
 
+static int wait_loop(emitter *e, int64_t start)
+{
+    int seen_load = 0;
+    for (int offset = 0; offset < 32; offset += 4) {
+        const lhg_insn *i = body_at(e, start + offset);
+        if (!i)
+            return 0;
+        lhg_op op = (lhg_op)i->op;
+        if (lhg_insn_flow(i)) {
+            const lhg_insn *slot = body_at(e, (int64_t)i->pc + 4);
+            return seen_load && (op == LHG_OP_BEQ || op == LHG_OP_BNE || op == LHG_OP_BLEZ || op == LHG_OP_BGTZ ||
+                                 op == LHG_OP_BLTZ || op == LHG_OP_BGEZ) &&
+                   (int64_t)lhg_insn_target(i) == start && slot && !slot->word;
+        }
+        if (op == LHG_OP_LB || op == LHG_OP_LBU || op == LHG_OP_LH || op == LHG_OP_LHU || op == LHG_OP_LW)
+            seen_load = 1;
+        else if (!(op == LHG_OP_SLL || op == LHG_OP_SRL || op == LHG_OP_SRA || op == LHG_OP_LUI || op == LHG_OP_ANDI ||
+                   op == LHG_OP_ORI || op == LHG_OP_AND || op == LHG_OP_OR || op == LHG_OP_SLT || op == LHG_OP_SLTU ||
+                   op == LHG_OP_SLTI || op == LHG_OP_SLTIU))
+            return 0;
+    }
+    return 0;
+}
+
 static void block(emitter *e, lhg_lines *out, int64_t start, int pending)
 {
+    if (e->timing == LHG_TIMING_LOOSE && pending == 0 && wait_loop(e, start))
+        lhg_lines_add(out, "c_timing_idle(c);");
     e->block_start = start;
     int64_t pc = start;
     int count = 0;
@@ -792,8 +951,8 @@ static void block(emitter *e, lhg_lines *out, int64_t start, int pending)
     }
 }
 
-void lhg_emit_fast_variant(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available, int trace,
-                           int compact, int poll_forward, int direct_memory, lhg_text *out)
+static void emit_variant(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available, int trace,
+                         int compact, int poll_forward, int direct_memory, lhg_timing timing, int inline_blocks, lhg_text *out)
 {
     const lhg_function *f = analysis->function;
     emitter e;
@@ -806,6 +965,8 @@ void lhg_emit_fast_variant(lhg_arena *arena, const lhg_analysis *analysis, const
     e.compact = compact;
     e.poll_forward = poll_forward;
     e.direct_memory = direct_memory;
+    e.timing = timing;
+    e.inline_blocks = inline_blocks;
     e.entries = compact ? analysis->compact_entries : analysis->full_entries;
     e.seen = lhg_arena_alloc(arena, (f->insn_count + 1) * sizeof *e.seen);
     memset(e.seen, 0, (f->insn_count + 1) * sizeof *e.seen);
@@ -864,4 +1025,18 @@ void lhg_emit_fast_variant(lhg_arena *arena, const lhg_analysis *analysis, const
     lhg_lines_add(&lines, "}");
     lhg_lines_add(&lines, "");
     lhg_text_join(out, &lines);
+}
+
+void lhg_emit_fast_variant(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available, int trace,
+                           int compact, int poll_forward, int direct_memory, lhg_text *out)
+{
+    emit_variant(arena, analysis, available, trace, compact, poll_forward, direct_memory, LHG_TIMING_EXACT, 0, out);
+}
+
+void lhg_emit_timing(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available,
+                     lhg_timing timing, int inline_blocks, int fuse_forward, lhg_text *out)
+{
+    if (fuse_forward && analysis->function->insn_count > 512)
+        lhg_fail(arena->ctx, "forward region at 0x%08x exceeds 512 instructions", analysis->function->entry);
+    emit_variant(arena, analysis, available, 0, 1, !fuse_forward, 1, timing, inline_blocks, out);
 }

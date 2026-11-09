@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.21)
+project(lionheart_player_check LANGUAGES C CXX)
+add_executable(check_player_binary main.cpp sha1.c)
+target_compile_features(check_player_binary PRIVATE cxx_std_17)
+set_target_properties(check_player_binary PROPERTIES C_STANDARD 99 CXX_EXTENSIONS OFF)
+if(NOT MSVC)
+  target_compile_options(check_player_binary PRIVATE -Wall -Wextra -Wpedantic)
+endif()

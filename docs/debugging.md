@@ -3,10 +3,13 @@
 Use your own supported discs and run contributor setup first.
 Keep one baseline executable and a native executable built after your change.
 Use a fresh private copy of the same card, an explicit empty config, the same script and the same VBlank count.
-`tools/compare.py` handles those copies and compares complete dumps and every native software PNG:
+Build the host tools first with `cmake -S tools/devtools -B build/devtools` and
+`cmake --build build/devtools -j4`.
+
+`build/devtools/compare` handles those copies and compares complete dumps and every native software PNG:
 
 ```sh
-python tools/compare.py --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/debug-compare
+build/devtools/compare --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/debug-compare
 ```
 
 To diagnose native code against the interpreter, run the same developer executable twice,
@@ -22,8 +25,8 @@ An image-only difference suggests presentation or GPU output. A guest-state diff
 
 `--log PATH` records guest tracing; `--log-events` enables hardware event tracing.
 Statistics builds print interpreter/native work counts.
-`tools/gte_trace.py record --host-build build/dev --output build/gte` relinks a tracing host.
-`tools/gte_trace.py replay --output build/gte-replay` builds the trace replayer.
+`build/devtools/gte-trace record --host-build build/dev --output build/gte` relinks a tracing host.
+`build/devtools/gte-trace replay --output build/gte-replay` builds the trace replayer.
 Keep traces and extracted code under `build/`. Do not attach game dumps or generated C to public issues.
 
 Report the supported serial, input script, last matching VBlank, compiler/options, and log excerpts.
@@ -31,13 +34,13 @@ A small synthetic MIPS regression is the preferred fix evidence when the failing
 
 ## Measuring frame spikes
 
-On Linux x86-64, `tools/frame_probe.py` relinks an existing CMake host with a diagnostic
+On Linux x86-64, `build/devtools/frame-probe` relinks an existing CMake host with a diagnostic
 object. It leaves the original binary alone and works with both the default player
 and the developer build. Relink and preserve the baseline before rebuilding:
 
 ```sh
-python tools/frame_probe.py build/player --output build/baseline/lionheart-timing
-python tools/frame_probe.py build/dev --output build/baseline/ff8-timing
+build/devtools/frame-probe build/player --output build/baseline/lionheart-timing
+build/devtools/frame-probe build/dev --output build/baseline/ff8-timing
 ```
 
 Set `FF8_FRAME_TIMINGS` to a CSV path when running a probe. Each VBlank records elapsed
@@ -52,11 +55,11 @@ Nested device calls are charged to their innermost subsystem. These timers pertu
 hot paths: do not use a subsystem probe to report a speedup. Vulkan's separate
 `--gpu-timings CSV` reports encoding, software raster, upload and submission costs.
 
-`tools/frame_bench.py` alternates two timing probes, creates fresh card/config copies,
+`build/devtools/frame-bench` alternates two timing probes, creates fresh card/config copies,
 checks completion and identical per-frame guest work, and records load and distributions:
 
 ```sh
-python tools/frame_bench.py --before build/baseline/lionheart-timing \
+build/devtools/frame-bench --before build/baseline/lionheart-timing \
   --after build/candidate/lionheart-timing --exe build/generated/extracted/SLUS_008.92 \
   --disc /path/to/disc1.cue --card /path/to/disc1-early.mcr \
   --script tests/scripts/battle-magic.txt --first 2100 --last 4000 \
@@ -68,5 +71,16 @@ with `--interpreter`. For Vulkan, select the intended ICD in the environment.
 The benchmark does not capture images, dump state, or enable subsystem profiling.
 Optional `--before-state` and `--after-state` accept independently produced compatible
 checkpoints; restore before `--first` to leave a warmup interval. Prove route exactness
-from boot separately with `tools/compare.py`. A checkpoint is specific to its build,
+from boot separately with `build/devtools/compare`. A checkpoint is specific to its build,
 input script and execution mode.
+
+For MDEC observation traces, build a separate instrumented host without changing
+the runtime sources:
+
+```sh
+build/devtools/mdec-trace build --host-build build/dev --output build/mdec
+build/devtools/mdec-trace record --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+build/devtools/mdec-trace replay --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+```
+
+Use a new trace file for each recording. Keep disc-derived traces under `build/`.

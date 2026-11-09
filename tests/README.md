@@ -204,6 +204,6 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 | ctypes and identical inputs | `test_gte` (412), `test_host_viewport` | a library per the Python's `cc` line; `test_gte` also ports its equations to an oracle header |
 | checksums | `test_code_sha1` | a SHA-1 oracle next to `lh::sha256` |
 | host library tests | `test_host_crt`, `test_host_hotkeys`, `test_host_osd` | the ctypes parts are now expressible; Vulkan parts as those files decide |
-| needs the C generator | `test_scratchpad`, `test_idle`, `test_poll`, `test_poll_calendars`, `test_runtime`, `test_gte_timing`, `test_gte_diff`, `test_timing_boundaries`, `test_timing_partial_irq`, `test_timing_regions`, `test_timing_policy`, `test_recomp_configuration`, `test_perf_stats`, `test_recompiler` | wait for the C generator; the library and replay parts are ready |
+| needs the C generator | `test_scratchpad`, `test_idle`, `test_poll`, `test_poll_calendars`, `test_runtime`, `test_gte_timing`, `test_timing_boundaries`, `test_timing_partial_irq`, `test_timing_regions`, `test_timing_policy`, `test_recomp_configuration`, `test_perf_stats`, `test_recompiler` | wait for the C generator; the library and replay parts are ready |
 | Vulkan replay | `test_pgxp` (reuse `oracles/png.h`), `test_movie_hd`, `test_vulkan` | Vulkan fixtures |
 | service and NumPy | `test_ra_client`, `test_ra_gui`, `test_state_bridge`, `test_movie_frames` | a loopback HTTP fixture; NumPy's generator and image helpers |

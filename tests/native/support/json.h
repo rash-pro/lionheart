@@ -29,6 +29,8 @@ class Json {
     const Json &operator[](size_t i) const { return std::get<Array>(value_).at(i); }
     bool contains(const std::string &key) const { return std::get<Object>(value_).count(key); }
     const std::string &text() const { return std::get<std::string>(value_); }
+    const Array &items() const { return std::get<Array>(value_); }
+    int64_t integer() const { return std::get<int64_t>(value_); }
     bool operator==(const Json &other) const { return value_ == other.value_; }
     bool operator!=(const Json &other) const { return !(*this == other); }
     static std::string quote(const std::string &s) {

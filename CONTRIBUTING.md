@@ -28,8 +28,14 @@ The catalog is cached by EXE identity, disc set and recompiler version. A second
 the recompiler. On a 16-thread desktop a cold all-disc setup took 6 to 7 minutes. Generating the C took under 30
 seconds of that; the rest was native compilation. A cached run took a few seconds.
 
-To cross-build the Windows player on Linux, run `python tools/build_windows.py`. `--deps PATH` reuses a pinned
-dependency tree and `--build PATH` picks the build folder. Downloads are verified against `tools/windows-deps.json`.
+To cross-build the Windows player on Linux, run `cmake -P tools/build_windows.cmake`.
+Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` and `-DJOBS=4` before `-P` to override the defaults.
+Downloads are verified against `tools/windows-deps.json`; source markers and installed-file receipts reject foreign caches.
+Set `-DOFFLINE=ON` to require cached inputs. An old `install-ucrt` folder without a receipt must be rebuilt.
+
+Stage the Linux player with `cmake -P tools/stage_player.cmake`. This builds `build/linux/lionheart` and copies it
+with its notices into `build/linux/dist-linux`. Use `-DBUILD=/path/to/build -DSTAGE_ONLY=ON` before `-P` to stage an
+existing build. Run `cmake -DPLATFORM=linux -P tools/ci_deps.cmake` to check the CI build prerequisites.
 
 ## Tests
 
@@ -85,7 +91,7 @@ your controller model in the report.
   baseline before your change, then compare:
 
   ```sh
-  python tools/compare.py --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/exactness
+  build/devtools/compare --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/exactness
   ```
 
   This compares the complete `--dump-state` and every software `--dump-frames` PNG. Run it again with
@@ -94,10 +100,15 @@ your controller model in the report.
 - **The player must contain no game code.** Check it with the legal scanner:
 
   ```sh
-  python tools/check_player_binary.py build/lionheart build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --compile-commands build/compile_commands.json
+  cmake -S tools/player-check -B build/player-check -DCMAKE_BUILD_TYPE=Release
+  cmake --build build/player-check -j4
+  build/player-check/check_player_binary build/lionheart build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --compile-commands build/compile_commands.json
   ```
 
-  Repeat `--disc` for all four discs, so that it also scans every overlay.
+  Repeat `--disc` for all four discs, so that it also scans every overlay. The native scanner reads the versioned
+  complete legacy images and loader-bounded catalog images directly from your discs without writing extracted bytes.
+  It checks source and include paths, nested response files, compiler forwarding options and symlinks.
+  Repeat `--generated-dir PATH` for catalog roots not named in the build's `CMakeCache.txt`.
 
 ## Pull requests
 

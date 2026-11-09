@@ -28,7 +28,7 @@ static void gte_command(lhg_arena *arena, lhg_lines *lines, uint32_t word)
 }
 
 /* Reads of FIFO aliases and color/leading-bit registers stay canonical. */
-static const char *gte_read_expression(lhg_arena *arena, unsigned reg, int control)
+const char *lhg_gte_read_expression(lhg_arena *arena, unsigned reg, int control)
 {
     if (control || (reg != 15 && (reg < 28 || reg > 31)))
         return lhg_fmt(arena, "c->gte_%s[%d]", control ? "ctrl" : "data", (int)reg);
@@ -42,7 +42,7 @@ static int gte_write_is_special(unsigned reg, int control)
     return reg == 1 || reg == 3 || reg == 5 || (reg >= 7 && reg <= 11) || (reg >= 15 && reg <= 19) || (reg >= 28 && reg <= 31);
 }
 
-static void gte_write_statement(lhg_lines *lines, unsigned reg, const char *value, int control)
+void lhg_gte_write_statement(lhg_lines *lines, unsigned reg, const char *value, int control)
 {
     if (!gte_write_is_special(reg, control))
         lhg_lines_addf(lines, "c->gte_%s[%d] = %s;", control ? "ctrl" : "data", (int)reg, value);
@@ -162,10 +162,10 @@ void lhg_effects(lhg_arena *arena, const lhg_insn *i, lhg_effect *effect)
     case LHG_OP_MFC2:
     case LHG_OP_CFC2:
         effect->load = rt;
-        effect->loaded = gte_read_expression(arena, (unsigned)rd, i->op == LHG_OP_CFC2);
+        effect->loaded = lhg_gte_read_expression(arena, (unsigned)rd, i->op == LHG_OP_CFC2);
         break;
     case LHG_OP_MTC2:
-    case LHG_OP_CTC2: gte_write_statement(lines, (unsigned)rd, "b", i->op == LHG_OP_CTC2); break;
+    case LHG_OP_CTC2: lhg_gte_write_statement(lines, (unsigned)rd, "b", i->op == LHG_OP_CTC2); break;
     case LHG_OP_LWC2: lhg_lines_addf(lines, "gte_write(c, %d, mem_read32(c, a + %U), 0);", rt, imm); break;
     case LHG_OP_SWC2: lhg_lines_addf(lines, "mem_write32(c, a + %U, gte_read(c, %d, 0));", imm, rt); break;
     case LHG_OP_GTE: gte_command(arena, lines, i->word); break;

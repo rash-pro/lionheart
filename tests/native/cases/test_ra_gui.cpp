@@ -48,7 +48,7 @@ Output run_gui(lh::Case &t, const lh::fs::path &tmp, lh::RaService &service, std
     }
     auto script = tmp / "gui.txt";
     lh::write_file(script, steps);
-    auto image = lh::synthetic_disc(tmp / "synthetic.bin");
+    auto image = synthetic::disc(tmp / "synthetic.bin");
     auto cmd = lh::dummy(t.target(binary))
                    .args({"--gui-test", script, data, image, renderer,
                           std::to_string(width) + "x" + std::to_string(height), unlock})
