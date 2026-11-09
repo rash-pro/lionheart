@@ -160,7 +160,10 @@ skips there with a reason. System libraries such as SDL: `pkg_check_modules` in 
 `lh::PyRandom` reproduces CPython's `Random` for integer seeds: `random()`, `getrandbits(k)` for `k <= 64`,
 `randbytes(n)`, `randrange(start, stop)`, `randrange(stop)`, `randint(a, b)`. Use the same seed and the same calls in
 the same order. C++ evaluates the arguments of one call in an unspecified order, so never put two draws in one
-call; use separate declarations or a braced list. `randrange` with a step and `numpy.random` are not implemented.
+call; use separate declarations or a braced list. `randrange` with a step is not implemented.
+`support/numpy_random.h` reproduces integer-seeded NumPy SeedSequence/PCG64 and scalar-bound
+`integers(..., dtype=np.uint8)` fills. Each fill discards its byte reservoir exactly as NumPy does.
+Other NumPy methods and dtypes are not implemented.
 
 ### Independent oracles
 
@@ -191,9 +194,29 @@ judges the native oracle; run the script after building (`python tests/native/ch
 Add new pytest tests to `identities.tsv` with the same commit that adds them. Rows are not regenerated: the file
 records what the suite had to match before Python was removed.
 
+## Rendering fixtures
+
+`support/vulkan.h` builds the isolated replay and CRT projects with pytest's original feature flags.
+A file lock protects each Makefiles build during parallel CTest. Every use checks build dependencies.
+The probe inherits device selection, including `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`.
+An unavailable explicitly selected driver fails with pytest's diagnostic. Without an explicit selection,
+an unusable device skips with `No usable Vulkan device: ` followed by the probe's stderr.
+The fixture also exposes `movie_contract`, `screenshot_capture` and `osd_input`. Synthetic clips require FFmpeg.
+
+`oracles/image.h` supplies independent RGB differences, crops, linear-light means, row profiles and a direct DFT.
+The PNG reader remains strict by default; screenshot callers opt into filter Up. The synthetic PNG writer
+uses stored DEFLATE blocks without the renderer's zlib. The Python equivalence check compares complete
+NumPy movie arrays, tile reports, numeric image answers, synthetic generator output and pause binaries.
+
+`support/player_probe.h` replays the selected player's `main.c` compile receipt and link command.
+It removes dependency-file flags, changes the source and output operands, and adds the original three wrappers.
+Its synthetic infra case exercises both `arguments` and quoted `command` receipts and catches an injected
+guest instruction. The two game cases need owned discs, a card and `FF8_PLAYER_HOST`.
+The synthetic observer check does not establish an owned-game run.
+
 ## Not covered yet
 
-Tests of the generator's internals, `tools/`, a loopback HTTP service, NumPy image helpers and Vulkan replay are not
+Tests of the generator's internals, some `tools/` modules and a loopback HTTP service are not
 covered yet. Cases that need other top-level CMake targets take them from a separate top-level build. Native tests
 run on Linux hosts; a Windows target is built by a cross configure that passes `-DLH_HOST_RUNNER=<native build>/lionheart_tests`.
 
@@ -203,7 +226,5 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 |---|---|---|
 | ctypes and identical inputs | `test_gte` (412), `test_host_viewport` | a library per the Python's `cc` line; `test_gte` also ports its equations to an oracle header |
 | checksums | `test_code_sha1` | a SHA-1 oracle next to `lh::sha256` |
-| host library tests | `test_host_crt`, `test_host_hotkeys`, `test_host_osd` | the ctypes parts are now expressible; Vulkan parts as those files decide |
 | needs the C generator | `test_scratchpad`, `test_idle`, `test_poll`, `test_poll_calendars`, `test_runtime`, `test_gte_timing`, `test_gte_diff`, `test_timing_boundaries`, `test_timing_partial_irq`, `test_timing_regions`, `test_timing_policy`, `test_recomp_configuration`, `test_perf_stats`, `test_recompiler` | wait for the C generator; the library and replay parts are ready |
-| Vulkan replay | `test_pgxp` (reuse `oracles/png.h`), `test_movie_hd`, `test_vulkan` | Vulkan fixtures |
-| service and NumPy | `test_ra_client`, `test_ra_gui`, `test_state_bridge`, `test_movie_frames` | a loopback HTTP fixture; NumPy's generator and image helpers |
+| service | `test_ra_client`, `test_ra_gui`, `test_state_bridge` | a loopback HTTP fixture |
