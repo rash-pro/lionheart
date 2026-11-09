@@ -5,10 +5,10 @@
 int main(int argc, char **argv) {
     if (argc != 2) return 2;
     std::filesystem::path out(argv[1]); std::filesystem::create_directories(out);
-    auto exe = synthetic::exe(); synthetic::write(out / "exe", exe);
+    auto exe = synthetic::exe(); lh::write_file(out / "exe", exe);
     uint32_t hash = 2166136261u;
     for (size_t i = 2048; i < exe.size(); ++i) hash = (hash ^ uint8_t(exe[i])) * 16777619u;
     std::ostringstream hex; hex << std::hex << std::setfill('0') << std::setw(8) << hash;
-    synthetic::write(out / "fnv", hex.str());
-    for (int n = 1; n <= 4; ++n) synthetic::write(out / ("img" + std::to_string(n)), std::string(2048, char(n)));
+    lh::write_file(out / "fnv", hex.str());
+    for (int n = 1; n <= 4; ++n) lh::write_file(out / ("img" + std::to_string(n)), std::string(2048, char(n)));
 }

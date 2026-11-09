@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <map>
@@ -145,7 +146,12 @@ private:
 
 // Files and bytes.
 std::string read_file(const fs::path &path);
-void write_file(const fs::path &path, const std::string &contents);
+// Fixture emitters also write files before the runner is linked.
+inline void write_file(const fs::path &path, const std::string &contents) {
+    std::ofstream stream(path, std::ios::binary);
+    stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    if (!stream) throw Failure("cannot write " + path.string());
+}
 std::string sha256(const std::string &bytes);
 std::string sha256_file(const fs::path &path);
 // A unique directory under `parent`; never removed. For output that must stay in build/.

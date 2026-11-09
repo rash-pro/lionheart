@@ -1,16 +1,7 @@
 // Disposable driver for check_ra_fixture.py; delete both with the Python suite.
 #include "ra_service.h"
 #include "synthetic_disc.h"
-#include <fstream>
 #include <iostream>
-namespace lh {
-void write_file(const fs::path &p, const std::string &bytes) {
-    std::ofstream out(p, std::ios::binary);
-    out.write(bytes.data(), std::streamsize(bytes.size()));
-    if (!out)
-        throw Failure("cannot write synthetic-disc equivalence input");
-}
-} // namespace lh
 int main(int argc, char **argv) {
     try {
         if (argc == 3 && std::string(argv[1]) == "--quote") {

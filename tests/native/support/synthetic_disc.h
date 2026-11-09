@@ -1,17 +1,13 @@
 // Match the synthetic ISO and seeded EXE used by the host pytest fixtures.
 #pragma once
+#include "lh_test.h"
 #include "py_random.h"
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <string>
 namespace synthetic {
 inline void put32(std::string &s, size_t at, uint32_t v) {
     for (int i = 0; i < 4; ++i) s[at + i] = char(v >> (8 * i));
-}
-inline void write(const std::filesystem::path &p, const std::string &s) {
-    std::ofstream f(p, std::ios::binary); f.write(s.data(), s.size());
-    if (!f) throw std::runtime_error("cannot write synthetic fixture: " + p.string());
 }
 inline std::string exe() {
     std::string s(4096, '\0'); s.replace(0, 8, "PS-X EXE");
@@ -47,6 +43,6 @@ inline std::filesystem::path disc(const std::filesystem::path &path, Disc d = {}
     put32(volume, 158, 20); put32(volume, 166, 2048);
     sector(16, volume); sector(20, root); sector(21, d.boot);
     sector(30, e.substr(0, 2048)); sector(31, e.substr(2048)); sector(826, std::string(2048, char(d.number)));
-    write(path, raw); return path;
+    lh::write_file(path, raw); return path;
 }
 }
