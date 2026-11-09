@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
 
 FILES = ['test_spu_math', 'test_cycle_math', 'test_mdec_math', 'test_media',
-         'test_media_play_grants', 'test_mdec_calendar', 'test_gpu']
+         'test_media_play_grants', 'test_mdec_calendar', 'test_gpu', 'test_code_sha1']
 
 
 class Records:
@@ -231,6 +231,24 @@ def check_gpu(directory, tmp):
         assert count, f'{case}: no PNGs recorded'
 
 
+def check_code_sha1(directory, tmp):
+    module = importlib.import_module('test_code_sha1')
+    for prefix in [0, 1, 3]:
+        for size in [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 511, 65536, 501056, 1000000]:
+            stream = records(directory, f'test_code_sha1::test_image_sha1_padding_and_unaligned_input[{prefix}-{size}]')
+            assert stream.next('<II') == (size, prefix)
+            data, digest = stream.bytes(size), stream.bytes(40).decode()
+
+            def output(command, **kwargs):
+                assert Path(command[1]).read_bytes() == data
+                assert command[2] == str(prefix)
+                return digest
+
+            with mock.patch.object(subprocess, 'check_output', output):
+                module.test_image_sha1_padding_and_unaligned_input(Path('/nonexistent'), tmp, size, prefix)
+            stream.done()
+
+
 def check_instrumented_hw(build):
     from tools.mdec_trace import instrument_hw
     generated = (build / 'generated/test_mdec_calendar/hw.c').read_bytes()
@@ -306,7 +324,8 @@ def main():
                   ('test_mdec_math: inputs and oracle', lambda: check_mdec_math(directory, tmp)),
                   ('test_media: IDCT and XA inputs and oracles', lambda: check_media(directory, tmp)),
                   ('test_mdec_calendar: all random step sequences', lambda: check_mdec_calendar(directory, tmp)),
-                  ('test_gpu: control stream and PNG oracle', lambda: check_gpu(directory, tmp))]
+                  ('test_gpu: control stream and PNG oracle', lambda: check_gpu(directory, tmp)),
+                  ('test_code_sha1: inputs and SHA-1 oracle', lambda: check_code_sha1(directory, tmp))]
         for label, check in checks:
             check()
             print(f'equal  {label}')
