@@ -93,6 +93,7 @@ element gives that element its own tier, as `pytest.param(..., marks=...)` does.
 | `real_player` | `t.player()` (takes `FF8_PLAYER_HOST`; it fails instead of building one) |
 | `subprocess.run(input=bytes)` | `t.ok(cmd.input(bytes))` (binary is fine) |
 | `ctypes.CDLL`, `argtypes`, `restype` | `t.library(name).fn<Signature>("symbol")`, below |
+| `emit(image, discover(image), tmp_path)` and its `cc` line | `lh::gen::Build`, under "Generated programs" |
 | `random.Random(n)`, its methods | `lh::PyRandom(n)`, same method names, below |
 | a Python reference inside a test | an independent header under `oracles/`, below |
 
@@ -176,6 +177,92 @@ replay of those records. The replay compares inputs and returns the native oracl
 judges the native oracle; run the script after building (`python tests/native/check_against_python.py`). Delete it,
 `support/equiv.h` and the `lh::equiv::record` lines with Python.
 
+## Generated programs
+
+Files that import the Python generator build small MIPS programs, emit them, compile the result and run it against
+the interpreter. `support/generated.h` is the native form; the Python and the C++ stay readable side by side.
+
+```cpp
+#include "generated.h"
+using namespace lh::gen;
+
+const Words words = {imm(43, 20, 9, 0), r(33, 8, 0, 9), j(3, target), cop(18, 4, 8, 6)};   // same assemblers
+words + Words(64 - words.size(), 0) + RET;                                                // [0] * n, RET
+
+Program program{Image::words(words, 0x80010000)};                                         // Image(data, base, base)
+program.seeds = {0x80010030};          // discover(image, seeds)
+program.host_mode = "precise";         // emit(..., host_mode='precise'); defaults match Python's, not the CLI's
+program.overlays.push_back(Overlay{index, Image(blob, 0x80098000, 0x80098000)});
+
+Compiled lib = Build(t)
+    .program(program)
+    .probe("test_X.c", {{"DATA_SIZE", std::to_string(size)}})     // the Python's .replace() calls, in order
+    .flags({"-std=c99", "-O2", "-DFF8_STATS"})                    // the cc line without -shared -fPIC -I
+    .runtime({"cpu.c", "interp.c"})                               // or .runtime_all()
+    .source("tests/harness.c")                                    // anything that includes generated.h
+    .library();
+auto check = lib.fn<int(const void *, unsigned)>("check");
+LH_EQ(check(words_bytes.data(), 1), 1);
+```
+
+C text that the Python keeps in a string moves to `cases/test_X.c`, copied exactly, placeholders included; that is
+why it is applied with `.probe`'s replacements instead of being preprocessed.
+
+Compile at test time, once. Every `Build` hashes its program, flags, sources, the runtime and generator files
+and the compiler into a directory under `build/native-tests/generated-cache/`, and the first case to need it
+holds a file lock while compiling. The result is shared by every case and every CTest process, so what used to be
+one compile per fixture becomes one compile per distinct program. `cpu.c` and `interp.c` are compiled per flag set
+and shared across programs. `LH_COMPILE_JOBS` (default 2) limits compiler processes per build. The cache needs no
+cleaning: its keys change whenever an input changes, and deleting the directory only costs the next run.
+
+Compilation stays at test time because the programs are computed by the case, often from parameters and random
+inputs: a build rule per program would need the case's logic twice, once to declare outputs and once to run them.
+
+Module- and session-scoped fixtures in Python, like `compiled` in `test_recompiler`, need no special form: the same
+`Build` from each case is one compile. Keep each fixture as a function returning what the Python fixture returned.
+Static helpers and structs of a case file go inside `namespace { }`: many files define a `Row` and they would
+otherwise silently collide at link time.
+
+### Reaching the generator's data
+
+The runner links the generator library, so internals tests call it directly:
+
+| In Python | Natively |
+|---|---|
+| `decode(word, pc).name` | `decoded_name(word, pc)` |
+| `effects(decode(word, pc))` | `effects(word, pc)`: `.lines`, `.dst`, `.value`, `.load`, `.loaded` |
+| `set(discover(image, seeds, scan_calls))` | `Discovery(image, seeds, scan_calls).entries()` |
+| `functions[pc].instructions` | `discovery.instructions(pc)` |
+| `manifest['jump_tables']` from `emit` | `lib.manifest().at("jump_tables")`; `.contains`, `.at`, `.size`, `.str`, `.integer` |
+| `json.loads(path.read_text())` | `Json::file(path)` |
+| `pytest.raises(ValueError, match='x')` around generator calls | `LH_CONTAINS(error_of([&] { ... }), "x")` |
+
+Anything else the library has, such as `lhg_sha1`, is callable through `support/generator_shim.h`, which keeps
+setjmp on C frames. If a test needs an entry point the library hides, add it under `generator/` in its own commit.
+
+### Behaviour with no native twin
+
+| Python-only construct | Mapping |
+|---|---|
+| `pytest.raises(ValueError, match=...)` from a generator call | the C generator's error message, by `error_of` |
+| `monkeypatch` of `Disc` or a module path | build a real input in `t.temp()` that the C code reads; see `test_disc` |
+| a read-log assertion | put different bytes where a wrong read would land, so the existing checksum fails |
+| `Path.write_text` of a C string | `.probe(file, replacements)` |
+| a Python-language fact with no C equivalent | one `LH_TEST` body that says why, and the identity is still present |
+
+### Partly ported files
+
+`LH_PENDING(test_function);` at the end of a case file says a pytest function has no native case yet. Its identities
+show as pending in `--check-identities` and are not expected in the results; a pending function that also has a
+case is an error. Delete the line when the case is written. When a file has no `LH_PENDING` lines it is fully ported.
+
+### Checking your port
+
+`python tests/native/check_generator_inputs.py` runs the ported files under pytest and natively, and fails unless
+every program handed to the generators is byte-identical, per identity where a fixture emits for that test. Add a
+new file to its `FILES` and `PROBES` lists. Delete this script and the `lh::equiv::record` line in
+`support/generated.cpp` with Python.
+
 ## Done means
 
 - [ ] One native case for every row of the file in `identities.tsv`, and none extra. `--check-identities` passes,
@@ -193,8 +280,7 @@ records what the suite had to match before Python was removed.
 
 ## Not covered yet
 
-Tests of the generator's internals, `tools/`, a loopback HTTP service, NumPy image helpers and Vulkan replay are not
-covered yet. Cases that need other top-level CMake targets take them from a separate top-level build. Native tests
+`tools/`, a loopback HTTP service, NumPy image helpers and Vulkan replay are not covered yet. Cases that need other top-level CMake targets take them from a separate top-level build. Native tests
 run on Linux hosts; a Windows target is built by a cross configure that passes `-DLH_HOST_RUNNER=<native build>/lionheart_tests`.
 
 ## What can be ported next
@@ -204,6 +290,15 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 | ctypes and identical inputs | `test_gte` (412), `test_host_viewport` | a library per the Python's `cc` line; `test_gte` also ports its equations to an oracle header |
 | checksums | `test_code_sha1` | a SHA-1 oracle next to `lh::sha256` |
 | host library tests | `test_host_crt`, `test_host_hotkeys`, `test_host_osd` | the ctypes parts are now expressible; Vulkan parts as those files decide |
-| needs the C generator | `test_scratchpad`, `test_idle`, `test_poll`, `test_poll_calendars`, `test_runtime`, `test_gte_timing`, `test_gte_diff`, `test_timing_boundaries`, `test_timing_partial_irq`, `test_timing_regions`, `test_timing_policy`, `test_recomp_configuration`, `test_perf_stats`, `test_recompiler` | wait for the C generator; the library and replay parts are ready |
+| rest of `test_recompiler` (20 functions, 168 identities) | the functions marked `LH_PENDING`; fixture and helpers are in `cases/recompiler_fixture.h` |
+| `test_runtime` (94) | `cases/recompiler_fixture.h` is its `compiled` fixture; `Harness` already has every function it calls |
+| `test_gte_timing` (4), `test_perf_stats` (3) | generated programs as above |
+| `test_gte_diff` (18) | no generator: `tools/gte_trace.build_replay` becomes a harness in the fragment |
+| `test_startup`, `test_host_player` synthetic catalogs | their `emit(image, {}, dir)` is an empty program; give `Program` an empty-seed form or call the shim |
+| `test_timing_*` (policy 292, boundaries 28, regions 28, partial_irq 16) | wait for block and loose timing in the generator; then extend `generate()` and `Program` for `timing` and the register cache |
+
+To work in parallel, take one row each, and within `test_recompiler` one function per commit: nothing but
+`LH_PENDING` lines and the new case bodies change, and case files are found by glob.
+
 | Vulkan replay | `test_pgxp` (reuse `oracles/png.h`), `test_movie_hd`, `test_vulkan` | Vulkan fixtures |
 | service and NumPy | `test_ra_client`, `test_ra_gui`, `test_state_bridge`, `test_movie_frames` | a loopback HTTP fixture; NumPy's generator and image helpers |
