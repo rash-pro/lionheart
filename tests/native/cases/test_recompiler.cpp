@@ -345,7 +345,19 @@ LH_TEST_P(test_jalr_alternate_link, kVariantRows) {
     const Outcome state = diff(t, h, "call_alt_link", {{21, start}}, {{start, r(8, 22)}, {start + 4, 0}});
     LH_EQ(state.state[8], 66u); LH_EQ(state.state[22], table().pcs.at("call_alt_link") + 8);
 }
-LH_PENDING(test_conditional_link);
+struct ConditionalRow { std::string id, variant, name; int value; };
+static std::vector<ConditionalRow> conditional_rows() {
+    std::vector<ConditionalRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"link_branch", "link_branch_negative"})
+        for (int value : {4, -4}) rows.push_back({std::string(variant) + "-" + name + "-" + std::to_string(value), variant, name, value});
+    return rows;
+}
+LH_TEST_P(test_conditional_link, conditional_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, {{8, static_cast<uint32_t>(p.value)}});
+    LH_EQ(state.state[12], 77u);
+}
 LH_PENDING(test_exception_expected);
 LH_PENDING(test_delay_paths_and_isolation);
 LH_PENDING(test_generated_memory_mirrors_and_scratchpad);
