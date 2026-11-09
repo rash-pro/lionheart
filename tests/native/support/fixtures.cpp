@@ -121,12 +121,6 @@ std::string read_file(const fs::path &path) {
     return data.str();
 }
 
-void write_file(const fs::path &path, const std::string &contents) {
-    std::ofstream stream(path, std::ios::binary);
-    stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    if (!stream) LH_FAIL("cannot write " + path.string());
-}
-
 fs::path mkdtemp_under(const fs::path &parent, const std::string &prefix) {
     fs::create_directories(parent);
     std::string pattern = (parent / (prefix + "XXXXXX")).string();

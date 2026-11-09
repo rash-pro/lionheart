@@ -299,11 +299,11 @@ std::vector<External> external_vectors() {
     std::vector<External> out;
     const char *path=std::getenv("FF8_GTE_VECTORS");
     if(path&&*path) {
-        const auto doc=lh::read_json(lh::read_file(path));
-        for(const auto &row:doc.at("tests").items) {
-            External e; e.id="host-"+row.at("name").text; e.opcode=uint32_t(row.at("opcode").integer());
-            for(const auto &n:row.at("input").items) e.input.push_back(uint32_t(n.integer()));
-            for(const auto &n:row.at("output").items) e.output.push_back(uint32_t(n.integer()));
+        const auto doc=lh::Json::parse(lh::read_file(path));
+        for(const auto &row:doc["tests"].items()) {
+            External e; e.id="host-"+row["name"].text(); e.opcode=uint32_t(row["opcode"].integer());
+            for(const auto &n:row["input"].items()) e.input.push_back(uint32_t(n.integer()));
+            for(const auto &n:row["output"].items()) e.output.push_back(uint32_t(n.integer()));
             out.push_back(std::move(e));
         }
     }
