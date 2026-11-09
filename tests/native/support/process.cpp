@@ -51,7 +51,12 @@ std::string quoted(const std::vector<std::string> &argv) {
                         int out, int err, int status) {
     // A group of its own lets a timeout also stop anything the program started.
     setpgid(0, 0);
-    int null = open("/dev/null", O_RDONLY);
+    int null = open(command.input_file().empty() ? "/dev/null" : command.input_file().c_str(), O_RDONLY);
+    if (null < 0) {
+        int code = errno;
+        (void)!write(status, &code, sizeof(code));
+        _exit(127);
+    }
     if (null >= 0) dup2(null, 0);
     dup2(out, 1);
     dup2(err, 2);

@@ -58,6 +58,8 @@ public:
     Command(std::string program, bool target) : program_(std::move(program)), target_(target) {}
     Command &arg(Arg value) { args_.push_back(std::move(value)); return *this; }
     Command &args(std::initializer_list<Arg> values) { args_.insert(args_.end(), values); return *this; }
+    Command &stdin_file(fs::path path) { stdin_ = std::move(path); return *this; }
+    const fs::path &input_file() const { return stdin_; }
     Command &timeout(double seconds) { timeout_ = seconds; return *this; }
     Command &cwd(fs::path directory) { cwd_ = std::move(directory); return *this; }
     Command &env(std::string name, std::string value) { env_[std::move(name)] = std::move(value); return *this; }
@@ -76,7 +78,7 @@ private:
     bool target_;
     std::vector<Arg> args_;
     double timeout_ = 300;
-    fs::path cwd_;
+    fs::path cwd_, stdin_;
     std::map<std::string, std::string> env_;
     std::vector<std::string> unset_;
 };
