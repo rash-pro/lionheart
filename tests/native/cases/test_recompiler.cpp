@@ -358,7 +358,30 @@ LH_TEST_P(test_conditional_link, conditional_rows()) {
     const Outcome state = diff(t, h, p.name, {{8, static_cast<uint32_t>(p.value)}});
     LH_EQ(state.state[12], 77u);
 }
-LH_PENDING(test_exception_expected);
+struct ExceptionRow { std::string id, variant, name; Pairs regs; uint32_t code; };
+static std::vector<ExceptionRow> exception_rows() {
+    const std::vector<ExceptionRow> cases = {
+        {"overflow_add-regs0-12", "", "overflow_add", {{8, 0x7FFFFFFF}, {9, 1}}, 12},
+        {"overflow_sub-regs1-12", "", "overflow_sub", {{8, 0x80000000}, {9, 1}}, 12},
+        {"overflow_addi-regs2-12", "", "overflow_addi", {{8, 0x7FFFFFFF}}, 12},
+        {"misaligned_load-regs3-4", "", "misaligned_load", {}, 4},
+        {"misaligned_store-regs4-5", "", "misaligned_store", {}, 5},
+        {"break-regs5-9", "", "break", {}, 9}, {"reserved-regs6-10", "", "reserved", {}, 10},
+        {"cop_unusable-regs7-11", "", "cop_unusable", {}, 11}, {"exception_slot-regs8-4", "", "exception_slot", {}, 4}};
+    std::vector<ExceptionRow> rows;
+    for (const char *variant : kVariants) for (auto row : cases) {
+        row.id = std::string(variant) + "-" + row.id; row.variant = variant; rows.push_back(row);
+    }
+    return rows;
+}
+LH_TEST_P(test_exception_expected, exception_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, p.regs);
+    LH_EQ(state.state[37], 1u); LH_EQ((state.state[52] >> 2) & 31, p.code);
+    LH_EQ(state.state[53], table().pcs.at(p.name));
+    LH_EQ(bool(state.state[52] >> 31), p.name == "exception_slot");
+}
 LH_PENDING(test_delay_paths_and_isolation);
 LH_PENDING(test_generated_memory_mirrors_and_scratchpad);
 LH_PENDING(test_stop_unwinds_before_following_instruction);
