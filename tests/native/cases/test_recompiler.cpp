@@ -273,25 +273,267 @@ LH_TEST(test_versioned_indirect_entry_points_anchor_discovery) {
     LH_CHECK(functions.instructions(BASE + 64) == (std::set<uint32_t>{BASE + 64, BASE + 68, BASE + 72}));
 }
 
-LH_PENDING(test_unaligned_expected);
-LH_PENDING(test_branch_operands_captured_before_slot);
-LH_PENDING(test_call_boundary_load);
-LH_PENDING(test_dispatch_miss_hands_back_to_compiled);
-LH_PENDING(test_jalr_alternate_link);
-LH_PENDING(test_conditional_link);
-LH_PENDING(test_exception_expected);
-LH_PENDING(test_delay_paths_and_isolation);
-LH_PENDING(test_generated_memory_mirrors_and_scratchpad);
-LH_PENDING(test_stop_unwinds_before_following_instruction);
-LH_PENDING(test_instruction_budget_stops_loop);
-LH_PENDING(test_modified_source_is_interpreted);
-LH_PENDING(test_store_to_current_function_exits_before_stale_instruction);
-LH_PENDING(test_gte_store_to_current_function_exits_before_stale_instruction);
-LH_PENDING(test_dispatch_cache_follows_registry_changes);
-LH_PENDING(test_jump_table_words_invalidate_compiled_function);
-LH_PENDING(test_overlay_data_write_does_not_change_code_epoch);
-LH_PENDING(test_deep_guest_recursion_resumes_compiled_returns);
-LH_PENDING(test_nonlocal_reentry_discards_abandoned_call_frames);
-LH_PENDING(test_bios_longjmp_resumes_compiled_return_site);
+struct UnalignedRow { std::string id, variant; unsigned offset; };
+static std::vector<UnalignedRow> unaligned_rows() {
+    std::vector<UnalignedRow> rows;
+    for (const char *variant : kVariants) for (unsigned offset = 0; offset < 4; ++offset)
+        rows.push_back({std::string(variant) + "-" + std::to_string(offset), variant, offset});
+    return rows;
+}
+LH_TEST_P(test_unaligned_expected, unaligned_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const unsigned offset = p.offset;
+    Outcome state = diff(t, h, "unaligned_" + std::to_string(offset));
+    const unsigned char bytes[] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    uint32_t expected = 0;
+    for (unsigned i = 0; i < 4; ++i) expected |= uint32_t(bytes[offset + i]) << (8 * i);
+    LH_EQ(state.state[10], expected);
+    LH_EQ(state.state[9], 0xAABBCCDDu);
+    state = diff(t, h, "unaligned_reverse_" + std::to_string(offset));
+    LH_EQ(state.state[8], expected);
+    for (const std::string name : {"swl", "swr"}) {
+        state = diff(t, h, name + "_" + std::to_string(offset));
+        std::string expected_bytes("\x11\x22\x33\x44", 4);
+        const std::string value("\xdd\xcc\xbb\xaa", 4);
+        if (name == "swl") expected_bytes.replace(0, offset + 1, value.substr(3 - offset));
+        else expected_bytes.replace(offset, 4 - offset, value.substr(0, 4 - offset));
+        LH_BYTES_EQ(state.memory.substr(DATA & 0x1FFFFF, 4), expected_bytes);
+    }
+}
+LH_TEST_P(test_branch_operands_captured_before_slot, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Outcome state = diff(t, h, "branch_delay", {{8, 5}, {9, 5}});
+    LH_EQ(state.state[8], 17u); LH_EQ(state.state[10], 0u);
+    state = diff(t, h, "branch_delay", {{8, 4}, {9, 5}});
+    LH_EQ(state.state[10], 22u);
+    state = diff(t, h, "load_branch", {{8, 5}, {9, 5}});
+    LH_EQ(state.state[10], 0x44332211u); LH_EQ(state.state[11], 0u);
+    state = diff(t, h, "loop", {{8, 17}, {9, 0}});
+    LH_EQ(state.state[8], 0u); LH_EQ(state.state[9], 17u);
+}
+static std::vector<NameRow> boundary_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"call_direct", "call_indirect"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_call_boundary_load, boundary_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name);
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[0], 0u);
+}
+LH_TEST_P(test_dispatch_miss_hands_back_to_compiled, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const uint32_t start = 0x800F0000;
+    const Pairs memory = {{start, j(2, table().pcs.at("callee"))}, {start + 4, imm(9, 0, 8, 99)}};
+    Outcome state = diff(t, h, "callee", {}, memory, start);
+    LH_EQ(state.state[9], 99u); LH_EQ(state.state[10], 99u);
+    LH_EQ(state.counts[0], 2u); LH_CHECK(state.counts[1] >= 1); LH_EQ(state.counts[2], 1u);
+    state = diff(t, h, "fallback", {{21, start}}, memory);
+    LH_EQ(state.state[9], 99u); LH_EQ(state.state[10], 99u);
+    LH_EQ(state.counts[0], 2u); LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[2], 1u);
+}
+LH_TEST_P(test_jalr_alternate_link, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const uint32_t start = 0x800F0000;
+    const Outcome state = diff(t, h, "call_alt_link", {{21, start}}, {{start, r(8, 22)}, {start + 4, 0}});
+    LH_EQ(state.state[8], 66u); LH_EQ(state.state[22], table().pcs.at("call_alt_link") + 8);
+}
+struct ConditionalRow { std::string id, variant, name; int value; };
+static std::vector<ConditionalRow> conditional_rows() {
+    std::vector<ConditionalRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"link_branch", "link_branch_negative"})
+        for (int value : {4, -4}) rows.push_back({std::string(variant) + "-" + name + "-" + std::to_string(value), variant, name, value});
+    return rows;
+}
+LH_TEST_P(test_conditional_link, conditional_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, {{8, static_cast<uint32_t>(p.value)}});
+    LH_EQ(state.state[12], 77u);
+}
+struct ExceptionRow { std::string id, variant, name; Pairs regs; uint32_t code; };
+static std::vector<ExceptionRow> exception_rows() {
+    const std::vector<ExceptionRow> cases = {
+        {"overflow_add-regs0-12", "", "overflow_add", {{8, 0x7FFFFFFF}, {9, 1}}, 12},
+        {"overflow_sub-regs1-12", "", "overflow_sub", {{8, 0x80000000}, {9, 1}}, 12},
+        {"overflow_addi-regs2-12", "", "overflow_addi", {{8, 0x7FFFFFFF}}, 12},
+        {"misaligned_load-regs3-4", "", "misaligned_load", {}, 4},
+        {"misaligned_store-regs4-5", "", "misaligned_store", {}, 5},
+        {"break-regs5-9", "", "break", {}, 9}, {"reserved-regs6-10", "", "reserved", {}, 10},
+        {"cop_unusable-regs7-11", "", "cop_unusable", {}, 11}, {"exception_slot-regs8-4", "", "exception_slot", {}, 4}};
+    std::vector<ExceptionRow> rows;
+    for (const char *variant : kVariants) for (auto row : cases) {
+        row.id = std::string(variant) + "-" + row.id; row.variant = variant; rows.push_back(row);
+    }
+    return rows;
+}
+LH_TEST_P(test_exception_expected, exception_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, p.regs);
+    LH_EQ(state.state[37], 1u); LH_EQ((state.state[52] >> 2) & 31, p.code);
+    LH_EQ(state.state[53], table().pcs.at(p.name));
+    LH_EQ(bool(state.state[52] >> 31), p.name == "exception_slot");
+}
+LH_TEST_P(test_delay_paths_and_isolation, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Outcome state = diff(t, h, "load_slot_taken");
+    LH_EQ(state.state[10], 0xAABBCCDDu); LH_EQ(state.state[11], 0x44332211u);
+    state = diff(t, h, "load_slot_fallthrough");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    state = diff(t, h, "load_slot_overwrite"); LH_EQ(state.state[8], 77u);
+    state = diff(t, h, "load_slot_twice");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x88776655u);
+    state = diff(t, h, "call_return_load");
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    state = diff(t, h, "pending_overflow", {{9, 0x7FFFFFFF}, {10, 1}});
+    LH_EQ(state.state[8], 0x44332211u); LH_CHECK(state.state[37]);
+    state = diff(t, h, "isolation", {{8, 0x10000}, {9, 0x12345678}});
+    LH_EQ(state.state[10], 0x44332211u); LH_EQ(state.state[11], 0x12345678u);
+    LH_BYTES_EQ(state.memory.substr(0x100000, 8), std::string("\x11\x22\x33\x44\x78\x56\x34\x12", 8));
+    state = diff(t, h, "call_indirect", {{21, table().pcs.at("incoming_load_twice")}});
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x88776655u);
+    state = diff(t, h, "load_merge_address", {{8, DATA}}, {{DATA, 0x12345678}});
+    LH_EQ(state.state[8], 0x12345678u);
+}
+struct MirrorRow { std::string id, variant; uint32_t base; };
+static std::vector<MirrorRow> mirror_rows() {
+    std::vector<MirrorRow> rows;
+    for (const char *variant : kVariants) for (uint32_t base : {0x00200000u, 0x80400000u, 0xA0600000u, 0x1F800000u})
+        rows.push_back({std::string(variant) + "-" + std::to_string(base), variant, base});
+    return rows;
+}
+LH_TEST_P(test_generated_memory_mirrors_and_scratchpad, mirror_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    diff(t, h, "memory", {{20, p.base + 0x100}});
+}
+struct BoolRow { std::string id, variant; bool value; };
+static std::vector<BoolRow> bool_rows() {
+    std::vector<BoolRow> rows;
+    for (const char *variant : kVariants) for (bool value : {false, true})
+        rows.push_back({std::string(variant) + (value ? "-True" : "-False"), variant, value});
+    return rows;
+}
+LH_TEST_P(test_stop_unwinds_before_following_instruction, bool_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    h.test_register(cpu.get(), 8, 0x7FFFFFFF); h.test_register(cpu.get(), 10, 123);
+    if (p.value) h.test_run_legacy(cpu.get(), table().pcs.at("overflow_addi"));
+    else h.test_run(cpu.get(), table().pcs.at("overflow_addi"), 0);
+    std::array<uint32_t, 135> snapshot{}; h.test_snapshot(cpu.get(), snapshot.data());
+    LH_CHECK(snapshot[37]); LH_EQ(snapshot[10], 123u);
+    LH_EQ(snapshot[34], table().pcs.at("overflow_addi")); LH_EQ(h.test_count(cpu.get(), 4), 1u);
+}
+LH_TEST_P(test_instruction_budget_stops_loop, bool_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    h.test_register(cpu.get(), 8, 1000000); h.test_limits(cpu.get(), 10000, 0);
+    h.test_run(cpu.get(), table().pcs.at("loop"), p.value);
+    LH_TEXT_EQ(h.test_reason(cpu.get()), "instruction budget exhausted");
+    const uint64_t count = h.test_count(cpu.get(), 0) + h.test_count(cpu.get(), 4);
+    LH_CHECK(count >= 10000 && count < 10004);
+}
+static std::vector<NameRow> modified_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"callee", "call_direct"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_modified_source_is_interpreted, modified_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, {}, {{table().pcs.at("callee"), imm(9, 0, 9, 123)}});
+    LH_EQ(state.state[9], 123u); LH_CHECK(state.counts[0] >= 1);
+}
+LH_TEST_P(test_store_to_current_function_exits_before_stale_instruction, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "self_modify", {{20, table().pcs.at("self_modify") + 4}, {8, imm(9, 0, 9, 77)}});
+    LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
+}
+LH_TEST_P(test_gte_store_to_current_function_exits_before_stale_instruction, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "gte_self_modify", {{20, table().pcs.at("gte_self_modify") + 8}, {8, imm(9, 0, 9, 77)}});
+    LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
+}
+LH_TEST_P(test_dispatch_cache_follows_registry_changes, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    const uint32_t callee = table().pcs.at("callee");
+    h.test_run(cpu.get(), callee, 0); LH_EQ(h.test_count(cpu.get(), 0), 0u);
+    h.test_registry_count(cpu.get(), 0, 0);
+    h.test_run(cpu.get(), callee, 0); LH_CHECK(h.test_count(cpu.get(), 0) > 0);
+    const uint64_t before = h.test_count(cpu.get(), 0);
+    const size_t count = *lib.fn<size_t>("generated_count");
+    h.test_registry_count(cpu.get(), 0, count);
+    h.test_run(cpu.get(), callee, 0); LH_EQ(h.test_count(cpu.get(), 0), before);
+}
+LH_TEST_P(test_jump_table_words_invalidate_compiled_function, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "jump_table", {{4, 0}}, {{table().table, table().table_pc + 44}});
+    LH_EQ(state.state[2], 77u); LH_CHECK(state.counts[0] > 0);
+}
+LH_TEST_P(test_overlay_data_write_does_not_change_code_epoch, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    std::string blob = pack(Words{r(33, 31, 0, 25), j(3, table().pcs.at("callee")), 0,
+                                  imm(9, 0, 2, 42), r(33, 25, 0, 31)} + RET);
+    blob.append(16, '\0');
+    h.test_image(cpu.get(), 0x80098000, blob.data(), blob.size());
+    h.test_run(cpu.get(), 0x80098000, 0);
+    const uint64_t before = h.test_code_epoch(cpu.get());
+    h.test_write(cpu.get(), 0x80098028, 1, 1); LH_EQ(h.test_code_epoch(cpu.get()), before);
+    h.test_write(cpu.get(), 0x80098000, 1, 1); LH_CHECK(h.test_code_epoch(cpu.get()) > before);
+}
+LH_TEST_P(test_deep_guest_recursion_resumes_compiled_returns, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "deep_recursion", {{8, 1000}});
+    LH_EQ(state.state[8], 0u); LH_EQ(state.state[29], 0x801FFFF0u); LH_CHECK(!state.state[37]);
+    LH_EQ(state.counts[0], 0u);
+}
+static std::vector<NameRow> nonlocal_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"nonlocal_child", "unexpected_child"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_nonlocal_reentry_discards_abandoned_call_frames, nonlocal_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Pairs memory = p.name == "unexpected_child" ? Pairs{{table().pcs.at("nonlocal_loop") + 4, j(3, table().pcs.at(p.name))}} : Pairs{};
+    const Outcome state = diff(t, h, "nonlocal_loop", {{8, 1000}, {21, table().pcs.at("nonlocal_loop") + 12}}, memory);
+    LH_EQ(state.state[8], 0u); LH_CHECK(!state.state[37]);
+    if (p.name == "nonlocal_child") LH_EQ(state.counts[0], 0u);
+}
+LH_TEST_P(test_bios_longjmp_resumes_compiled_return_site, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Words saved = Words{table().pcs.at("bios_longjmp") + 8, 0x801FFFF0, 0xFFFFFFFF} + Words(9, 0);
+    Pairs memory;
+    for (unsigned i = 0; i < saved.size(); ++i) memory.emplace_back(DATA + i * 4, saved[i]);
+    const Outcome state = diff(t, h, "bios_longjmp", {{4, DATA}, {5, 1}}, memory);
+    LH_EQ(state.state[2], 1u); LH_EQ(state.state[10], 77u); LH_CHECK(!state.state[37]);
+    LH_EQ(state.counts[0], 0u);
+}
 
 } // namespace
