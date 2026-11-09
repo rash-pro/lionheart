@@ -85,7 +85,7 @@ your controller model in the report.
   baseline before your change, then compare:
 
   ```sh
-  python tools/compare.py --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/exactness
+  build/devtools/compare --before /path/to/baseline/ff8 --after build/dev/ff8 --exe build/generated/extracted/SLUS_008.92 --disc /path/to/disc1.cue --script tests/scripts/new-game.txt --vblanks 15000 --output build/exactness
   ```
 
   This compares the complete `--dump-state` and every software `--dump-frames` PNG. Run it again with
