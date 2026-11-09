@@ -345,8 +345,8 @@ typedef struct {
  * Assets may contain instruction-shaped words, so only the first 4 KiB, a
  * nearby target and an independently decodable nonzero target count as evidence.
  * Ties are rejected rather than guessing a missing configuration address. */
-static uint32_t infer_effect_base(lhg_arena *arena, const uint8_t *data, size_t size, const char *group_name,
-                                  lhg_json *evidence)
+uint32_t lhg_infer_effect_base(lhg_arena *arena, const uint8_t *data, size_t size, const char *group_name,
+                               lhg_json *evidence)
 {
     lhg_ctx *ctx = arena->ctx;
     static const uint32_t candidates[3] = {0x80190000, 0x801A0000, 0x801B0000};
@@ -616,7 +616,7 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
                 base = parse_hex32(ctx, lhg_json_str(ctx, load_address, "load_address"), "load_address");
             } else {
                 lhg_json *proof = lhg_json_new_object(arena);
-                base = infer_effect_base(arena, item->data, item->data_size, group_name, proof);
+                base = lhg_infer_effect_base(arena, item->data, item->data_size, group_name, proof);
                 lhg_json_set(arena, evidence, group_sha1, proof);
             }
             const char *path = lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path");
