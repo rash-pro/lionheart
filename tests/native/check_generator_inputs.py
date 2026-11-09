@@ -27,10 +27,11 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
 
 # Each ported file; test_recompiler is compared for its ported functions only.
 FILES = ['test_scratchpad', 'test_idle', 'test_poll', 'test_poll_calendars',
-         'test_recomp_configuration', 'test_recompiler', 'test_runtime', 'test_gte_timing']
+         'test_recomp_configuration', 'test_recompiler', 'test_runtime', 'test_gte_timing', 'test_perf_stats']
 
 # The C probes moved out of Python strings, in file order.
 PROBES = {
+    'test_perf_stats': ['test_perf_stats_memory.c', 'test_perf_stats_histogram.c'],
     'test_gte_timing': ['test_gte_timing.c'],
     'test_scratchpad': ['test_scratchpad.c'],
     'test_idle': ['test_idle.c', 'test_idle_masked.c'],
