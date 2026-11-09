@@ -54,11 +54,16 @@ in [`tools/windows-deps.json`](tools/windows-deps.json), checks their sizes and 
 and the player:
 
 ```sh
-python3 tools/build_windows.py
+cmake -P tools/build_windows.cmake
 ```
 
 `build/windows/dist-windows/` then holds `Lionheart.exe`, its DLLs and the licence notices. Keep that folder
 together. It has not yet been tested on a physical Windows machine.
+
+Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` or `-DJOBS=4` before `-P` to override the defaults.
+The driver needs no Python. `-DOFFLINE=ON` requires verified cached inputs and disables downloads.
+An installed dependency prefix has a receipt tied to the dependency lock, build recipe and installed file bytes.
+If an older cache has no receipt, remove its `install-ucrt` folder and rebuild from its verified cached sources.
 
 ## First run
 
