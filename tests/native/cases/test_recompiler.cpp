@@ -464,7 +464,12 @@ LH_TEST_P(test_store_to_current_function_exits_before_stale_instruction, kVarian
     const Outcome state = diff(t, h, "self_modify", {{20, table().pcs.at("self_modify") + 4}, {8, imm(9, 0, 9, 77)}});
     LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
 }
-LH_PENDING(test_gte_store_to_current_function_exits_before_stale_instruction);
+LH_TEST_P(test_gte_store_to_current_function_exits_before_stale_instruction, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "gte_self_modify", {{20, table().pcs.at("gte_self_modify") + 8}, {8, imm(9, 0, 9, 77)}});
+    LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
+}
 LH_PENDING(test_dispatch_cache_follows_registry_changes);
 LH_PENDING(test_jump_table_words_invalidate_compiled_function);
 LH_PENDING(test_overlay_data_write_does_not_change_code_epoch);
