@@ -3779,3 +3779,5 @@ tests/test_host_windows.py::test_player_session_fatal_signal[8]	standard	pass
 tests/test_host_windows.py::test_player_session_fatal_signal[4]	standard	pass	
 tests/test_host_windows.py::test_player_session_fatal_signal[7]	standard	pass	
 tests/test_host_windows.py::test_player_session_abnormal_stop_has_no_dialog	standard	pass	
+tests/test_host_player.py::test_player_stop_log_and_status[fault]	standard	pass	
+tests/test_host_player.py::test_player_stop_log_and_status[limit]	standard	pass	
