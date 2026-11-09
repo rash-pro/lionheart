@@ -8,7 +8,7 @@ from tools.compare import compare, run
 def test_native_matches_interpreter(tmp_path):
     exe, disc = owned_path('SLUS_008.92'), owned_disc(1)
     native = ROOT / 'build/dev/ff8'
-    assert native.is_file(), 'run python tools/setup.py --disc1 DISC first'
+    assert native.is_file(), 'run cmake -P tools/setup.cmake -- --disc1 DISC first'
     # Keep the executable wrapper synthetic. Both runs use the same binary/configuration.
     wrapper = tmp_path / 'interpret'
     import shlex

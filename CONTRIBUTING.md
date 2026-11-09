@@ -6,14 +6,11 @@ the interpreter.
 
 ## Set up from your discs
 
-You need the Linux build requirements from the [README](README.md), Python 3.13+ and pytest. Work in a virtual
-environment:
+You need the Linux build requirements from the [README](README.md). Setup uses CMake and a C99 host compiler.
+It does not need Python:
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[test]'
-python tools/setup.py --disc1 /path/to/disc1.cue --disc2 /path/to/disc2.cue --disc3 /path/to/disc3.cue --disc4 /path/to/disc4.cue
+nice -n 10 cmake -P tools/setup.cmake -- --disc1 /path/to/disc1.cue --disc2 /path/to/disc2.cue --disc3 /path/to/disc3.cue --disc4 /path/to/disc4.cue --jobs 6
 ```
 
 Only disc 1 is required. Give all four discs to generate the complete catalog. Setup does the following:
@@ -24,14 +21,64 @@ Only disc 1 is required. Give all four discs to generate the complete catalog. S
 
 Everything extracted or generated stays in `build/`.
 
-The catalog is cached by EXE identity, disc set and recompiler version. A second run reuses it unless you changed
-the recompiler. On a 16-thread desktop a cold all-disc setup took 6 to 7 minutes. Generating the C took under 30
-seconds of that; the rest was native compilation. A cached run took a few seconds.
+Setup first builds the standalone `lionheart-gen` host tool in `build/generator/`. `--jobs` accepts 1 through 8
+and defaults to 8. Use `--jobs 6` on a shared machine. The generator library owns the cache, so an embedding host
+uses the same policy.
+
+The cache fingerprints the native generator sources, catalog bytes, generation options and verified disc inputs.
+Every run verifies each EXE's size and SHA-1 and the selected overlays against the versioned catalog.
+A hit also checks every generated output with SHA-256. Missing or corrupt files cause regeneration.
+The receipt is removed before generation and published atomically after all outputs close. Interrupted runs
+and caches from the old setup are not reused. Setup takes an exclusive lock on `build/` for the whole operation.
+
+The native generator also cross-builds with llvm-mingw without the host's SDL or Vulkan dependencies:
+
+```sh
+cmake -S generator -B build/generator-windows -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=/path/to/llvm-mingw/bin/x86_64-w64-mingw32-clang
+cmake --build build/generator-windows --target lionheart-gen -j6
+```
+
+On Windows, run `lionheart-gen.exe --disc disc1.cue --legacy-overlays --cache -o build/generated` from the
+repository root. Repeat `--disc` for the other discs. Generation uses UTF-8 paths and binary writes on both systems.
+The full setup command above builds the Linux developer host.
+
+Native generator fingerprints also replace Python sources in the save-state build identity.
+Existing save states from the previous build are rejected. In-game memory card saves remain compatible.
 
 To cross-build the Windows player on Linux, run `python tools/build_windows.py`. `--deps PATH` reuses a pinned
 dependency tree and `--build PATH` picks the build folder. Downloads are verified against `tools/windows-deps.json`.
 
 ## Tests
+
+The native suite needs C++17 and the build dependencies listed in the README:
+
+```sh
+cmake -S tests/native -B build/native-tests
+nice -n 10 cmake --build build/native-tests -j6
+cmake -S . -B build/player
+nice -n 10 cmake --build build/player --target ff8 -j6
+FF8_PLAYER_HOST="$PWD/build/player/lionheart" ctest --test-dir build/native-tests -j6 --output-on-failure -LE 'game|realtime'
+```
+
+For the tier-2 boot checks after setup, set the input folders described below and run
+`ctest --test-dir build/native-tests -R test_boot_integration --output-on-failure`.
+The archive extraction tests need a temporary directory outside the checkout. Leave `TMPDIR` unset or point
+it at an external scratch folder when running CTest.
+
+The transitional pytest suite still needs Python 3.13+ and the test dependencies. Install them in a virtual
+environment with `python3 -m venv .venv`, activate it, then run `python -m pip install -e '.[test]'`.
+The old setup and `recomp/` remain only until those checks are retired.
+
+The generator's standalone checks cover cache identity, output integrity and setup arguments:
+
+```sh
+nice -n 10 cmake --build build/generator -j6
+ctest --test-dir build/generator --output-on-failure
+```
+
+With `LIONHEART_DISCS` set, `generator/test/setup_cache.sh` also checks real-disc hits, catalog and option
+changes, source fingerprints, corruption, old receipts and a killed generation. Use a fresh
+`build/setup-cache-check/` directory for each run.
 
 **Tier 1** needs no game data. It runs synthetic inputs and small hand-written MIPS programs through discovery, C
 emission, compilation and execution, and compares the results against the interpreter. CI runs this tier.

@@ -48,6 +48,10 @@ typedef struct {
     /* NULL uses the catalog's play-register-cache.json for experimental timing.
      * Exact timing accepts a selection but does not apply the lowering. */
     const lhg_register_cache *register_cache;
+    /* Cache the developer (legacy disc) catalog. Inputs are verified on every
+     * call, including hits. Requires disc 1. Callers must own output_dir
+     * exclusively until the call returns. Old setup caches are never reused. */
+    int use_cache;
 } lhg_options;
 
 typedef struct {
@@ -56,10 +60,13 @@ typedef struct {
     unsigned long jump_tables;
     unsigned long overlay_sets;
     int full_catalog;
+    int cache_hit;
 } lhg_summary;
 
 /* Generates into options->output_dir. error may be NULL. summary may be NULL. */
 lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *error, size_t error_size);
+/* Source identity compiled by CMake, shared with the restoration ABI. */
+const char *lhg_generator_fingerprint(void);
 
 #ifdef __cplusplus
 }

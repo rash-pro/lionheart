@@ -223,8 +223,22 @@ void lhg_remove_file(lhg_ctx *ctx, const char *path)
 #else
     int failed = unlink(path);
 #endif
-    if (failed)
+    if (failed && errno != ENOENT)
         lhg_fail(ctx, "cannot remove %s: %s", path, strerror(errno));
+}
+
+void lhg_replace_file(lhg_ctx *ctx, const char *from, const char *to)
+{
+#ifdef _WIN32
+    wchar_t *wide_from = wide_path(ctx, from), *wide_to = wide_path(ctx, to);
+    int failed = !MoveFileExW(wide_from, wide_to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    lhg_free(ctx, wide_from);
+    lhg_free(ctx, wide_to);
+#else
+    int failed = rename(from, to);
+#endif
+    if (failed)
+        lhg_fail(ctx, "cannot replace %s", to);
 }
 
 const char *lhg_join_path(lhg_arena *arena, const char *parent, const char *name)

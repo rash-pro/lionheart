@@ -8,17 +8,33 @@ No game-derived code or data is committed or distributed.
 
 ## Disc to native executable
 
-`tools/psxdisc.py` reads raw 2352-byte CUE/BIN images and their ISO9660 directories.
-Setup extracts the boot EXE and verifies its size and SHA-1 against `games/ff8-usa`.
-`recomp/disc.py` extracts and verifies the executable overlays using addresses, sizes and hashes.
-The setup uses the versioned top-table catalog, including movie overlays, across the supplied discs.
-`recomp/overlays.py` also supports the wider loader/effect catalog for diagnostics and legal scanning.
-All extracted bytes stay in the build directory.
+`generator/` is a standalone C99 library and the `lionheart-gen` command-line tool. Neither depends on
+Python, SDL or the runtime. The library owns each call's state, reports progress and cancellation through
+callbacks, and unwinds failures back to the caller. Paths are UTF-8 and output uses binary writes with LF on
+Linux and Windows.
 
-`recomp/discover.py` follows function entries and control flow. `decode.py` decodes MIPS instructions.
-`emit.py`, `fast.py` and `precise.py` generate C with explicit guest registers, loads and retirement boundaries.
-Generated translation units and dispatch tables are compiled together with `runtime/` and `backends/host/`.
-Version metadata contains identities, addresses, boundaries and resource locations, never payload bytes.
+`generator/src/disc.c` reads raw 2352-byte CUE/BIN images and ISO9660 directories. `catalog.c` verifies the
+EXE and overlays against `games/ff8-usa`, and `lzs.c` decompresses stored resources. The developer setup uses
+the versioned top-table catalog, including movie overlays, across the supplied discs. The default CLI mode
+also supports the wider loader/effect catalog for diagnostics and legal scanning. All extracted bytes stay
+in the build directory. Metadata contains identities, addresses, boundaries and locations, never payload bytes.
+
+`decode.c` decodes MIPS instructions and `discover.c` follows function entries and control flow. `emit.c`,
+`fast.c` and `precise.c` generate C with explicit guest registers, loads and retirement boundaries.
+`locals.c` handles selected register caching for experimental timing. Generated translation units and dispatch
+tables compile together with `runtime/` and `backends/host/`.
+
+`tools/setup.cmake` builds the small host generator, invokes the library's cached developer generation, then
+configures and builds the developer executable. Cache identity lives in `generator/src/cache.c` for use by
+embedding hosts. CMake fingerprints the generator's C sources and headers with checkout-relative names.
+The key also covers catalog bytes, options, the verified EXE and overlay identities, and the disc set.
+Every hit verifies the supplied inputs and each generated output's SHA-256. The receipt is removed before
+emission and published by an atomic rename after success. Callers must exclusively own the output directory;
+the setup launcher locks `build/` for its whole run. Caches from the old setup are not accepted.
+
+The restoration ABI hashes that same native generator fingerprint, the generated manifest, runtime and host
+sources, and the statistics and interpreter options. Replacing the Python source hashes changes the build
+identity and rejects older save states. Memory card saves do not depend on this identity.
 
 ## Dispatch and overlays
 

@@ -37,7 +37,8 @@ static void usage(FILE *to)
     fprintf(to,
             "usage: lionheart-gen [EXE] [--disc CUE ...] [--catalog DIR] [--assets-dir DIR]\n"
             "                     [-o DIR] [--mode trace|fast] [--timing exact|block|loose]\n"
-            "                     [--host-mode precise|fast] [--legacy-overlays]\n");
+            "                     [--host-mode precise|fast] [--legacy-overlays] [--cache]\n"
+            "                     [--fingerprint]\n");
 }
 
 static const char *value_of(int argc, char **argv, int *index, const char *arg, const char *flag)
@@ -56,6 +57,18 @@ static int matches_flag(const char *arg, const char *flag)
 {
     size_t size = strlen(flag);
     return !strncmp(arg, flag, size) && (arg[size] == 0 || arg[size] == '=');
+}
+
+static int progress(void *user, const char *stage, unsigned long done, unsigned long total)
+{
+    (void)user;
+    (void)done;
+    (void)total;
+    if (!strcmp(stage, "generation")) {
+        puts("Catalog cache miss: generating native functions...");
+        fflush(stdout);
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -78,6 +91,11 @@ int main(int argc, char **argv)
         if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
             usage(stdout);
             return 0;
+        } else if (!strcmp(arg, "--fingerprint")) {
+            puts(lhg_generator_fingerprint());
+            return 0;
+        } else if (!strcmp(arg, "--cache")) {
+            options.use_cache = 1;
         } else if (matches_flag(arg, "--disc")) {
             const char *value = value_of(argc, argv, &index, arg, "--disc");
             if (!value)
@@ -164,12 +182,19 @@ int main(int argc, char **argv)
         return 2;
     }
     lhg_summary summary;
+    if (options.use_cache)
+        options.progress = progress;
     char error[1024];
     if (lhg_generate(&options, &summary, error, sizeof error) != LHG_OK) {
         fprintf(stderr, "lionheart-gen: %s\n", error);
         return 1;
     }
-    if (summary.full_catalog)
+    if (options.use_cache)
+        puts(summary.cache_hit ? "Catalog cache hit: verified inputs, generator, catalogs, options and output SHA-256."
+                               : "Catalog cache miss: generated and verified native functions.");
+    if (summary.cache_hit)
+        printf("Reused %lu overlay sets in %s\n", summary.overlay_sets, options.output_dir);
+    else if (summary.full_catalog)
         printf("Generated %lu main functions and %lu catalog sets in %s\n", summary.functions, summary.overlay_sets, options.output_dir);
     else
         printf("Generated %lu functions, %lu instructions, %lu jump tables in %s\n", summary.functions, summary.instructions, summary.jump_tables,
