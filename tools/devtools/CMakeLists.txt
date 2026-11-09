@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(lionheart_devtools LANGUAGES CXX)
+add_library(pad-support INTERFACE)
+target_include_directories(pad-support INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(pad-support INTERFACE cxx_std_17)
