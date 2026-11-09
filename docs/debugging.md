@@ -25,8 +25,8 @@ An image-only difference suggests presentation or GPU output. A guest-state diff
 
 `--log PATH` records guest tracing; `--log-events` enables hardware event tracing.
 Statistics builds print interpreter/native work counts.
-`tools/gte_trace.py record --host-build build/dev --output build/gte` relinks a tracing host.
-`tools/gte_trace.py replay --output build/gte-replay` builds the trace replayer.
+`build/devtools/gte-trace record --host-build build/dev --output build/gte` relinks a tracing host.
+`build/devtools/gte-trace replay --output build/gte-replay` builds the trace replayer.
 Keep traces and extracted code under `build/`. Do not attach game dumps or generated C to public issues.
 
 Report the supported serial, input script, last matching VBlank, compiler/options, and log excerpts.

@@ -59,7 +59,7 @@ contracts and baseline dispositions match.
 | `verify_host_pad.py` | Folded into `pad-support` | All five helper identities retain inputs and assertions |
 | `iro_extract.py` | Ported as `iro-extract` | Five extraction identities; listing, extraction messages and extracted bytes match |
 | `frame_bench.py` | Ported as `frame-bench` | Four native identities; deterministic receipt fields and decimal text match |
-| `gte_trace.py` | Pending | Used by `docs/debugging.md` and `tests/test_gte_diff.py` |
+| `gte_trace.py` | Ported as `gte-trace` | 18 native identities; exact/play replay stdout and recorded trace bytes match |
 | `mdec_trace.py` | Pending | Instrumentation imported by `tests/test_mdec_calendar.py` |
 | `render_quality.py` | Pending | Imported by `tests/test_pgxp.py` |
 | `spu_audio_compare.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
@@ -77,8 +77,7 @@ The standalone tools and full native test project configure and build without
 Python on PATH. The standard/infra selection has 233 passes and eight skips.
 This does not establish complete migration parity or game/realtime readiness.
 
-Remaining test migrations include `test_gte_diff`,
-`test_mdec_calendar`, `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
+Remaining test migrations include `test_mdec_calendar`, `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
 No dependency was added, and no runtime, backend or generator source was changed.
 
 `frame-bench` retains the alternating copied-card runs, checkpoint warmup,
@@ -88,3 +87,12 @@ same native timing fixture, all other receipt fields and the decimal text match
 the original tool. All four identities pass in both runners. A seeded percentile
 expectation fails with a text diff and was reverted. No owned-game benchmark has
 been run for this port.
+
+`gte-trace record --host-build BUILD --output DIR` relinks a frozen Makefiles
+host. `gte-trace replay --output DIR` builds both GTE paths. The driver reads
+specialized declarations from the runtime header without importing the generator.
+The 18 `test_gte_diff` identities cover both paths, trace corruption and bounded
+observation. Both runners pass. A seeded wrong synthetic command count fails
+readably and was reverted. Frozen hosts running the compiled GTE produce the
+same trace bytes through both relinkers; replay stdout also matches for 100000
+commands and 729 NCLIP corners. These are runtime fixtures, not game captures.
