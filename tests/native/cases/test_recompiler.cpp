@@ -458,7 +458,12 @@ LH_TEST_P(test_modified_source_is_interpreted, modified_rows()) {
     const Outcome state = diff(t, h, p.name, {}, {{table().pcs.at("callee"), imm(9, 0, 9, 123)}});
     LH_EQ(state.state[9], 123u); LH_CHECK(state.counts[0] >= 1);
 }
-LH_PENDING(test_store_to_current_function_exits_before_stale_instruction);
+LH_TEST_P(test_store_to_current_function_exits_before_stale_instruction, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, "self_modify", {{20, table().pcs.at("self_modify") + 4}, {8, imm(9, 0, 9, 77)}});
+    LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
+}
 LH_PENDING(test_gte_store_to_current_function_exits_before_stale_instruction);
 LH_PENDING(test_dispatch_cache_follows_registry_changes);
 LH_PENDING(test_jump_table_words_invalidate_compiled_function);
