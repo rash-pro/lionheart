@@ -158,9 +158,9 @@ if(CMAKE_CROSSCOMPILING)
 else()
   file(GLOB LH_CASE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cases/*.cpp")
   add_executable(lionheart_tests
-    support/runner.cpp support/process.cpp support/fixtures.cpp support/self_tests.cpp
+    support/runner.cpp support/process.cpp support/fixtures.cpp support/self_tests.cpp support/oracle_self_tests.cpp
     ${LH_CASE_SOURCES})
-  target_include_directories(lionheart_tests PRIVATE support)
+  target_include_directories(lionheart_tests PRIVATE support ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_features(lionheart_tests PRIVATE cxx_std_17)
   set_target_properties(lionheart_tests PROPERTIES CXX_EXTENSIONS OFF)
   target_compile_options(lionheart_tests PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
