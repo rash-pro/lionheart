@@ -313,7 +313,19 @@ LH_TEST_P(test_branch_operands_captured_before_slot, kVariantRows) {
     state = diff(t, h, "loop", {{8, 17}, {9, 0}});
     LH_EQ(state.state[8], 0u); LH_EQ(state.state[9], 17u);
 }
-LH_PENDING(test_call_boundary_load);
+static std::vector<NameRow> boundary_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"call_direct", "call_indirect"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_call_boundary_load, boundary_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name);
+    LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
+    LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[0], 0u);
+}
 LH_PENDING(test_dispatch_miss_hands_back_to_compiled);
 LH_PENDING(test_jalr_alternate_link);
 LH_PENDING(test_conditional_link);
