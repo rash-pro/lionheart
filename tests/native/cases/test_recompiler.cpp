@@ -511,7 +511,20 @@ LH_TEST_P(test_deep_guest_recursion_resumes_compiled_returns, kVariantRows) {
     LH_EQ(state.state[8], 0u); LH_EQ(state.state[29], 0x801FFFF0u); LH_CHECK(!state.state[37]);
     LH_EQ(state.counts[0], 0u);
 }
-LH_PENDING(test_nonlocal_reentry_discards_abandoned_call_frames);
+static std::vector<NameRow> nonlocal_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"nonlocal_child", "unexpected_child"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_nonlocal_reentry_discards_abandoned_call_frames, nonlocal_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Pairs memory = p.name == "unexpected_child" ? Pairs{{table().pcs.at("nonlocal_loop") + 4, j(3, table().pcs.at(p.name))}} : Pairs{};
+    const Outcome state = diff(t, h, "nonlocal_loop", {{8, 1000}, {21, table().pcs.at("nonlocal_loop") + 12}}, memory);
+    LH_EQ(state.state[8], 0u); LH_CHECK(!state.state[37]);
+    if (p.name == "nonlocal_child") LH_EQ(state.counts[0], 0u);
+}
 LH_PENDING(test_bios_longjmp_resumes_compiled_return_site);
 
 } // namespace
