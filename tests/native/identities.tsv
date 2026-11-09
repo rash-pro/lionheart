@@ -3773,3 +3773,9 @@ tests/test_vulkan.py::test_vulkan_color_codes_survive_attachment_conversion[True
 tests/test_vulkan.py::test_vulkan_color_codes_survive_attachment_conversion[True-False-1-4]	standard	pass	
 tests/test_vulkan.py::test_vulkan_color_codes_survive_attachment_conversion[True-True-4-1]	standard	pass	
 tests/test_vulkan.py::test_vulkan_color_codes_survive_attachment_conversion[True-True-1-4]	standard	pass	
+tests/test_host_windows.py::test_player_session_fatal_signal[11]	standard	pass	
+tests/test_host_windows.py::test_player_session_fatal_signal[6]	standard	pass	
+tests/test_host_windows.py::test_player_session_fatal_signal[8]	standard	pass	
+tests/test_host_windows.py::test_player_session_fatal_signal[4]	standard	pass	
+tests/test_host_windows.py::test_player_session_fatal_signal[7]	standard	pass	
+tests/test_host_windows.py::test_player_session_abnormal_stop_has_no_dialog	standard	pass	
