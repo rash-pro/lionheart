@@ -470,7 +470,20 @@ LH_TEST_P(test_gte_store_to_current_function_exits_before_stale_instruction, kVa
     const Outcome state = diff(t, h, "gte_self_modify", {{20, table().pcs.at("gte_self_modify") + 8}, {8, imm(9, 0, 9, 77)}});
     LH_EQ(state.state[9], 77u); LH_CHECK(state.counts[0] > 0);
 }
-LH_PENDING(test_dispatch_cache_follows_registry_changes);
+LH_TEST_P(test_dispatch_cache_follows_registry_changes, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    const uint32_t callee = table().pcs.at("callee");
+    h.test_run(cpu.get(), callee, 0); LH_EQ(h.test_count(cpu.get(), 0), 0u);
+    h.test_registry_count(cpu.get(), 0, 0);
+    h.test_run(cpu.get(), callee, 0); LH_CHECK(h.test_count(cpu.get(), 0) > 0);
+    const uint64_t before = h.test_count(cpu.get(), 0);
+    const size_t count = *lib.fn<size_t>("generated_count");
+    h.test_registry_count(cpu.get(), 0, count);
+    h.test_run(cpu.get(), callee, 0); LH_EQ(h.test_count(cpu.get(), 0), before);
+}
 LH_PENDING(test_jump_table_words_invalidate_compiled_function);
 LH_PENDING(test_overlay_data_write_does_not_change_code_epoch);
 LH_PENDING(test_deep_guest_recursion_resumes_compiled_returns);
