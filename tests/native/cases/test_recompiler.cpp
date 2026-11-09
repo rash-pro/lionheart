@@ -326,7 +326,18 @@ LH_TEST_P(test_call_boundary_load, boundary_rows()) {
     LH_EQ(state.state[9], 0xAABBCCDDu); LH_EQ(state.state[10], 0x44332211u);
     LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[0], 0u);
 }
-LH_PENDING(test_dispatch_miss_hands_back_to_compiled);
+LH_TEST_P(test_dispatch_miss_hands_back_to_compiled, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const uint32_t start = 0x800F0000;
+    const Pairs memory = {{start, j(2, table().pcs.at("callee"))}, {start + 4, imm(9, 0, 8, 99)}};
+    Outcome state = diff(t, h, "callee", {}, memory, start);
+    LH_EQ(state.state[9], 99u); LH_EQ(state.state[10], 99u);
+    LH_EQ(state.counts[0], 2u); LH_CHECK(state.counts[1] >= 1); LH_EQ(state.counts[2], 1u);
+    state = diff(t, h, "fallback", {{21, start}}, memory);
+    LH_EQ(state.state[9], 99u); LH_EQ(state.state[10], 99u);
+    LH_EQ(state.counts[0], 2u); LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[2], 1u);
+}
 LH_PENDING(test_jalr_alternate_link);
 LH_PENDING(test_conditional_link);
 LH_PENDING(test_exception_expected);
