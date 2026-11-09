@@ -60,7 +60,7 @@ contracts and baseline dispositions match.
 | `iro_extract.py` | Ported as `iro-extract` | Five extraction identities; listing, extraction messages and extracted bytes match |
 | `frame_bench.py` | Ported as `frame-bench` | Four native identities; deterministic receipt fields and decimal text match |
 | `gte_trace.py` | Ported as `gte-trace` | 18 native identities; exact/play replay stdout and recorded trace bytes match |
-| `mdec_trace.py` | Pending | Instrumentation imported by `tests/test_mdec_calendar.py` |
+| `mdec_trace.py` | Ported as `mdec-trace` | Existing 32 native identities also verify the native instrumentation transform |
 | `render_quality.py` | Pending | Imported by `tests/test_pgxp.py` |
 | `spu_audio_compare.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
 | `map_movies.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
@@ -77,7 +77,7 @@ The standalone tools and full native test project configure and build without
 Python on PATH. The standard/infra selection has 233 passes and eight skips.
 This does not establish complete migration parity or game/realtime readiness.
 
-Remaining test migrations include `test_mdec_calendar`, `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
+Remaining test migrations include `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
 No dependency was added, and no runtime, backend or generator source was changed.
 
 `frame-bench` retains the alternating copied-card runs, checkpoint warmup,
@@ -85,8 +85,9 @@ contiguous samples, work hashes and summary distributions. Load and elapsed time
 are observations of each execution and therefore differ between runs. With the
 same native timing fixture, all other receipt fields and the decimal text match
 the original tool. All four identities pass in both runners. A seeded percentile
-expectation fails with a text diff and was reverted. No owned-game benchmark has
-been run for this port.
+expectation fails with a text diff and was reverted. A second check replays 20 frames measured by the native observer over
+200000 runtime GTE commands. Deterministic receipt text and the complete CLI
+summary match byte for byte. No owned-game benchmark has been run for this port.
 
 `gte-trace record --host-build BUILD --output DIR` relinks a frozen Makefiles
 host. `gte-trace replay --output DIR` builds both GTE paths. The driver reads
@@ -96,3 +97,20 @@ observation. Both runners pass. A seeded wrong synthetic command count fails
 readably and was reverted. Frozen hosts running the compiled GTE produce the
 same trace bytes through both relinkers; replay stdout also matches for 100000
 commands and 729 NCLIP corners. These are runtime fixtures, not game captures.
+
+`mdec-trace build --host-build BUILD --output DIR` stages an instrumented hardware
+source and relinks it before the frozen runtime archive. `--runtime DIR` selects
+a frozen runtime. `mdec-trace record --trace build/capture.mdec -- COMMAND` records
+observations, and `replay` checks them. Traces must remain under `build/`.
+The existing 32 calendar identities now also compare the C++ transform with the
+independently generated CMake source. The transform, trace bytes and record/replay
+text match the original on a frozen host running the compiled runtime. A seeded
+calendar mismatch fails with `compare=0` and was reverted.
+
+For these three tools, unchanged pytest passes all 54 identities and native CTest
+passes the same 54. Both standalone projects configure and build with Python
+absent from PATH. The broader standard/infra run has 463 passes, eight existing
+HD skips and one missing-player failure in `test_gui_shell` because
+`FF8_PLAYER_HOST` is unset. This is not a complete baseline pass. No game run or
+performance claim is part of this validation. Original scripts and pytest files
+remain in place, and no dependency was added.

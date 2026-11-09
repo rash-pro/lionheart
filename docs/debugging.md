@@ -73,3 +73,14 @@ Optional `--before-state` and `--after-state` accept independently produced comp
 checkpoints; restore before `--first` to leave a warmup interval. Prove route exactness
 from boot separately with `build/devtools/compare`. A checkpoint is specific to its build,
 input script and execution mode.
+
+For MDEC observation traces, build a separate instrumented host without changing
+the runtime sources:
+
+```sh
+build/devtools/mdec-trace build --host-build build/dev --output build/mdec
+build/devtools/mdec-trace record --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+build/devtools/mdec-trace replay --trace build/movie.mdec -- build/mdec/ff8 EXE [host arguments]
+```
+
+Use a new trace file for each recording. Keep disc-derived traces under `build/`.
