@@ -446,7 +446,18 @@ LH_TEST_P(test_instruction_budget_stops_loop, bool_rows()) {
     const uint64_t count = h.test_count(cpu.get(), 0) + h.test_count(cpu.get(), 4);
     LH_CHECK(count >= 10000 && count < 10004);
 }
-LH_PENDING(test_modified_source_is_interpreted);
+static std::vector<NameRow> modified_rows() {
+    std::vector<NameRow> rows;
+    for (const char *variant : kVariants) for (const char *name : {"callee", "call_direct"})
+        rows.push_back({std::string(variant) + "-" + name, variant, name});
+    return rows;
+}
+LH_TEST_P(test_modified_source_is_interpreted, modified_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const Outcome state = diff(t, h, p.name, {}, {{table().pcs.at("callee"), imm(9, 0, 9, 123)}});
+    LH_EQ(state.state[9], 123u); LH_CHECK(state.counts[0] >= 1);
+}
 LH_PENDING(test_store_to_current_function_exits_before_stale_instruction);
 LH_PENDING(test_gte_store_to_current_function_exits_before_stale_instruction);
 LH_PENDING(test_dispatch_cache_follows_registry_changes);
