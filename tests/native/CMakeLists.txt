@@ -131,6 +131,18 @@ foreach(fragment IN LISTS LH_CASE_FRAGMENTS)
 endforeach()
 lh_load_fragment("${CMAKE_CURRENT_SOURCE_DIR}/support/self_tests.cmake")
 
+if(NOT CMAKE_CROSSCOMPILING)
+  # The generator links into the runner so a case can reach its data structures;
+  # add_subdirectory would let its Release default change this project's flags.
+  file(GLOB lh_generator_sources CONFIGURE_DEPENDS "${LH_ROOT}/generator/src/*.c")
+  add_library(lh_generator_support STATIC ${lh_generator_sources} support/generator_shim.c)
+  target_include_directories(lh_generator_support PUBLIC "${LH_ROOT}/generator/include" "${LH_ROOT}/generator/src")
+  set_target_properties(lh_generator_support PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    POSITION_INDEPENDENT_CODE ON)
+  target_compile_options(lh_generator_support PRIVATE -O2 -UNDEBUG)
+  set_property(GLOBAL APPEND PROPERTY LH_HARNESSES lh_generator_support)
+endif()
+
 set(LH_WINDOWS_PATHS 0)
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
   set(LH_WINDOWS_PATHS 1)
@@ -159,12 +171,15 @@ else()
   file(GLOB LH_CASE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cases/*.cpp")
   add_executable(lionheart_tests
     support/runner.cpp support/process.cpp support/fixtures.cpp support/self_tests.cpp support/oracle_self_tests.cpp
+    support/generated.cpp
     ${LH_CASE_SOURCES})
   target_include_directories(lionheart_tests PRIVATE support ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(lionheart_tests PRIVATE LH_TEST_CC="${CMAKE_C_COMPILER}")
   target_compile_features(lionheart_tests PRIVATE cxx_std_17)
   set_target_properties(lionheart_tests PROPERTIES CXX_EXTENSIONS OFF)
   target_compile_options(lionheart_tests PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
-  target_link_libraries(lionheart_tests PRIVATE ${CMAKE_DL_LIBS})
+  find_package(Threads REQUIRED)
+  target_link_libraries(lionheart_tests PRIVATE lh_generator_support Threads::Threads ${CMAKE_DL_LIBS})
   # Cases list themselves after each build, so a new case needs no CMake edit.
   add_custom_command(TARGET lionheart_tests POST_BUILD
     COMMAND lionheart_tests --build-info "${LH_BUILD_INFO}" --emit-ctest "${LH_CASES_FILE}"

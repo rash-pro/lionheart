@@ -37,6 +37,17 @@ std::vector<Registered> &registry() {
     return cases;
 }
 
+// stem::function, for the pytest functions a partly ported file has not reached.
+std::set<std::string> &pending_functions() {
+    static std::set<std::string> functions;
+    return functions;
+}
+
+// A parametrized id can itself contain "[", but the function name never does.
+bool is_pending(const std::string &native) {
+    return pending_functions().count(native.substr(0, native.find('['))) != 0;
+}
+
 const char *tier_name(Tier tier) {
     switch (tier) {
     case Tier::game: return "game";
@@ -218,6 +229,7 @@ bool compare_results(const fs::path &report, const std::vector<std::string> &req
     size_t compared = 0;
     for (const BaselineRow &row : read_baseline()) {
         if (!stems.count(stem_of(row.native))) continue;
+        if (is_pending(row.native)) continue;
         const auto found = statuses.find(row.native);
         // An excluded tier leaves no result at all, like pytest's -m.
         const std::string status = found == statuses.end() ? "missing" : found->second;
@@ -265,7 +277,18 @@ bool check_identities(const std::vector<std::string> &requested) {
             }
         }
         std::vector<std::string> problems;
-        for (const std::string &name : known) if (!native.count(name)) problems.push_back("missing " + name);
+        size_t pending = 0;
+        std::set<std::string> pending_names;
+        for (const std::string &name : known) {
+            if (native.count(name)) {
+                if (is_pending(name)) problems.push_back("ported but still marked LH_PENDING: " + name);
+            } else if (is_pending(name)) {
+                ++pending;
+                pending_names.insert(name.substr(0, name.find('[')));
+            } else {
+                problems.push_back("missing " + name);
+            }
+        }
         for (const std::string &name : native) if (!known.count(name)) problems.push_back("extra   " + name);
         for (const std::string &name : native) {
             const char *tier = tier_name(find_case(name)->tier);
@@ -274,6 +297,7 @@ bool check_identities(const std::vector<std::string> &requested) {
             }
         }
         std::cout << stem << ": " << native.size() << " native, " << known.size() << " baseline";
+        if (pending) std::cout << ", " << pending << " pending in " << pending_names.size() << " functions";
         if (problems.empty()) {
             std::cout << ", identical\n";
         } else {
@@ -289,6 +313,10 @@ bool check_identities(const std::vector<std::string> &requested) {
 
 void add_case(const char *file, const std::string &name, Tier tier, std::function<void(Case &)> body) {
     internal::registry().push_back({fs::path(file).stem().string() + "::" + name, tier, std::move(body)});
+}
+
+void add_pending(const char *file, const char *function) {
+    internal::pending_functions().insert(fs::path(file).stem().string() + "::" + function);
 }
 
 } // namespace lh
