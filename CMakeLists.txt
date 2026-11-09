@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 project(lionheart VERSION 0.1.0 LANGUAGES C)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -72,14 +72,14 @@ target_sources(ff8_runtime PRIVATE runtime/spu.c)
 target_include_directories(ff8_runtime PUBLIC runtime)
 target_compile_options(ff8_runtime PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(ff8 backends/host/main.c backends/host/input.c ${HOST_GENERATED_SOURCES})
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.py" "${CMAKE_SOURCE_DIR}/games/ff8-usa/exe-identity.json")
+  "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.cmake" "${CMAKE_SOURCE_DIR}/games/ff8-usa/exe-identity.json")
 foreach(disc RANGE 1 4)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/ff8-usa/files-disc${disc}.json")
 endforeach()
-execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.py"
-  "${CMAKE_SOURCE_DIR}/games/ff8-usa" "${CMAKE_CURRENT_BINARY_DIR}/disc_identity.h"
+execute_process(COMMAND "${CMAKE_COMMAND}"
+  "-DINPUT=${CMAKE_SOURCE_DIR}/games/ff8-usa" "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/disc_identity.h"
+  -P "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.cmake"
   RESULT_VARIABLE disc_identity_result)
 if(NOT disc_identity_result EQUAL 0)
   message(FATAL_ERROR "Cannot compile disc identity metadata")
@@ -309,10 +309,11 @@ if(FF8_VULKAN)
     pkg_check_modules(AV REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
   endif()
   find_package(Threads REQUIRED)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json")
-  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/movie_map_header.py"
-    "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "${CMAKE_CURRENT_BINARY_DIR}/movie_map.inc"
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "${CMAKE_SOURCE_DIR}/tools/movie_map_header.cmake")
+  execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DINPUT=${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/movie_map.inc"
+    -P "${CMAKE_SOURCE_DIR}/tools/movie_map_header.cmake"
     RESULT_VARIABLE movie_map_result)
   if(NOT movie_map_result EQUAL 0)
     message(FATAL_ERROR "Cannot compile host movie mapping")
@@ -406,10 +407,11 @@ option(FF8_NFD "Build the optional native file dialog adapter" ON)
 if(FF8_GUI)
   enable_language(CXX)
   add_compile_definitions(FF8_GUI)
+  include(tools/assetgen/host.cmake)
   set(GUI_ASSETS "${CMAKE_CURRENT_BINARY_DIR}/gui_assets.h")
   add_custom_command(OUTPUT "${GUI_ASSETS}"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_gui_assets.py" "${GUI_ASSETS}"
-    DEPENDS tools/embed_gui_assets.py third_party/chakra-petch/ChakraPetch-Regular.ttf
+    COMMAND ${ASSETGEN_COMMAND} gui "${CMAKE_SOURCE_DIR}" "${GUI_ASSETS}"
+    DEPENDS ${ASSETGEN_DEPENDENCY} third_party/chakra-petch/ChakraPetch-Regular.ttf
       third_party/chakra-petch/ChakraPetch-SemiBold.ttf assets/branding/icon-128.png VERBATIM)
   add_library(ff8_gui STATIC backends/host/gui.c backends/host/gui_media.c backends/host/gui_browser.c
     backends/host/gui_achievements.c
