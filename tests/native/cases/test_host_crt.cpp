@@ -2,6 +2,7 @@
 #include "presentation.h"
 #include "host_fixtures.h"
 #include "equiv.h"
+namespace {
 static const char *shaders[]={"crt_fullscreen.vert","crt_lines.frag","crt_beam.frag","crt_glow.frag","crt_final.frag"};
 LH_TEST_P(test_prebuilt_shader_matches_source_and_validates,shaders) {lh::shader_contract(t,p);}
 static lh::Command options(lh::Case &t) {
@@ -78,3 +79,4 @@ LH_TEST(test_interlaced_scanout_uses_thinner_beams) {
     lh::Rect inner{c.x+c.w/4,c.y+c.h/8,c.w/2,c.h-c.h/4};int cycles=profile_cycles(t,out,inner);
     LH_CHECK_MSG(std::abs(cycles/(double(inner.h)/c.h)-480)<=2,"interlaced scanline cycles="+std::to_string(cycles));
 }
+} // namespace

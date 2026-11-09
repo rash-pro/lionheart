@@ -5,6 +5,7 @@
 #include "equiv.h"
 #include "../../../tools/devtools/render_quality.h"
 #include <array>
+namespace {
 using lh::xy;
 using lh::GpuStream;
 LH_TEST(test_pgxp_cache_and_parser) {LH_CONTAINS(t.ok(t.harness("cache")).out,"contracts passed");}
@@ -114,3 +115,4 @@ LH_TEST(test_crack_detector_catches_interior_line_without_counting_silhouette_mo
     off=on;for(int x=100;x<300;++x) for(int c=0;c<3;++c) on.rgb[(501*1280+x)*3+c]=0;
     auto result=quality::compare(off,on,"battle");LH_EQ(result.raw,200);LH_EQ(result.interior,0);
 }
+} // namespace

@@ -1,7 +1,7 @@
 // Recompile the pause observer with the real main unit's ABI and feature flags.
 #pragma once
 #include "lh_test.h"
-#include "json_parse.h"
+#include "lh_json.h"
 #include "../../../tools/devtools/frame_probe.h"
 namespace lh {
 inline void replace_operand(std::vector<std::string> &command,const std::string &flag,const fs::path &value) {
@@ -16,22 +16,22 @@ inline fs::path pause_player(Case &t,const fs::path &player,const fs::path &outp
     const auto build=player.parent_path(),link=build/"CMakeFiles/ff8.dir/link.txt";
     if(!fs::is_regular_file(link)) skip("the release-object pause probe requires the Makefiles CMake generator");
     fs::create_directories(output);
-    const auto database=parse_json(read_file(build/"compile_commands.json"));const dt::Json *unit=nullptr;
-    for(const auto &row:std::get<dt::Json::Array>(database.value)) {
-        auto file=json_string(row.at("file"));const std::string suffix="/backends/host/main.c";
+    const auto database=Json::parse(read_file(build/"compile_commands.json"));const Json *unit=nullptr;
+    for(const auto &row:database.items()) {
+        auto file=row["file"].text();const std::string suffix="/backends/host/main.c";
         if(file.size()>=suffix.size() && file.compare(file.size()-suffix.size(),suffix.size(),suffix)==0) {unit=&row;break;}
     }
     LH_CHECK_MSG(unit,"compile_commands.json has no backends/host/main.c unit");std::vector<std::string> command;
-    const auto arguments=json_find(*unit,"arguments");
-    if(arguments && !std::get<dt::Json::Array>(arguments->value).empty())
-        for(const auto &argument:std::get<dt::Json::Array>(arguments->value)) command.push_back(json_string(argument));
-    else command=trace::split(json_string(unit->at("command")));
+    const auto arguments=unit->contains("arguments") ? &(*unit)["arguments"] : nullptr;
+    if(arguments && !arguments->items().empty())
+        for(const auto &argument:arguments->items()) command.push_back(argument.text());
+    else command=trace::split((*unit)["command"].text());
     replace_operand(command,"-c",t.root()/"tests/gui_pause_probe.c");replace_operand(command,"-o",output/"probe.o");
     for(auto flag:{"-MF","-MT","-MQ"}) for(;;) {
         const auto i=std::find(command.begin(),command.end(),flag);if(i==command.end()) break;LH_CHECK(i+1!=command.end());command.erase(i,i+2);
     }
     command.erase(std::remove_if(command.begin(),command.end(),[](const std::string &s) {return s=="-MD" || s=="-MMD" || s=="-MP";}),command.end());
-    run_arguments(t,command,json_string(unit->at("directory")));
+    run_arguments(t,command,(*unit)["directory"].text());
     command=trace::split(read_file(link));
     command.erase(std::remove_if(command.begin(),command.end(),[](const std::string &s) {return s.rfind("-Wl,--dependency-file=",0)==0;}),command.end());
     const auto binary=output/"pause-player";replace_operand(command,"-o",binary);

@@ -2,6 +2,7 @@
 #include "vulkan.h"
 #include "rendering.h"
 #include "../../../tools/devtools/iro_extract.h"
+namespace {
 static void archive(const lh::fs::path &path, std::string name="CRF\\movies\\disc00_00h.avi", unsigned flags=0) {
     std::string data="IROS";
     auto put=[&](uint64_t v,int n) { for(int i=0;i<n;++i) data+=char(v>>(8*i)); };
@@ -58,3 +59,4 @@ LH_TEST(test_missing_leading_source_frame_uses_original) {
     auto run=t.ok(t.host(tool.string()).args({t.temp(),"3",t.temp()/"stats.csv"}).timeout(30));
     LH_CHECK(lh::json_boolean(run.out,"negative_offset_fallback"));LH_CONTAINS(lh::read_file(t.temp()/"stats.csv"),"missing");
 }
+} // namespace

@@ -1,6 +1,7 @@
 // Observe the complete CPU object inside the actual player's modal pause loop.
 #include "player_probe.h"
 #include "host_fixtures.h"
+namespace {
 static const char *renderers[]={"soft","vulkan"};
 LH_GAME_TEST_P(test_actual_modal_loop_freezes_every_cpu_byte,renderers) {
     const auto real=lh::fs::canonical(t.player().program());const auto probe=lh::pause_player(t,real,t.temp()/"probe-build");
@@ -32,3 +33,4 @@ LH_GAME_TEST_P(test_actual_modal_loop_freezes_every_cpu_byte,renderers) {
     }
     LH_BYTES_EQ(states.at(0),states.at(1));LH_EQ(lh::sha256_file(source),original);
 }
+} // namespace

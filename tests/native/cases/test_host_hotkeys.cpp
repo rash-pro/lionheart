@@ -2,6 +2,7 @@
 #include "presentation.h"
 #include "host_fixtures.h"
 #include <set>
+namespace {
 static lh::Command environment(lh::Command command) {
     return lh::dummy(command).env("SDL_RENDER_DRIVER","software").env("TZ","UTC");
 }
@@ -80,3 +81,4 @@ LH_TEST(test_worker_is_async_and_queue_is_bounded) {
     const unsigned char colors[]={255,0,0,0,255,0,0,0,255,255,255,255};
     for(const auto &file:files) {auto image=png(file);LH_EQ(image.width,2u);LH_EQ(image.height,2u);LH_BYTES_EQ(image.rgb,std::string(reinterpret_cast<const char *>(colors),sizeof colors));}
 }
+} // namespace

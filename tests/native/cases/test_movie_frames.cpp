@@ -3,6 +3,7 @@
 #include "numpy_random.h"
 #include "equiv.h"
 #include "../../../tools/devtools/movie_frames.h"
+namespace {
 using lh::oracle::PngImage;
 static int64_t integer(const dt::Json &json,const char *key) {return std::get<int64_t>(json.at(key).value);}
 static std::vector<PngImage> reference(lh::Case &t,uint64_t seed,int count) {
@@ -50,3 +51,4 @@ static const Anchor anchors[]={{"0.84-0.93-0.0-True",.84,.93,0,true},{"0.99-0.99
 LH_TEST_P(test_audio_anchor_requires_a_strong_match_and_stereo_agreement,anchors) {
     const bool actual=movie_frames::matched_anchor(p.left,p.right,1,1+p.lag);LH_EQ(actual,p.expected);lh::equiv::record(t,uint8_t(actual));
 }
+} // namespace

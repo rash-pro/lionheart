@@ -30,6 +30,8 @@ class Json {
     bool contains(const std::string &key) const { return std::get<Object>(value_).count(key); }
     const std::string &text() const { return std::get<std::string>(value_); }
     const Array &items() const { return std::get<Array>(value_); }
+    size_t size() const { return std::holds_alternative<Object>(value_) ? std::get<Object>(value_).size() : std::get<Array>(value_).size(); }
+    bool boolean() const { return std::get<bool>(value_); }
     int64_t integer() const { return std::get<int64_t>(value_); }
     bool operator==(const Json &other) const { return value_ == other.value_; }
     bool operator!=(const Json &other) const { return !(*this == other); }

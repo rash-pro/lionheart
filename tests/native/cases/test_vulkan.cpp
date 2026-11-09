@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+namespace {
 
 using lh::xy;
 using lh::GpuStream;
@@ -177,3 +178,4 @@ LH_TEST_P(test_vulkan_color_codes_survive_attachment_conversion,color_modes()) {
         LH_CHECK_MSG((rgb==std::array<unsigned,3>{expected,expected,expected}),"color at ("+std::to_string(x)+","+std::to_string(y)+"), expected "+std::to_string(expected));
     }
 }
+} // namespace

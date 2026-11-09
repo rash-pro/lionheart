@@ -1,14 +1,14 @@
 // Host-side decoding and stream helpers; no renderer implementation is shared.
 #pragma once
-#include "lh_test.h"
+#include "lh_json.h"
 #include <array>
 #include <regex>
 namespace lh {
 inline int64_t json_integer(const std::string &text, const std::string &key) {
-    return std::stoll(capture(text, "\\\"" + key + "\\\"\\s*:\\s*(-?[0-9]+)"));
+    return Json::parse(text)[key].integer();
 }
 inline bool json_boolean(const std::string &text, const std::string &key) {
-    return capture(text, "\\\"" + key + "\\\"\\s*:\\s*(true|false)") == "true";
+    return Json::parse(text)[key].boolean();
 }
 inline std::vector<std::map<std::string, std::string>> csv_rows(const fs::path &path) {
     std::istringstream input(read_file(path));

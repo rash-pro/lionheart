@@ -3,6 +3,7 @@
 #include "host_fixtures.h"
 #include "equiv.h"
 #include <set>
+namespace {
 struct Panel {const uint8_t *rgba;int x,y,w,h,cw,ch;unsigned revision;uint8_t opacity;};
 struct Snapshot {bool exists=false;Panel panel{};std::string pixels;};
 class Osd {
@@ -133,3 +134,4 @@ LH_TEST(test_sdl_osd_event_hooks) {t.ok(lh::dummy(t.harness("input")).timeout(30
 LH_TEST(test_vulkan_sdl_osd_events) {
     lh::crt_preview(t);t.ok(lh::dummy(t.host(lh::host_contract(t,"osd_input",false).string()).arg("vulkan")).timeout(30));
 }
+} // namespace
