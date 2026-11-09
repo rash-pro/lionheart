@@ -273,7 +273,34 @@ LH_TEST(test_versioned_indirect_entry_points_anchor_discovery) {
     LH_CHECK(functions.instructions(BASE + 64) == (std::set<uint32_t>{BASE + 64, BASE + 68, BASE + 72}));
 }
 
-LH_PENDING(test_unaligned_expected);
+struct UnalignedRow { std::string id, variant; unsigned offset; };
+static std::vector<UnalignedRow> unaligned_rows() {
+    std::vector<UnalignedRow> rows;
+    for (const char *variant : kVariants) for (unsigned offset = 0; offset < 4; ++offset)
+        rows.push_back({std::string(variant) + "-" + std::to_string(offset), variant, offset});
+    return rows;
+}
+LH_TEST_P(test_unaligned_expected, unaligned_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    const unsigned offset = p.offset;
+    Outcome state = diff(t, h, "unaligned_" + std::to_string(offset));
+    const unsigned char bytes[] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    uint32_t expected = 0;
+    for (unsigned i = 0; i < 4; ++i) expected |= uint32_t(bytes[offset + i]) << (8 * i);
+    LH_EQ(state.state[10], expected);
+    LH_EQ(state.state[9], 0xAABBCCDDu);
+    state = diff(t, h, "unaligned_reverse_" + std::to_string(offset));
+    LH_EQ(state.state[8], expected);
+    for (const std::string name : {"swl", "swr"}) {
+        state = diff(t, h, name + "_" + std::to_string(offset));
+        std::string expected_bytes("\x11\x22\x33\x44", 4);
+        const std::string value("\xdd\xcc\xbb\xaa", 4);
+        if (name == "swl") expected_bytes.replace(0, offset + 1, value.substr(3 - offset));
+        else expected_bytes.replace(offset, 4 - offset, value.substr(0, 4 - offset));
+        LH_BYTES_EQ(state.memory.substr(DATA & 0x1FFFFF, 4), expected_bytes);
+    }
+}
 LH_PENDING(test_branch_operands_captured_before_slot);
 LH_PENDING(test_call_boundary_load);
 LH_PENDING(test_dispatch_miss_hands_back_to_compiled);
