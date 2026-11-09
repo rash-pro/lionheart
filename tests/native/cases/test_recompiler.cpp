@@ -416,7 +416,25 @@ LH_TEST_P(test_generated_memory_mirrors_and_scratchpad, mirror_rows()) {
     const Harness h = functions_of(lib);
     diff(t, h, "memory", {{20, p.base + 0x100}});
 }
-LH_PENDING(test_stop_unwinds_before_following_instruction);
+struct BoolRow { std::string id, variant; bool value; };
+static std::vector<BoolRow> bool_rows() {
+    std::vector<BoolRow> rows;
+    for (const char *variant : kVariants) for (bool value : {false, true})
+        rows.push_back({std::string(variant) + (value ? "-True" : "-False"), variant, value});
+    return rows;
+}
+LH_TEST_P(test_stop_unwinds_before_following_instruction, bool_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    Cpu cpu(h);
+    h.test_image(cpu.get(), BASE, table().data.data(), table().data.size());
+    h.test_register(cpu.get(), 8, 0x7FFFFFFF); h.test_register(cpu.get(), 10, 123);
+    if (p.value) h.test_run_legacy(cpu.get(), table().pcs.at("overflow_addi"));
+    else h.test_run(cpu.get(), table().pcs.at("overflow_addi"), 0);
+    std::array<uint32_t, 135> snapshot{}; h.test_snapshot(cpu.get(), snapshot.data());
+    LH_CHECK(snapshot[37]); LH_EQ(snapshot[10], 123u);
+    LH_EQ(snapshot[34], table().pcs.at("overflow_addi")); LH_EQ(h.test_count(cpu.get(), 4), 1u);
+}
 LH_PENDING(test_instruction_budget_stops_loop);
 LH_PENDING(test_modified_source_is_interpreted);
 LH_PENDING(test_store_to_current_function_exits_before_stale_instruction);
