@@ -124,6 +124,16 @@ static void apply_exe_metadata(lhg_arena *arena, lhg_image *image, const lhg_jso
     for (size_t index = 0; index < image->entry_point_count; index++)
         if (!lhg_image_executable(image, (int64_t)image->entry_points[index]))
             lhg_fail(ctx, "main entry point outside executable ranges");
+    points = lhg_json_find(metadata, "timing_entry_points");
+    if (points) {
+        lhg_json_list(ctx, points, "timing_entry_points");
+        size_t count = points->as.array.count;
+        uint32_t *entries = lhg_arena_alloc(arena, (count + 1) * sizeof *entries);
+        for (size_t index = 0; index < count; index++)
+            entries[index] = parse_hex32(ctx, lhg_json_str(ctx, points->as.array.items[index], "timing_entry_points"), "timing_entry_points");
+        image->timing_entry_points = entries;
+        image->timing_entry_point_count = count;
+    }
 }
 
 void lhg_load_exe(lhg_arena *arena, const char *catalog_dir, const char *path, lhg_program *program)
@@ -335,8 +345,8 @@ typedef struct {
  * Assets may contain instruction-shaped words, so only the first 4 KiB, a
  * nearby target and an independently decodable nonzero target count as evidence.
  * Ties are rejected rather than guessing a missing configuration address. */
-static uint32_t infer_effect_base(lhg_arena *arena, const uint8_t *data, size_t size, const char *group_name,
-                                  lhg_json *evidence)
+uint32_t lhg_infer_effect_base(lhg_arena *arena, const uint8_t *data, size_t size, const char *group_name,
+                               lhg_json *evidence)
 {
     lhg_ctx *ctx = arena->ctx;
     static const uint32_t candidates[3] = {0x80190000, 0x801A0000, 0x801B0000};
@@ -606,7 +616,7 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
                 base = parse_hex32(ctx, lhg_json_str(ctx, load_address, "load_address"), "load_address");
             } else {
                 lhg_json *proof = lhg_json_new_object(arena);
-                base = infer_effect_base(arena, item->data, item->data_size, group_name, proof);
+                base = lhg_infer_effect_base(arena, item->data, item->data_size, group_name, proof);
                 lhg_json_set(arena, evidence, group_sha1, proof);
             }
             const char *path = lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path");

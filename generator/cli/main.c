@@ -36,7 +36,7 @@ static void usage(FILE *to)
 {
     fprintf(to,
             "usage: lionheart-gen [EXE] [--disc CUE ...] [--catalog DIR] [--assets-dir DIR]\n"
-            "                     [-o DIR] [--mode trace|fast] [--timing exact]\n"
+            "                     [-o DIR] [--mode trace|fast] [--timing exact|block|loose]\n"
             "                     [--host-mode precise|fast] [--legacy-overlays]\n");
 }
 

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <map>
@@ -145,7 +146,12 @@ private:
 
 // Files and bytes.
 std::string read_file(const fs::path &path);
-void write_file(const fs::path &path, const std::string &contents);
+// Fixture emitters also write files before the runner is linked.
+inline void write_file(const fs::path &path, const std::string &contents) {
+    std::ofstream stream(path, std::ios::binary);
+    stream.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    if (!stream) throw Failure("cannot write " + path.string());
+}
 std::string sha256(const std::string &bytes);
 std::string sha256_file(const fs::path &path);
 // A unique directory under `parent`; never removed. For output that must stay in build/.
@@ -166,6 +172,8 @@ fs::path owned_path(const std::string &relative);
 
 // Registration. Use the macros below rather than calling these directly.
 void add_case(const char *file, const std::string &name, Tier tier, std::function<void(Case &)> body);
+// A pytest function of a partly ported file that has no native case yet.
+void add_pending(const char *file, const char *function);
 
 namespace detail {
 template <class T, class = void> struct has_id : std::false_type {};
@@ -188,6 +196,10 @@ struct Registrar {
     Registrar(const char *file, const char *name, Tier tier, void (*body)(Case &)) {
         add_case(file, name, tier, body);
     }
+};
+
+struct PendingRegistrar {
+    PendingRegistrar(const char *file, const char *function) { add_pending(file, function); }
 };
 
 template <class V> struct ParamRegistrar {
@@ -245,6 +257,12 @@ inline void check_contains(const char *file, int line, const char *expression, c
 #define LH_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::standard, values)
 #define LH_GAME_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::game, values)
 #define LH_REALTIME_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::realtime, values)
+
+// A pytest function of this file that is still to be ported. Its identities are
+// reported as pending, so a partly ported file stays visible instead of looking
+// complete or looking broken. Delete the line when the case is written.
+#define LH_PENDING(function) \
+    static const lh::detail::PendingRegistrar lh_pending_##function(__FILE__, #function)
 
 #define LH_FAIL(message) lh::fail_at(__FILE__, __LINE__, (message))
 #define LH_CHECK(condition)                                                                    \

@@ -31,7 +31,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
 
 FILES = ['test_spu_math', 'test_cycle_math', 'test_mdec_math', 'test_media',
-         'test_media_play_grants', 'test_mdec_calendar', 'test_gpu', 'test_movie_frames', 'test_pgxp', 'test_host_crt', 'test_host_osd']
+         'test_media_play_grants', 'test_mdec_calendar', 'test_gpu', 'test_code_sha1', 'test_gte',
+         'test_movie_frames', 'test_pgxp', 'test_host_crt', 'test_host_osd']
 
 
 class Records:
@@ -229,6 +230,162 @@ def check_gpu(directory, tmp):
             assert module.read_png(path) == (width, height, rgb), case
             count += 1
         assert count, f'{case}: no PNGs recorded'
+
+
+def check_code_sha1(directory, tmp):
+    module = importlib.import_module('test_code_sha1')
+    for prefix in [0, 1, 3]:
+        for size in [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 511, 65536, 501056, 1000000]:
+            stream = records(directory, f'test_code_sha1::test_image_sha1_padding_and_unaligned_input[{prefix}-{size}]')
+            assert stream.next('<II') == (size, prefix)
+            data, digest = stream.bytes(size), stream.bytes(40).decode()
+
+            def output(command, **kwargs):
+                assert Path(command[1]).read_bytes() == data
+                assert command[2] == str(prefix)
+                return digest
+
+            with mock.patch.object(subprocess, 'check_output', output):
+                module.test_image_sha1_padding_and_unaligned_input(Path('/nonexistent'), tmp, size, prefix)
+            stream.done()
+
+
+def check_gte(directory, tmp):
+    module = importlib.import_module('test_gte')
+    stream = records(directory, 'test_gte::test_unr_all_denominators[host]')
+
+    class Division:
+        def __init__(self):
+            self.writes = {}
+
+        def write(self, reg, value, control=False):
+            assert control
+            self.writes[reg] = value
+
+        def command(self, cmd):
+            h, z, self.quotient, self.overflow = stream.next('<4I')
+            assert cmd == 1 and self.writes == {27: 1, 7: z, 26: h}
+
+        def read(self, reg):
+            assert reg == 24
+            return self.quotient
+
+        @property
+        def flag(self):
+            return self.overflow << 17
+
+    module.test_unr_all_denominators(Division())
+    stream.done()
+
+    import itertools
+    for mx, vs, cv, sf, lm in itertools.product(range(4), range(4), range(4), range(2), range(2)):
+        stream = records(directory, f'test_gte::test_mvmva_every_selection[host-{mx}-{vs}-{cv}-{sf}-{lm}]')
+        assert stream.next('<5i') == (mx, vs, cv, sf, lm)
+        matrix = [list(stream.next('<3q')) for _ in range(3)]
+        vector, translation = list(stream.next('<3q')), list(stream.next('<3q'))
+        mac, ir, flag = list(stream.next('<3q')), list(stream.next('<3q')), stream.next('<I')[0]
+
+        class Selection:
+            def __init__(self):
+                self.matrices, self.vectors, self.writes = {}, {}, {}
+
+            def matrix(self, select, rows):
+                self.matrices[select] = rows
+
+            def vector(self, select, values):
+                self.vectors[select] = values
+
+            def write(self, reg, value, control=False):
+                self.writes[reg, control] = value
+
+            def command(self, cmd, **kwargs):
+                assert cmd == 0x12 and kwargs == dict(mx=mx, v=vs, cv=cv, sf=sf, lm=lm)
+                assert self.writes[6, False] == 5 and self.writes[8, False] == 7
+                self.matrices[3] = [[-80, 80, 7], [3, 3, 3], [5, 5, 5]]
+                assert self.matrices[mx] == matrix and self.vectors[vs] == vector
+                assert ([self.writes[5+cv*8+i, True] for i in range(3)] if cv < 3 else [0, 0, 0]) == translation
+
+            def triple(self, reg):
+                assert reg in (9, 25)
+                return mac if reg == 25 else ir
+
+        selection = Selection()
+        selection.flag = flag
+        module.test_mvmva_every_selection(selection, mx, vs, cv, sf, lm)
+        stream.done()
+
+    class Arithmetic:
+        def __init__(self):
+            self.writes, self.vectors, self.matrices = {}, {}, {}
+
+        def write(self, reg, value, control=False):
+            self.writes[reg, control] = value
+
+        def vector(self, select, values):
+            self.vectors[select] = values
+
+        def matrix(self, select, rows):
+            self.matrices[select] = rows
+
+        def triple(self, reg):
+            return self.mac if reg == 25 else self.ir
+
+        def read(self, reg):
+            assert reg == 22
+            return self.rgb
+
+    for sf, lm in itertools.product(range(2), range(2)):
+        stream = records(directory, f'test_gte::test_op_and_square[host-{sf}-{lm}]')
+        assert stream.next('<2i') == (sf, lm)
+
+        class Op(Arithmetic):
+            def command(self, cmd, **kwargs):
+                assert kwargs == dict(sf=sf, lm=lm)
+                assert self.matrices[0] == [[2, 99, 99], [99, 3, 99], [99, 99, 4]]
+                assert self.vectors[3] == ([5, 6, 7] if cmd == 12 else [-32768, -3, 4])
+                self.mac, self.ir, self.flag = list(stream.next('<3q')), list(stream.next('<3q')), stream.next('<I')[0]
+
+        module.test_op_and_square(Op(), sf, lm)
+        stream.done()
+
+    for cmd, sf, lm in itertools.product([61, 62], range(2), range(2)):
+        stream = records(directory, f'test_gte::test_gpf_gpl_signed_input_and_base[host-{cmd}-{sf}-{lm}]')
+        assert stream.next('<3i') == (cmd, sf, lm)
+        vector, old, ir0 = list(stream.next('<3q')), list(stream.next('<3q')), stream.next('<q')[0]
+
+        class Gpf(Arithmetic):
+            def command(self, actual, **kwargs):
+                assert actual == cmd and kwargs == dict(sf=sf, lm=lm)
+                assert self.vectors[3] == vector and self.writes[8, False] == ir0
+                assert [self.writes[25+i, False] for i in range(3)] == old
+                self.mac, self.ir = list(stream.next('<3q')), list(stream.next('<3q'))
+                self.rgb = stream.next('<I')[0]
+
+        module.test_gpf_gpl_signed_input_and_base(Gpf(), cmd, sf, lm)
+        stream.done()
+
+    stream = records(directory, 'test_gte::test_deterministic_extreme_command_sequences[host]')
+
+    class Sequence:
+        def write(self, reg, value, control=False):
+            index, expected = stream.next('<2I')
+            assert (reg, value, control) == (index & 31, expected, index >= 32)
+
+        def command(self, cmd, sf, lm, mx, v, cv):
+            assert stream.next('<6i') == (cmd, sf, lm, mx, v, cv)
+
+        flag = 0
+
+        def triple(self, reg):
+            assert reg == 9
+            return [0, 0, 0]
+
+        def read(self, reg):
+            assert reg in (14, 15, 28, 29)
+            return 0
+
+    module.test_deterministic_extreme_command_sequences(Sequence())
+    stream.done()
 
 
 def check_instrumented_hw(build):
@@ -580,7 +737,7 @@ def main():
         environment = dict(os.environ, LH_EQUIV_DIR=str(directory))
         failed = [c for c in wanted if subprocess.run([runner, '--build-info', build / 'lh_build_info.txt', '--run', c],
                                                       env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                      text=True, timeout=600).returncode != 0]
+                                                      text=True, timeout=600).returncode not in (0, 77)]
         assert not failed, f'native cases failed: {failed}'
         checks = [('Vulkan: both driver overrides and automatic skip reasons equal pytest', lambda: check_device_selection(build, tmp)),
                   ('render-quality CLI: stdout, JSON bytes and exit status', lambda: check_render_quality_cli(build, tmp)),
@@ -599,7 +756,9 @@ def main():
                   ('test_mdec_math: inputs and oracle', lambda: check_mdec_math(directory, tmp)),
                   ('test_media: IDCT and XA inputs and oracles', lambda: check_media(directory, tmp)),
                   ('test_mdec_calendar: all random step sequences', lambda: check_mdec_calendar(directory, tmp)),
-                  ('test_gpu: control stream and PNG oracle', lambda: check_gpu(directory, tmp))]
+                  ('test_gpu: control stream and PNG oracle', lambda: check_gpu(directory, tmp)),
+                  ('test_code_sha1: inputs and SHA-1 oracle', lambda: check_code_sha1(directory, tmp)),
+                  ('test_gte: UNR, MVMVA, OP, SQR, GPF/GPL oracles and random inputs', lambda: check_gte(directory, tmp))]
         for label, check in checks:
             check()
             print(f'equal  {label}')

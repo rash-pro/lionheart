@@ -5,6 +5,7 @@
 #include "base.h"
 #include "catalog.h"
 #include "emit.h"
+#include "locals.h"
 #include "platform.h"
 
 lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *error, size_t error_size)
@@ -29,8 +30,20 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         lhg_fail(&ctx, "give either an EXE or discs, not both or neither");
     if (options->disc_count > 4)
         lhg_fail(&ctx, "--disc may be supplied at most four times");
-    if (options->timing != LHG_TIMING_EXACT)
-        lhg_fail(&ctx, "only exact timing is implemented by the native generator");
+    if (options->mode != LHG_MODE_FAST && options->mode != LHG_MODE_TRACE)
+        lhg_fail(&ctx, "unknown emission mode: %d", options->mode);
+    if (options->host_mode != LHG_HOST_PRECISE && options->host_mode != LHG_HOST_FAST)
+        lhg_fail(&ctx, "unknown host mode: %d", options->host_mode);
+    if (options->timing < LHG_TIMING_EXACT || options->timing > LHG_TIMING_LOOSE)
+        lhg_fail(&ctx, "unknown timing policy: %d", options->timing);
+    if (options->timing != LHG_TIMING_EXACT && options->mode == LHG_MODE_TRACE)
+        lhg_fail(&ctx, "experimental timing requires fast emission");
+
+    const lhg_register_cache *selection = options->register_cache;
+    if (selection)
+        lhg_cache_validate(&ctx, selection);
+    else if (options->timing != LHG_TIMING_EXACT)
+        selection = lhg_cache_read(&arena, lhg_join_path(&arena, options->catalog_dir, "play-register-cache.json"));
 
     const char *assets = options->assets_dir;
     if (!assets)
@@ -47,9 +60,11 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
     }
 
     lhg_functions functions;
-    lhg_discover(&arena, program.main, NULL, 0, 1, &functions);
+    int experimental = options->timing != LHG_TIMING_EXACT;
+    lhg_discover(&arena, program.main, experimental ? program.main->timing_entry_points : NULL,
+                 experimental ? program.main->timing_entry_point_count : 0, 1, &functions);
 
-    lhg_emit_options emit_options = {options->mode, options->host_mode, options->timing};
+    lhg_emit_options emit_options = {options->mode, options->host_mode, options->timing, selection};
     lhg_emit_result result;
     memset(&result, 0, sizeof result);
     lhg_emit(&arena, program.main, &functions, options->output_dir, program.overlays, program.overlay_count, &emit_options, &result);
