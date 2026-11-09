@@ -58,7 +58,7 @@ contracts and baseline dispositions match.
 | `frame_probe.py` | Native relinker around existing C observer | Both lifetime identities exercise relinking; linked executables match byte for byte with and without subsystem probes |
 | `verify_host_pad.py` | Folded into `pad-support` | All five helper identities retain inputs and assertions |
 | `iro_extract.py` | Ported as `iro-extract` | Five extraction identities; listing, extraction messages and extracted bytes match |
-| `frame_bench.py` | Pending | Used by `docs/debugging.md` and `tests/test_frame_bench.py` |
+| `frame_bench.py` | Ported as `frame-bench` | Four native identities; deterministic receipt fields and decimal text match |
 | `gte_trace.py` | Pending | Used by `docs/debugging.md` and `tests/test_gte_diff.py` |
 | `mdec_trace.py` | Pending | Instrumentation imported by `tests/test_mdec_calendar.py` |
 | `render_quality.py` | Pending | Imported by `tests/test_pgxp.py` |
@@ -77,6 +77,14 @@ The standalone tools and full native test project configure and build without
 Python on PATH. The standard/infra selection has 233 passes and eight skips.
 This does not establish complete migration parity or game/realtime readiness.
 
-Remaining test migrations include `test_frame_bench`, `test_gte_diff`,
+Remaining test migrations include `test_gte_diff`,
 `test_mdec_calendar`, `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
 No dependency was added, and no runtime, backend or generator source was changed.
+
+`frame-bench` retains the alternating copied-card runs, checkpoint warmup,
+contiguous samples, work hashes and summary distributions. Load and elapsed time
+are observations of each execution and therefore differ between runs. With the
+same native timing fixture, all other receipt fields and the decimal text match
+the original tool. All four identities pass in both runners. A seeded percentile
+expectation fails with a text diff and was reverted. No owned-game benchmark has
+been run for this port.

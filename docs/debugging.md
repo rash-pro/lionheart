@@ -55,11 +55,11 @@ Nested device calls are charged to their innermost subsystem. These timers pertu
 hot paths: do not use a subsystem probe to report a speedup. Vulkan's separate
 `--gpu-timings CSV` reports encoding, software raster, upload and submission costs.
 
-`tools/frame_bench.py` alternates two timing probes, creates fresh card/config copies,
+`build/devtools/frame-bench` alternates two timing probes, creates fresh card/config copies,
 checks completion and identical per-frame guest work, and records load and distributions:
 
 ```sh
-python tools/frame_bench.py --before build/baseline/lionheart-timing \
+build/devtools/frame-bench --before build/baseline/lionheart-timing \
   --after build/candidate/lionheart-timing --exe build/generated/extracted/SLUS_008.92 \
   --disc /path/to/disc1.cue --card /path/to/disc1-early.mcr \
   --script tests/scripts/battle-magic.txt --first 2100 --last 4000 \
