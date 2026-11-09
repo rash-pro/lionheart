@@ -1,6 +1,6 @@
 // Synthetic rc_client service, independent of the HTTP implementation it tests.
 #pragma once
-#include "json.h"
+#include "lh_json.h"
 #include "network.h"
 #include <atomic>
 #include <ctime>

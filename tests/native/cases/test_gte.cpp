@@ -3,7 +3,7 @@
 #include "lh_test.h"
 #include "equiv.h"
 #include "py_random.h"
-#include "json.h"
+#include "lh_json.h"
 #include <cstdlib>
 #include "oracles/gte.h"
 #include <set>

@@ -1,7 +1,7 @@
 // Host-only telemetry transport and local rcheevos; no disc or RA account
 // needed.
 #include "host_fixtures.h"
-#include "json.h"
+#include "lh_json.h"
 #include "network.h"
 #include <array>
 #include <csignal>
