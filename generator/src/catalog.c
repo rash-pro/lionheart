@@ -290,7 +290,8 @@ void lhg_load_legacy_discs(lhg_arena *arena, const char *catalog_dir, const char
         extract_disc(arena, cues[index], assets_dir, metadata, &image, &overlays, &overlay_count, &overlay_capacity);
         lhg_progress(ctx, "discs", (unsigned long)(index + 1), (unsigned long)cue_count);
     }
-    qsort(overlays, overlay_count, sizeof *overlays, compare_set);
+    if (overlay_count)
+        qsort(overlays, overlay_count, sizeof *overlays, compare_set);
     memset(program, 0, sizeof *program);
     program->main = image;
     program->overlays = overlays;
@@ -670,7 +671,8 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
     for (int number = 1; number <= 4; number++)
         if (present[number])
             lhg_ff8_image_close(&discs[number]);
-    qsort(result, result_count, sizeof *result, compare_set);
+    if (result_count)
+        qsort(result, result_count, sizeof *result, compare_set);
     memset(program, 0, sizeof *program);
     program->main = main_image;
     program->overlays = result;

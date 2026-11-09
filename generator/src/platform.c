@@ -148,6 +148,8 @@ static int make_one_directory(lhg_ctx *ctx, const char *path)
 #endif
 }
 
+/* Intermediate components may be unreadable roots ("C:", "\\\\server") that
+ * refuse mkdir while still existing; only the full path decides success. */
 void lhg_make_directories(lhg_ctx *ctx, const char *path)
 {
     size_t length = strlen(path);
@@ -158,11 +160,7 @@ void lhg_make_directories(lhg_ctx *ctx, const char *path)
             continue;
         char saved = scratch[index];
         scratch[index] = 0;
-        if (scratch[0] && make_one_directory(ctx, scratch) && errno != EEXIST
-#ifdef _WIN32
-            && errno != EACCES
-#endif
-        )
+        if (scratch[0] && make_one_directory(ctx, scratch) && index == length && errno != EEXIST)
             lhg_fail(ctx, "cannot create %s: %s", scratch, strerror(errno));
         scratch[index] = saved;
     }

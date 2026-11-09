@@ -16,6 +16,9 @@ target_include_directories(lionheart_generator PUBLIC include PRIVATE src)
 
 add_executable(lionheart-gen cli/main.c)
 target_link_libraries(lionheart-gen PRIVATE lionheart_generator)
+if(WIN32)
+  target_link_libraries(lionheart-gen PRIVATE shell32)
+endif()
 
 # Reads a synthetic program description; only the differential test uses it.
 add_executable(lionheart-gen-spec test/spec_emit.c)

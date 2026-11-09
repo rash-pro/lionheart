@@ -1,8 +1,36 @@
 /* The generator's command line. Flags mirror the original recompiler driver. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lionheart_generator.h"
+
+#ifdef _WIN32
+#include <windows.h>
+
+#include <shellapi.h>
+
+/* The console hands main() its codepage; paths must reach the library as UTF-8. */
+static char **utf8_arguments(int *count)
+{
+    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), count);
+    if (!wide)
+        return NULL;
+    char **converted = malloc(sizeof *converted * (size_t)(*count + 1));
+    if (!converted)
+        return NULL;
+    for (int index = 0; index < *count; index++) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wide[index], -1, NULL, 0, NULL, NULL);
+        converted[index] = malloc(size > 0 ? (size_t)size : 1);
+        if (!converted[index])
+            return NULL;
+        WideCharToMultiByte(CP_UTF8, 0, wide[index], -1, converted[index], size, NULL, NULL);
+    }
+    converted[*count] = NULL;
+    LocalFree(wide);
+    return converted;
+}
+#endif
 
 static void usage(FILE *to)
 {
@@ -32,6 +60,14 @@ static int matches_flag(const char *arg, const char *flag)
 
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    char **utf8 = utf8_arguments(&argc);
+    if (!utf8) {
+        fprintf(stderr, "lionheart-gen: cannot read the command line\n");
+        return 2;
+    }
+    argv = utf8;
+#endif
     lhg_options options;
     memset(&options, 0, sizeof options);
     options.catalog_dir = "games/ff8-usa";

@@ -462,6 +462,8 @@ static void text_reserve(lhg_text *text, size_t extra)
 
 void lhg_text_add(lhg_text *text, const char *data, size_t length)
 {
+    if (!length)
+        return;
     text_reserve(text, length);
     memcpy(text->data + text->size, data, length);
     text->size += length;
