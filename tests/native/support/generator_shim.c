@@ -86,3 +86,12 @@ int lhgt_load_legacy_disc(lhgt_session *session, const char *catalog_dir, const 
     lhg_load_legacy_discs(&session->arena, catalog_dir, cues, 1, assets_dir, program);
     return 0;
 }
+
+int lhgt_load_exe(lhgt_session *session, const char *catalog_dir, const char *path)
+{
+    lhg_program program;
+    if (setjmp(session->ctx.bail))
+        return 1;
+    lhg_load_exe(&session->arena, catalog_dir, path, &program);
+    return 0;
+}
