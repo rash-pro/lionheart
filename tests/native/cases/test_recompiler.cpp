@@ -338,7 +338,13 @@ LH_TEST_P(test_dispatch_miss_hands_back_to_compiled, kVariantRows) {
     LH_EQ(state.state[9], 99u); LH_EQ(state.state[10], 99u);
     LH_EQ(state.counts[0], 2u); LH_CHECK(state.counts[1] >= 2); LH_EQ(state.counts[2], 1u);
 }
-LH_PENDING(test_jalr_alternate_link);
+LH_TEST_P(test_jalr_alternate_link, kVariantRows) {
+    Compiled lib = compiled_library(t, p.id);
+    const Harness h = functions_of(lib);
+    const uint32_t start = 0x800F0000;
+    const Outcome state = diff(t, h, "call_alt_link", {{21, start}}, {{start, r(8, 22)}, {start + 4, 0}});
+    LH_EQ(state.state[8], 66u); LH_EQ(state.state[22], table().pcs.at("call_alt_link") + 8);
+}
 LH_PENDING(test_conditional_link);
 LH_PENDING(test_exception_expected);
 LH_PENDING(test_delay_paths_and_isolation);
