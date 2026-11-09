@@ -4,6 +4,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Declared first so none of the host-only settings below reach the generator.
+add_subdirectory(generator)
 if(WIN32)
   add_compile_definitions(SDL_MAIN_HANDLED _FILE_OFFSET_BITS=64)
   # These warnings also occur in unchanged vendored rcheevos and savestate.c.
