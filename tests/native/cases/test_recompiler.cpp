@@ -404,7 +404,18 @@ LH_TEST_P(test_delay_paths_and_isolation, kVariantRows) {
     state = diff(t, h, "load_merge_address", {{8, DATA}}, {{DATA, 0x12345678}});
     LH_EQ(state.state[8], 0x12345678u);
 }
-LH_PENDING(test_generated_memory_mirrors_and_scratchpad);
+struct MirrorRow { std::string id, variant; uint32_t base; };
+static std::vector<MirrorRow> mirror_rows() {
+    std::vector<MirrorRow> rows;
+    for (const char *variant : kVariants) for (uint32_t base : {0x00200000u, 0x80400000u, 0xA0600000u, 0x1F800000u})
+        rows.push_back({std::string(variant) + "-" + std::to_string(base), variant, base});
+    return rows;
+}
+LH_TEST_P(test_generated_memory_mirrors_and_scratchpad, mirror_rows()) {
+    Compiled lib = compiled_library(t, p.variant);
+    const Harness h = functions_of(lib);
+    diff(t, h, "memory", {{20, p.base + 0x100}});
+}
 LH_PENDING(test_stop_unwinds_before_following_instruction);
 LH_PENDING(test_instruction_budget_stops_loop);
 LH_PENDING(test_modified_source_is_interpreted);
