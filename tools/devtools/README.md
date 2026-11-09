@@ -20,3 +20,14 @@ The five IROS identities in `test_movie_hd` are native. Its other eight
 identities explicitly skip until a native Vulkan fixture exposes the separately
 built `movie_contract` target and synthetic FFmpeg clips. Those skips differ from
 the passing baseline; this file has not reached full parity.
+
+Summarize exact diagnostic boundaries with:
+
+```sh
+build/devtools/perf-report --log build/profile/world.txt --first 1800 \
+  --last 2400 --histogram build/profile/world-pcs.csv --output build/profile/world.json
+```
+
+The native `test_perf_tools` identity retains the four expected counter deltas
+and rejects a missing exact boundary. Candidate sorting remains stable for ties.
+Histogram output preserves input order for equal instruction counts.
