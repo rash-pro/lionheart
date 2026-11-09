@@ -24,11 +24,14 @@ struct Disc {
     int number = 1, offset = 0;
     std::string name, boot;
     bool image = true;
+    int mode = 2, exe_size = -1, img_size = 2048, img_lba = 826;
+    bool cnf = true, pvd = true, bad_record = false;
+    std::string executable = exe();
 };
 inline std::filesystem::path disc(const std::filesystem::path &path, Disc d = {}) {
     std::string raw((832 + d.offset) * 2352, '\0');
     auto sector = [&](int lba, const std::string &data) {
-        size_t at = (lba + d.offset) * 2352; raw[at+15] = 2; raw.replace(at+24, data.size(), data);
+        size_t at = (lba + d.offset) * 2352; raw[at+15] = char(d.mode); raw.replace(at+(d.mode == 1 ? 16 : 24), data.size(), data);
     };
     auto record = [](int lba, int size, const std::string &name) {
         std::string r(33 + name.size() + (name.size()%2 == 0), '\0'); r[0] = char(r.size());
@@ -36,13 +39,14 @@ inline std::filesystem::path disc(const std::filesystem::path &path, Disc d = {}
     };
     if (d.name.empty()) d.name = serial(d.number);
     if (d.boot.empty()) d.boot = "BOOT = cdrom:\\" + d.name + ";1\r\n";
-    auto e = exe(); std::string root(2048, '\0'), volume(2048, '\0');
-    auto records = record(21, d.boot.size(), "SYSTEM.CNF;1") + record(30, e.size(), d.name + ";1");
-    if (d.image) records += record(826, 2048, "FF8DISC" + std::to_string(d.number) + ".IMG;1");
-    root.replace(0, records.size(), records); volume.replace(0, 7, std::string("\1CD001\1", 7));
+    auto e = d.executable; std::string root(2048, '\0'), volume(2048, '\0');
+    auto records = (d.cnf ? record(21, d.boot.size(), "SYSTEM.CNF;1") : "") + record(30, d.exe_size < 0 ? e.size() : d.exe_size, d.name + ";1");
+    if (d.image) records += record(d.img_lba, d.img_size, "FF8DISC" + std::to_string(d.number) + ".IMG;1");
+    root.replace(0, records.size(), records); if (d.bad_record) root[0] = 33;
+    if (d.pvd) volume.replace(0, 7, std::string("\1CD001\1", 7));
     put32(volume, 158, 20); put32(volume, 166, 2048);
     sector(16, volume); sector(20, root); sector(21, d.boot);
-    sector(30, e.substr(0, 2048)); sector(31, e.substr(2048)); sector(826, std::string(2048, char(d.number)));
+    sector(30, e.substr(0, 2048)); sector(31, e.substr(2048)); sector(d.img_lba, std::string(std::min(d.img_size, 2048), char(d.number)));
     lh::write_file(path, raw); return path;
 }
 }
