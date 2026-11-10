@@ -3781,3 +3781,9 @@ tests/test_host_windows.py::test_player_session_fatal_signal[7]	standard	pass
 tests/test_host_windows.py::test_player_session_abnormal_stop_has_no_dialog	standard	pass	
 tests/test_host_player.py::test_player_stop_log_and_status[fault]	standard	pass	
 tests/test_host_player.py::test_player_stop_log_and_status[limit]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-1]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-2654435769]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-3735928559]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-1]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-2654435769]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-3735928559]	standard	pass	
