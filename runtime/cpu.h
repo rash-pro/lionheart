@@ -156,6 +156,9 @@ struct cpu {
 
 void cpu_init(cpu_t *c);
 void dispatch_invalidate(cpu_t *c);
+/* Runs once at the next dispatch boundary, the only point where the registry
+ * may change. Publishers store it; the callback clears it. */
+extern void (*dispatch_safe_point)(cpu_t *c);
 void cpu_log(cpu_t *c, const char *format, ...);
 #ifndef FF8_NATIVE_MODULE
 void cpu_stop(cpu_t *c, const char *format, ...);

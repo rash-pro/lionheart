@@ -25,7 +25,8 @@
 #endif
 #endif
 
-#define LH_MODULE_MAGIC "LHMODULE"
+/* Spelled out: the field holds exactly these eight bytes and no terminator. */
+#define LH_MODULE_MAGIC {'L', 'H', 'M', 'O', 'D', 'U', 'L', 'E'}
 #define LH_MODULE_ABI_VERSION 1u
 #define LH_MODULE_ABI_ID_SIZE 65
 #define LH_MODULE_SYMBOL "lh_module_descriptor"

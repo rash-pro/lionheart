@@ -17,6 +17,8 @@ __attribute__((weak)) recompiled_fn native_overlay_acquire(cpu_t *c, uint32_t pc
 
 __attribute__((weak)) void native_overlay_release(recompiled_fn fn) { (void)fn; }
 
+void (*dispatch_safe_point)(cpu_t *c);
+
 extern const unsigned generated_host_precise __attribute__((weak));
 static int precise_host(void) {
 #ifdef FF8_COMPACT
@@ -695,6 +697,12 @@ void c_entry(cpu_t *c, uint32_t owner) {
 static void dispatch_loop(cpu_t *c, uint32_t ret) {
     int missing = 0;
     while (!c->halted && c->pc != ret) {
+        {
+            /* Between guest calls no walk is in progress and no caller holds a
+             * registry pointer, and modules are never removed while it runs. */
+            void (*safe_point)(cpu_t *) = __atomic_load_n(&dispatch_safe_point, __ATOMIC_ACQUIRE);
+            if (safe_point) safe_point(c);
+        }
 #if defined(FF8_SAVESTATES)
         if (savestate_pending == c && savestate_ready(c)) {
             if (c->dispatch_depth != 1) c_unwind(c);
