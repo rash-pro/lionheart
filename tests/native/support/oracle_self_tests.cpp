@@ -17,8 +17,6 @@ std::string from_hex(const std::string &hex) {
     return out;
 }
 
-const uint64_t kSeeds[] = {0, 1, 8, 90210, 0xadc0, 0x1820, 0x505358, 1400, 0xffffffffull, 0x100000000ull,
-                           0x100000007ull, 0xfffffffffffffffeull};
 
 } // namespace
 
@@ -55,3 +53,5 @@ LH_TEST(vulkan_fixture_preserves_loader_selection) { LH_CHECK(lh::fs::is_regular
 
 
 #include "player_probe_checks.h"
+
+#include "rendering_oracle_checks.h"
