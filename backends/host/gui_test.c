@@ -12,13 +12,15 @@ static struct {
     FILE *file,*measure,*measure_gpu;
     Uint32 text_event;
     char source[4096], capture[4096], id[512], expected[4096];
-    unsigned line, wait, close_attempts, measure_remaining, measure_frame, measure_gpu_frame, patience;
+    unsigned line, wait, close_attempts, measure_remaining, measure_frame, measure_gpu_frame, patience, osd_patience;
     uint64_t at;
     int at_pending, close_pending, assertion, failed, finished;
     SDL_Scancode release;
     int pad_release, held_select, held_mouse;
 } script;
 static SDL_Window *attached_window;
+/* From osd.h, whose own includes reach into the runtime. */
+const char *host_osd_showing(void);
 void host_gui_test_window(SDL_Window *window) { attached_window=window; }
 
 
@@ -115,6 +117,13 @@ void host_gui_test_tick(uint64_t guest_frame) {
         key(SDL_SCANCODE_ESCAPE,1); return;
     }
     if (script.wait) { --script.wait; return; }
+    if (script.osd_patience) {
+        if (strcmp(host_osd_showing(),script.expected)) {
+            if (!--script.osd_patience) failure("the notification did not show");
+            return;
+        }
+        script.osd_patience=0; memset(script.expected,0,sizeof(script.expected));
+    }
     if (script.at_pending) {
         if (guest_frame<script.at) return;
         if (guest_frame>script.at) { failure("scheduled frame was missed"); return; }
@@ -261,6 +270,18 @@ void host_gui_test_tick(uint64_t guest_frame) {
         if (snprintf(gpu_path,sizeof(gpu_path),"%s.gpu.csv",path)>=(int)sizeof(gpu_path) ||
             !(script.measure_gpu=fopen(gpu_path,"w")) || fprintf(script.measure_gpu,"sample,gui_gpu_ms\n")<0) { failure("cannot create GPU timing CSV"); return; }
         script.measure_remaining=(unsigned)count; script.measure_frame=script.measure_gpu_frame=0;
+    } else if (!strcmp(command,"wait-osd")) {
+        /* A notification shows for two seconds at a time the game decides:
+         * up to N frames for it, then capture-game can take it. */
+        char *limit=strrchr(args,' ');
+        if (!limit || host_gui_visible()) { failure("expected wait-osd text N while the game shows"); return; }
+        *limit++=0;
+        if (!number(trim(limit),&count) || !count || count>10000000 || !argument(trim(args),script.expected,sizeof(script.expected)))
+            failure("expected wait-osd text N while the game shows");
+        else script.osd_patience=(unsigned)count;
+    } else if (!strcmp(command,"capture-game")) {
+        if (host_gui_visible() || !argument(args,script.capture,sizeof(script.capture)) || !*script.capture)
+            failure("capture-game requires the game on screen and a path");
     } else if (!strcmp(command,"capture")) {
         if ((!host_gui_visible() && !host_gui_toast_visible()) || !argument(args,script.capture,sizeof(script.capture)) || !*script.capture)
             failure("capture requires a visible GUI and a path");
