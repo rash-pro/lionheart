@@ -106,7 +106,10 @@ both frames, **equivalent** when the oracle's own partner stood exactly where th
 in two records), **partial** when some coordinates agree and none contradict, and undecided otherwise. A corner's
 link is **correct** when the packet word came from the linked projection, **equivalent** when it came from
 another projection at the same position whose pair stood within a pixel of the linked one's, **wrong** otherwise,
-and undecided when the oracle cannot tell where the word came from.
+and undecided when the oracle cannot tell where the word came from. Identical instances may share one vertex
+table, where vertex sources cannot tell them apart; for correct pairs of repeated keys the oracle also compares
+where each projection's translation (or, unknown that, rotation) was copied from, and counts `instance-same` and
+`instance-other`.
 
 The report has one `F` line per frame (number, vblank, tag, flags, projections, matched, correct, partial, wrong,
 equivalent, undecided, corners, linked, link correct, link equivalent, link wrong, link undecided, and held

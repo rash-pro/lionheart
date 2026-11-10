@@ -27,7 +27,7 @@ static int zero(root_t r) { return r.src == ZERO; }
 
 /* What the judge keeps of a projection. */
 typedef struct {
-    root_t coord[3];
+    root_t coord[3], matrix[2]; /* the vertex; the translation's and rotation's first halves */
     int32_t view[3];
     uint32_t sxy, previous_sxy;
     int32_t match;
@@ -41,6 +41,7 @@ static const char *const scene_names[SCENES] = {"field", "world", "battle", "men
 typedef struct {
     uint64_t frames, projections, matched, verdicts[5];
     uint64_t corners, linked, link_correct, link_equivalent, link_wrong, link_undecided, held_known, held_unknown;
+    uint64_t instance_same, instance_other;
 } tally_t;
 
 /* Open addressing from a 64-bit key to a 32-bit value. */
@@ -58,7 +59,7 @@ static struct {
     uint32_t *gen;
     /* Projections and polygons seen, not yet judged. */
     uint64_t serial, input_base, polygons, polygon_base;
-    root_t (*inputs)[3];
+    root_t (*inputs)[5];
     size_t input_capacity;
     int64_t *sources;              /* per polygon corner: projection serial, or -1 */
     size_t source_capacity;
@@ -211,6 +212,7 @@ static void project(unsigned v) {
     }
     in = o.inputs[o.serial - o.input_base];
     in[0] = xy.lo; in[1] = xy.hi; in[2] = z.lo;
+    in[3] = ctrl_get(5).lo; in[4] = ctrl_get(0).lo;
     out.lo.src = SCREEN; out.hi.src = SCREEN | 1;
     out.lo.gen = out.hi.gen = (uint32_t)o.serial;
     out.value = 0;
@@ -426,6 +428,7 @@ static void add(tally_t *t, const tally_t *f) {
     t->corners += f->corners; t->linked += f->linked; t->link_correct += f->link_correct;
     t->link_equivalent += f->link_equivalent; t->link_wrong += f->link_wrong; t->link_undecided += f->link_undecided;
     t->held_known += f->held_known; t->held_unknown += f->held_unknown;
+    t->instance_same += f->instance_same; t->instance_other += f->instance_other;
 }
 
 void frame_oracle_judge(const frame_identity_frame_t *f) {
@@ -460,6 +463,7 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
     for (i = 0; i < f->projection_count; ++i) {
         const frame_identity_projection_t *p = &f->projections[i];
         memcpy(cur[i].coord, o.inputs[i], sizeof(cur[i].coord));
+        memcpy(cur[i].matrix, o.inputs[i] + 3, sizeof(cur[i].matrix));
         memcpy(cur[i].view, p->view, sizeof(cur[i].view));
         cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE;
         cur[i].previous_sxy = prev && p->match >= 0 ? prev[p->match].sxy : 0;
@@ -494,6 +498,26 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                         prev[j].sxy == a->sxy) { v = EQUIVALENT; break; }
             }
             cur[i].verdict = (uint8_t)v;
+            /* Identical instances may share one vertex table, where the
+             * vertex sources cannot tell them apart; where each instance's
+             * matrix is copied from its own place, that place can. Only a
+             * repeated key can be swapped with another instance. */
+            if (v == CORRECT && f->runs[f->projections[i].run].repeats) {
+                unsigned m = memory(cur[i].matrix[0]) && memory(a->matrix[0]) ? 0 : 1;
+                if (memory(cur[i].matrix[m]) && memory(a->matrix[m])) {
+                    if (cur[i].matrix[m].src == a->matrix[m].src) ++t.instance_same;
+                    else {
+                        ++t.instance_other;
+                        if (o.out && o.logged[scene_of(f->tag)][0] < 100) {
+                            ++o.logged[scene_of(f->tag)][0];
+                            fprintf(o.out, "W instance frame=%" PRIu64 " vblank=%" PRIu64 " tag=%u #%zu<-#%d run=%u repeats=%u"
+                                    " matrix%u=%08x<-%08x\n", f->number, f->vblank, f->tag & 0xffffu, i, cur[i].match,
+                                    f->projections[i].run, f->runs[f->projections[i].run].repeats, m,
+                                    cur[i].matrix[m].src, a->matrix[m].src);
+                        }
+                    }
+                }
+            }
             ++t.verdicts[v];
             if (v == WRONG && o.out && o.logged[scene_of(f->tag)][0] < 100) {
                 ++o.logged[scene_of(f->tag)][0];
@@ -588,10 +612,11 @@ static void totals(const char *label, const tally_t *t) {
     fprintf(o.out, "T %s frames=%" PRIu64 " projections=%" PRIu64 " matched=%" PRIu64 " correct=%" PRIu64 " partial=%" PRIu64
             " wrong=%" PRIu64 " equivalent=%" PRIu64 " undecided=%" PRIu64 " corners=%" PRIu64 " linked=%" PRIu64
             " link-correct=%" PRIu64 " link-equivalent=%" PRIu64 " link-wrong=%" PRIu64 " link-undecided=%" PRIu64
-            " held-known=%" PRIu64 " held-unknown=%" PRIu64 "\n", label, t->frames, t->projections, t->matched,
+            " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64 "\n",
+            label, t->frames, t->projections, t->matched,
             t->verdicts[CORRECT], t->verdicts[PARTIAL], t->verdicts[WRONG], t->verdicts[EQUIVALENT], t->verdicts[UNDECIDED],
             t->corners, t->linked, t->link_correct, t->link_equivalent, t->link_wrong, t->link_undecided,
-            t->held_known, t->held_unknown);
+            t->held_known, t->held_unknown, t->instance_same, t->instance_other);
 }
 
 int frame_oracle_stop(void) {
