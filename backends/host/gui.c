@@ -613,9 +613,11 @@ static void draw_native_install(float x,float y,float width) {
     if (busy) {
         float bar=width-200,share=n->total ? (float)((double)n->done/(double)n->total) : 0;
         text("native.step",S(native_step_id(n->step)),x+18,status,bar,GUI_REGULAR,GUI_TEXT);
-        gui_ui_panel(R(x+18,status+38,bar,6),0x1e1e26ff,3);
-        if (n->step==HOST_GUI_STEP_DOWNLOAD || n->step==HOST_GUI_STEP_VERIFY) gui_ui_panel(R(x+18,status+38,bar*(share>1 ? 1 : share),6),0x9fb4d8ff,3);
-        if (native_amount(n,line,sizeof(line))) text("native.amount",line,x+18,status+52,bar,GUI_SUB,GUI_DIM);
+        if (native_amount(n,line,sizeof(line))) {
+            gui_ui_panel(R(x+18,status+38,bar,6),0x1e1e26ff,3);
+            gui_ui_panel(R(x+18,status+38,bar*(share>1 ? 1 : share),6),0x9fb4d8ff,3);
+            text("native.amount",line,x+18,status+52,bar,GUI_SUB,GUI_DIM);
+        }
         if (gui_ui_button("native.cancel",S("btn.cancel"),R(x+width-150,status-4,150,42),0) && gui.services.native_cancel)
             gui.services.native_cancel(gui.services.context);
     } else if (n->compiler==HOST_GUI_COMPILER_FAILED) {
