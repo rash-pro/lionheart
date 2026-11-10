@@ -134,6 +134,17 @@ void native_build_ran(uint32_t pc, const uint8_t *bytes, size_t size);
 /* Blocks until done or stopped, or the timeout (seconds, <0 forever) passes. */
 native_build_state_t native_build_wait(double seconds);
 
+/* A set recorded as failed: its name and the end of the compiler's
+ * diagnostics, which name no source text and no build folder. */
+typedef struct {
+    char name[32];
+    char words[512];
+} native_build_failure_t;
+/* Fills up to capacity rows in the order of the plan; returns the number of
+ * failed sets, which may be more. Reads the cache: for a screen on demand,
+ * not for every frame. */
+size_t native_build_failures(native_build_failure_t *rows, size_t capacity);
+
 #ifdef __cplusplus
 }
 #endif

@@ -131,6 +131,8 @@ LH_TEST(test_failed_set_is_recorded_retried_once_then_left_interpreted) {
     b.sets("-1 0x1e 0 main\n2 0x02 0 field\n4 0x02 0 broken fail\n");
     auto out = b.run({"--workers", 2});
     LH_CONTAINS(out, "state done sets 3 ready 2 failed 1 ");
+    // A screen can name the set and show the end of what the compiler said.
+    LH_CONTAINS(out, "failure broken: 1 error generated.\n");
     lh::fs::path record;
     for (const auto &entry : lh::fs::directory_iterator(b.cache() / "failed")) record = entry.path();
     LH_CHECK_MSG(!record.empty(), "a failure record exists");

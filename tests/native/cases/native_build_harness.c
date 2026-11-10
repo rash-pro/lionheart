@@ -324,6 +324,14 @@ int main(int argc, char **argv) {
     else native_build_wait(timeout);
     if (hold) pause_ms(hold);
     native_build_status(&status);
+    {
+        native_build_failure_t failures[8];
+        size_t total = native_build_failures(failures, 8), k;
+        for (k = 0; k < total && k < 8; ++k) {
+            char *line = strrchr(failures[k].words, '\n');
+            printf("failure %s: %s\n", failures[k].name, line ? line + 1 : failures[k].words);
+        }
+    }
     native_build_stop();
     printf("state %s sets %u ready %u failed %u compiled %u shared %u cached %u\n", state_name(status.state), status.sets,
            status.ready, status.failed, status.compiled, status.shared, status.cached);

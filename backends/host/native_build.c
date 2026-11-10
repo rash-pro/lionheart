@@ -1740,3 +1740,38 @@ native_build_state_t native_build_wait(double seconds) {
     unlock(&b.guard);
     return state;
 }
+
+size_t native_build_failures(native_build_failure_t *rows, size_t capacity) {
+    char (*identities)[65] = capacity ? calloc(capacity, sizeof(*identities)) : NULL;
+    size_t i, shown = 0, total = 0;
+    if (!b.running) { free(identities); return 0; }
+    lock(&b.guard);
+    for (i = 0; b.sets && i < b.set_count; ++i) {
+        if (b.sets[i].state != SET_FAILED) continue;
+        if (identities && shown < capacity) {
+            snprintf(rows[shown].name, sizeof(rows[shown].name), "%s", b.sets[i].info.name);
+            memcpy(identities[shown++], b.sets[i].info.identity, sizeof(identities[0]));
+        }
+        total++;
+    }
+    unlock(&b.guard);
+    /* The record is "attempts", "module", then the diagnostics; the end of
+     * them says most, so that is what is kept when they do not fit. */
+    for (i = 0; i < shown; ++i) {
+        char path[PATH_CAP], *text, *words;
+        size_t n;
+        rows[i].words[0] = 0;
+        if (!join(path, b.failed_dir, identities[i]) || !(text = read_small(path, 1u << 14, NULL))) continue;
+        words = text;
+        for (n = 0; n < 2 && words; ++n) if ((words = strchr(words, '\n'))) ++words;
+        if (words) {
+            n = strlen(words);
+            while (n && (words[n - 1] == '\n' || words[n - 1] == '\r')) words[--n] = 0;
+            if (n >= sizeof(rows[i].words)) words += n - (sizeof(rows[i].words) - 1);
+            snprintf(rows[i].words, sizeof(rows[i].words), "%s", words);
+        }
+        free(text);
+    }
+    free(identities);
+    return total;
+}
