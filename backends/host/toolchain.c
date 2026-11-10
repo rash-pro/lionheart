@@ -55,6 +55,9 @@ static int directory(const char *name) {
     if(strlen(name)>=sizeof(copy)) return 0;
     strcpy(copy,name);
     for(char *p=copy+1;;++p) if(*p=='/' || !*p) {
+#ifdef _WIN32
+        if(p==copy+2 && copy[1]==':' && *p=='/') continue;
+#endif
         char save=*p; *p=0;
         if((mkdir_private(copy) && errno!=EEXIST) || stat(copy,&st) || !S_ISDIR(st.st_mode)) return 0;
         *p=save; if(!save) break;
@@ -109,6 +112,7 @@ static int safe_name(const char *s) {
         if(*s=='\\' || *s==':' || (unsigned char)*s<32) { if(*s) return 0; }
         if(*s=='/' || !*s) {
             size_t n=(size_t)(s-start);
+            if(n && (s[-1]=='.' || s[-1]==' ')) return 0;
             if((n==1 && *start=='.') || (n==2 && !memcmp(start,"..",2)) || (!n && *s)) return 0;
             if(!*s) return 1;
             start=s+1;
@@ -177,7 +181,7 @@ static int extract(install *i,const char *archive,const char *stage) {
     uint64_t tail=i->m->size<sizeof(end)?i->m->size:sizeof(end), base=i->m->size-tail;
     if(!f || !seen || !read_at(f,base,end,(size_t)tail)) goto done;
     long e=(long)tail-22;
-    for(;e>=0;--e) if(u32(end+e)==0x06054b50 && e+22+u16(end+e+20)==(long)tail) break;
+    for(;e>=0;--e) if(u32(end+e)==0x06054b50 && e+22+(long)u16(end+e+20)==(long)tail) break;
     if(e<0 || u16(end+e+4) || u16(end+e+6) || u16(end+e+8)!=u16(end+e+10)) goto done;
     uint64_t cd=u32(end+e+16), cd_end=cd+u32(end+e+12);
     if(cd_end!=base+(uint64_t)e) goto done;
@@ -242,7 +246,28 @@ done:
 }
 static int run(const char *exe,const char *const *args) {
 #ifdef _WIN32
-    intptr_t status=_spawnv(_P_WAIT,exe,args); return status==0;
+    char command[32768];size_t at=0;
+    for(size_t a=0;args[a];++a) {
+        if(at+4>=sizeof(command)) return 0;
+        command[at++]='"';
+        for(const char *p=args[a];*p;) {
+            size_t slashes=0;while(*p=='\\') {++slashes;++p;}
+            size_t copies=slashes*((!*p || *p=='"')?2:1);
+            if(at+copies+4>=sizeof(command)) return 0;
+            while(copies--) command[at++]='\\';
+            if(*p=='"') command[at++]='\\';
+            if(*p) command[at++]=*p++;
+        }
+        command[at++]='"';command[at++]=' ';
+    }
+    command[at]=0;wchar_t wide[32768],application[PATH_CAP];
+    if(!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,command,-1,wide,32768) ||
+       !MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,exe,-1,application,PATH_CAP)) return 0;
+    STARTUPINFOW startup={0};PROCESS_INFORMATION process={0};startup.cb=sizeof(startup);
+    if(!CreateProcessW(application,wide,NULL,NULL,FALSE,CREATE_NO_WINDOW,NULL,NULL,&startup,&process)) return 0;
+    WaitForSingleObject(process.hProcess,INFINITE);DWORD status=1;
+    GetExitCodeProcess(process.hProcess,&status);CloseHandle(process.hProcess);CloseHandle(process.hThread);
+    return status==0;
 #else
     pid_t pid=fork(); if(pid<0) return 0;
     if(!pid) { int fd=open(TC_NULL,O_WRONLY); if(fd>=0) {dup2(fd,1);dup2(fd,2);close(fd);} execv(exe,(char *const *)args); _exit(127); }
@@ -300,10 +325,12 @@ static int download(install *i,const char *url,const char *target) {
     if(!WinHttpSendRequest(request,NULL,0,NULL,0,0,0) || !WinHttpReceiveResponse(request,NULL)) goto net_done;
     DWORD status=0,len=sizeof(status);
     if(!WinHttpQueryHeaders(request,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,NULL,&status,&len,NULL) || status!=(offset?206:200)) goto net_done;
-    unsigned char buffer[BLOCK];DWORD got;
+    unsigned char buffer[BLOCK];DWORD got,available;
     while(tick(i,HOST_TC_DOWNLOAD,i->done,i->m->size)) {
-        if(!WinHttpReadData(request,buffer,sizeof(buffer),&got)) break;
-        if(!got) {ok=1;break;}
+        if(!WinHttpQueryDataAvailable(request,&available)) break;
+        if(!available) {ok=1;break;}
+        DWORD want=available>sizeof(buffer)?sizeof(buffer):available;
+        if(!WinHttpReadData(request,buffer,want,&got) || !got) break;
         if(got>i->m->size-i->done || fwrite(buffer,1,got,f)!=got) break;
         i->done+=got;
     }
@@ -335,6 +362,7 @@ net_done:
         curl_easy_cleanup(c);
     }
 #endif
+    if(i->done!=i->m->size) ok=0;
     if(fclose(f)) ok=0;
     return ok || fail(i,i->cancelled?"Cancelled":"Download failed; retry to resume");
 }
