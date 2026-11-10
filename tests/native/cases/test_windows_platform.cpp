@@ -41,4 +41,21 @@ LH_TEST(test_windows_unicode_file_roundtrip) {
     lh::fs::rename(path, renamed);
     LH_CHECK(lh::fs::remove(renamed));
 }
+// The host reaches every file through extended paths, which the C runtime's own
+// stat rejects on Windows itself while emulators accept them.
+LH_TEST(test_windows_stat_describes_files_and_directories) {
+    auto kind = t.library("io").fn<int(const char *, long long *)>("lh_stat_kind");
+    auto make = t.library("io").fn<int(const char *)>("lh_make_directory");
+    long long size = -1;
+    auto directory = t.temp() / lh::fs::path(L"carpeta-\u00e9"), file = directory / "card.mcr";
+    LH_EQ(kind(directory.u8string().c_str(), &size), 0);
+    LH_EQ(make(directory.u8string().c_str()), 0);
+    LH_EQ(kind(directory.u8string().c_str(), &size), 1);
+    lh::write_file(file, std::string(1234, 'x'));
+    LH_EQ(kind(file.u8string().c_str(), &size), 2);
+    LH_EQ(size, 1234);
+    auto forward = directory.u8string() + "/card.mcr";
+    LH_EQ(kind(forward.c_str(), &size), 2);
+    LH_EQ(kind(t.temp().root_path().u8string().c_str(), &size), 1);
+}
 #endif

@@ -42,8 +42,38 @@ int host_win_open(const char *name, int flags, ...) {
     if (flags & O_CREAT) { va_list args; va_start(args,flags); mode = va_arg(args,int); va_end(args); }
     fd = p ? _wopen(p,flags,mode) : -1; free(p); return fd;
 }
+static __time64_t unix_time(FILETIME t) {
+    ULARGE_INTEGER u; u.LowPart = t.dwLowDateTime; u.HighPart = t.dwHighDateTime;
+    return u.QuadPart < 116444736000000000ULL ? 0 : (__time64_t)((u.QuadPart - 116444736000000000ULL) / 10000000ULL);
+}
+/* The C runtime's stat refuses any path that contains '?', which every extended
+ * path does, so the attributes come from the system. Opening the file follows
+ * links as stat does; a file another process holds exclusively is still described. */
 int host_win_stat(const char *name, struct _stat64 *st) {
-    wchar_t *p = path(name); int r = p ? _wstat64(p,st) : -1; free(p); return r;
+    wchar_t *p = path(name); DWORD attributes, low, high; FILETIME created, accessed, written; HANDLE h;
+    if (!p) return -1;
+    h = CreateFileW(p,FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        BY_HANDLE_FILE_INFORMATION info; BOOL ok = GetFileInformationByHandle(h,&info);
+        CloseHandle(h); free(p);
+        if (!ok) { errno = EACCES; return -1; }
+        attributes = info.dwFileAttributes; low = info.nFileSizeLow; high = info.nFileSizeHigh;
+        created = info.ftCreationTime; accessed = info.ftLastAccessTime; written = info.ftLastWriteTime;
+    } else {
+        WIN32_FILE_ATTRIBUTE_DATA data; BOOL ok = GetFileAttributesExW(p,GetFileExInfoStandard,&data);
+        DWORD error = GetLastError();
+        free(p);
+        if (!ok) { errno = error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION ? EACCES : ENOENT; return -1; }
+        attributes = data.dwFileAttributes; low = data.nFileSizeLow; high = data.nFileSizeHigh;
+        created = data.ftCreationTime; accessed = data.ftLastAccessTime; written = data.ftLastWriteTime;
+    }
+    memset(st,0,sizeof(*st));
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY) st->st_mode = _S_IFDIR | 0777;
+    else st->st_mode = _S_IFREG | (attributes & FILE_ATTRIBUTE_READONLY ? 0444 : 0666);
+    st->st_nlink = 1;
+    st->st_size = (__int64)(((unsigned __int64)high << 32) | low);
+    st->st_ctime = unix_time(created); st->st_atime = unix_time(accessed); st->st_mtime = unix_time(written);
+    return 0;
 }
 int host_win_mkdir(const char *name) { wchar_t *p=path(name); int r=p ? _wmkdir(p) : -1; free(p); return r; }
 int host_win_unlink(const char *name) { wchar_t *p=path(name); int r=p ? _wunlink(p) : -1; free(p); return r; }

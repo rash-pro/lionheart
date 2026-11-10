@@ -3,4 +3,6 @@ if(WIN32)
   lh_harness(http LIBRARY FLAGS -std=c99 ${LH_SDL_FLAGS}
     INCLUDES backends/host SOURCES backends/host/ra_http.c tests/native/cases/test_windows_http.c
     LIBS ${LH_SDL_LINK} winhttp)
+  lh_harness(io LIBRARY FLAGS -std=c99 -Wall -Wextra -Werror
+    INCLUDES backends/host SOURCES backends/host/windows_io.c tests/native/cases/test_windows_io.c)
 endif()
