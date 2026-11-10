@@ -915,8 +915,9 @@ static int link_module(unsigned worker, job_t *j, const char *output, int *code)
     return ok;
 }
 
-/* Under the guard: the module now exists; record it for every set it serves. */
-static void finish_built(job_t *j) {
+/* Under the guard: the module now exists; record it for every set it serves.
+ * Returns 0 when it could not be published. */
+static int finish_built(job_t *j) {
     size_t i;
     char text[96];
     char module[PATH_CAP], receipt[PATH_CAP], built[PATH_CAP];
@@ -924,16 +925,17 @@ static void finish_built(job_t *j) {
     if (!path_of(built, "%s/module%s", j->directory, suffix()) || !module_path(module, j->key, suffix()) || !module_path(receipt, j->key, ".ok") ||
         !exists(built, &size) || !sync_file(built) || !publish(built, module, 0)) {
         stop_building("cannot publish a module to the native code cache");
-        return;
+        return 0;
     }
     sync_directory(b.modules);
     snprintf(text, sizeof(text), "lionheart-module 1 size %llu\n", (unsigned long long)size);
-    if (!write_atomic(receipt, text, strlen(text))) { stop_building("cannot write the native code cache"); return; }
+    if (!write_atomic(receipt, text, strlen(text))) { stop_building("cannot write the native code cache"); return 0; }
     sync_directory(b.modules);
     for (i = 0; i < j->set_count; ++i) write_set_receipt(&b.sets[j->sets[i]], j->key);
     b.status.compiled++;
     b.compiled_work += j->work;
     say("built %s (%s)", b.sets[j->sets[0]].info.name, j->key);
+    return 1;
 }
 
 static void add_unit(void *user, const char *name, int directory) {
@@ -1089,8 +1091,8 @@ static void unit_done(unsigned worker, job_t *j) {
         }
         if (code) j->failed = 1;
         else {
-            finish_built(j);
-            if (b.status.state == NATIVE_BUILD_STOPPED) {
+            /* A module published whole is handed over even after a stop elsewhere. */
+            if (!finish_built(j)) {
                 for (i = 0; i < j->set_count; ++i) { b.sets[j->sets[i]].state = SET_PENDING; b.sets[j->sets[i]].job = NULL; }
                 drop_job(j);
                 return;
