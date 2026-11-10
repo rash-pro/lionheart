@@ -183,10 +183,9 @@ std::vector<BaselineRow> read_baseline() {
 std::set<std::string> ported_stems(const std::vector<std::string> &requested) {
     if (!requested.empty()) return {requested.begin(), requested.end()};
     std::set<std::string> stems;
-    for (const Registered &entry : registry()) {
-        const std::string stem = stem_of(entry.name);
-        if (stem.rfind("test_", 0) == 0) stems.insert(stem);
-    }
+    // The frozen inventory defines migration coverage. New native suites have
+    // no historical identities; missing historical suites must still be checked.
+    for (const BaselineRow &row : read_baseline()) stems.insert(stem_of(row.native));
     return stems;
 }
 

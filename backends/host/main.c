@@ -1,3 +1,4 @@
+#include "toolchain.h"
 #include "cpu.h"
 #ifdef FF8_PLAYER
 #include "player_catalog.h"
@@ -367,7 +368,27 @@ static void run_guest(cpu_t *c) {
 #undef main
 #define main host_player_main
 #endif
+static int toolchain_progress(void *user, host_tc_phase phase, uint64_t done, uint64_t total) {
+    (void)user;
+    fprintf(stderr,"toolchain %d %llu/%llu\n",(int)phase,(unsigned long long)done,(unsigned long long)total);
+    return 0;
+}
+static int toolchain_command(int argc, char **argv) {
+    char data[4096],exe[4096]; host_tc_error error;
+    host_tc_manifest manifest=*host_tc_pinned();
+    const char *url=NULL,*archive=NULL;
+    if(!host_player_data(data,sizeof(data))) return 2;
+    if(argc==4 && !strcmp(argv[2],"--url")) {url=argv[3];manifest.urls=&url;manifest.url_count=1;}
+    else if(argc==3) archive=argv[2];
+    else if(argc!=2) return 2;
+    if(!host_tc_install(data,&manifest,archive,toolchain_progress,NULL,&error)) {
+        fprintf(stderr,"toolchain: %s\n",error.reason);return 1;
+    }
+    if(!host_tc_executable(data,host_tc_pinned(),exe,sizeof(exe))) return 1;
+    fprintf(stderr,"toolchain installed: %s\n",exe);return 0;
+}
 int main(int argc, char **argv) {
+    if(argc>1 && !strcmp(argv[1],"--toolchain-install")) return toolchain_command(argc,argv);
     cpu_t *c;
     FILE *log;
     const char *log_path =
