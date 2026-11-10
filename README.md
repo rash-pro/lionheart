@@ -36,7 +36,7 @@ Use `./Lionheart-*-x86_64.AppImage --version` to check its version.
 
 It runs on x86-64 distributions with glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36 and newer). It
 brings SDL2, FFmpeg, libcurl and zlib, and uses these from the system: the C and C++ runtimes, OpenSSL 3, D-Bus,
-your audio and display libraries, and your GPU's Vulkan driver. The launcher bundles libfuse; no system FUSE library is needed. If the kernel denies FUSE mounting, use `--appimage-extract-and-run`.
+your audio and display libraries, and your GPU's Vulkan driver. The launcher bundles libfuse, so no FUSE library has to be installed; it does use the `fusermount3` or `fusermount` program, which desktop installations have (package `fuse3`). Without it, or where mounting is not allowed, run it with `--appimage-extract-and-run`.
 
 The AppImage installs nothing. To get a menu entry, use an AppImage integration tool such as AppImageLauncher or
 Gear Lever, which reads the entry and icon inside it.

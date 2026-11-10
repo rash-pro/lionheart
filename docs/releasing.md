@@ -36,7 +36,7 @@ program the player starts, a compiler included, sees the environment the user la
 
 From the system it needs glibc 2.35 or later, libstdc++ (GLIBCXX 3.4.30, from GCC 12), OpenSSL 3 (`libssl.so.3`,
 `libcrypto.so.3`), D-Bus (`libdbus-1.so.3`), and at run time the display, audio and input libraries SDL2 opens,
-the Vulkan loader and driver, and kernel FUSE support to mount the image. No system FUSE library is needed; where mounting is forbidden, use `--appimage-extract-and-run`.
+the Vulkan loader and driver, and kernel FUSE support to mount the image. No system FUSE library is needed, but the launcher calls the `fusermount3` or `fusermount` program (package `fuse3`, present on desktop installations and absent from minimal containers); without it, or where mounting is forbidden, use `--appimage-extract-and-run`.
 
 The zip holds one folder, `Lionheart`, with exactly what `tools/build_windows.cmake` stages: `Lionheart.exe`, SDL2,
 the FFmpeg DLLs, the llvm-mingw C++ runtime and winpthreads, `dependencies.json` and `licences/`.
