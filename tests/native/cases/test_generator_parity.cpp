@@ -775,6 +775,39 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
+    if (fn == "test_hinted_zero_functions") {
+        // A caller and, at +0x100, a delay function: `zeros` no-ops, then
+        // `last` (a return when it is one) and a zero delay slot.
+        auto program = [&](size_t zeros, uint32_t last, bool hinted) {
+            Words w = Words{j(3, BASE + 0x100), 0} + RET;
+            w.resize(0x40, 0);
+            w.resize(0x40 + zeros, 0);
+            w.push_back(last);
+            w.push_back(0);
+            w = w + RET;
+            auto main = image(w);
+            main["seeds"] = A{num(BASE)};
+            main["scan_calls"] = false;
+            if (hinted)
+                main["entry_points"] = A{num(BASE + 0x100)};
+            return main;
+        };
+        auto translated = [&](const O &main, const std::string &label) {
+            return source(emit(t, main_spec(main), label)).find("void f_80010100(cpu_t *c)") != std::string::npos;
+        };
+        auto out = parity(t, main_spec(program(64, r(8, 31), true)), "zero-function-fast");
+        LH_CONTAINS(source(out), "case 0x80010204u:");
+        auto trace = main_spec(program(64, r(8, 31), true));
+        trace["mode"] = "trace";
+        parity(t, trace, "zero-function-trace");
+        // Without the hint the call alone does not make zeros code; nor does a
+        // hinted run that ends in anything but a return, or ends past 8 KiB.
+        LH_CHECK(!translated(program(64, r(8, 31), false), "unhinted"));
+        LH_CHECK(!translated(program(64, imm(9, 0, 2, 1), true), "no-return"));
+        LH_CHECK(translated(program(2046, r(8, 31), true), "within-limit"));
+        LH_CHECK(!translated(program(2048, r(8, 31), true), "past-limit"));
+        return;
+    }
     if (fn == "test_code_prefixes") {
         // Stage-like assets: code at the load address, data after it. Two
         // assets share their code and differ in data; the third differs in one

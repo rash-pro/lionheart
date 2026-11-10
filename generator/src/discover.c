@@ -208,6 +208,29 @@ static int is_zero_run(const uint8_t *at)
     return 1;
 }
 
+enum { ZERO_FUNCTION_LIMIT = 8192 };
+
+/* The end of a function made of no-ops and one return, a delay its callers
+ * time by, or -1. Only a catalog entry hint is trusted to start one, and the
+ * return must come within ZERO_FUNCTION_LIMIT bytes: zero-filled data never
+ * ends in a return at a hinted address, so it stays untranslated. */
+static int64_t zero_function_end(const lhg_image *image, int64_t entry)
+{
+    int hinted = 0;
+    for (size_t index = 0; index < image->entry_point_count && !hinted; index++)
+        hinted = (int64_t)image->entry_points[index] == entry;
+    if (!hinted)
+        return -1;
+    for (int64_t pc = entry; pc < entry + ZERO_FUNCTION_LIMIT && lhg_image_executable(image, pc + 4); pc += 4) {
+        uint32_t word = lhg_image_word(image, pc);
+        if (word == 0x03E00008u)
+            return pc + 8;
+        if (word)
+            return -1;
+    }
+    return -1;
+}
+
 void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seeds, size_t seed_count, int scan_calls,
                   lhg_functions *functions)
 {
@@ -265,6 +288,7 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
         has_function[word_index(image, entry)] = 1;
         generation++;
         insn_count = table_count = table_word_count = 0;
+        int64_t zero_end = zero_function_end(image, entry);
         todo.count = 0;
         push(ctx, &todo, entry);
         while (todo.count) {
@@ -277,8 +301,10 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
             if (pc != entry && is_entry[at])
                 continue;
             /* Do not translate zero-filled buffers as hundreds of thousands of
-             * NOPs. A real transfer there remains covered by the interpreter. */
-            if (lhg_image_contains(image, pc + 60) && is_zero_run(image->data + (size_t)(pc - (int64_t)image->base)))
+             * NOPs. A real transfer there remains covered by the interpreter,
+             * except within a hinted function of no-ops and a return. */
+            if (lhg_image_contains(image, pc + 60) && is_zero_run(image->data + (size_t)(pc - (int64_t)image->base)) &&
+                !(pc >= entry && pc < zero_end))
                 continue;
             lhg_insn i = lhg_image_insn(image, pc);
             insns = lhg_grow(ctx, insns, &insn_capacity, insn_count, sizeof *insns);
