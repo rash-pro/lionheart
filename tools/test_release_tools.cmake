@@ -50,4 +50,17 @@ file(READ "${fixture}/tools/windows-deps.json" manifest)
 string(REPLACE "\"size\":${bytes}" "\"size\":${wrong_bytes}" manifest "${manifest}")
 file(WRITE "${fixture}/tools/windows-deps.json" "${manifest}")
 fetch_case(wrong_size "${fixture}/fresh" "${fixture}/downloads" "Artifact identity mismatch")
+# A download that is not an archive, such as the AppImage runtime, is kept as is.
+file(WRITE "${fixture}/downloads/tool-x86_64" "Synthetic program\n")
+file(SHA256 "${fixture}/downloads/tool-x86_64" hash)
+file(SIZE "${fixture}/downloads/tool-x86_64" bytes)
+file(WRITE "${fixture}/tools/windows-deps.json"
+  "[{\"name\":\"tool\",\"version\":\"1\",\"url\":\"https://invalid.example/tool-x86_64\","
+  "\"sha256\":\"${hash}\",\"size\":${bytes},\"licence\":\"MIT\"}]\n")
+fetch_case(plain "${fixture}/plain" "${fixture}/downloads" success)
+file(READ "${fixture}/plain/tool-1/tool-x86_64" program)
+if(NOT program STREQUAL "Synthetic program\n" OR NOT EXISTS "${fixture}/plain/tool-1/SOURCE.md")
+  message(FATAL_ERROR "plain download changed")
+endif()
+fetch_case(plain_reuse "${fixture}/plain" "${fixture}/downloads" success)
 message(STATUS "Release cache contracts passed; receipts: ${fixture}")
