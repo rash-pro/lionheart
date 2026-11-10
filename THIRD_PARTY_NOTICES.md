@@ -14,6 +14,7 @@ source or the Windows distribution. Vendored sources retain their notices;
 | rcheevos | MIT: [LICENSE](third_party/rcheevos/LICENSE); MD5 also retains its zlib-style notice in [md5.c](third_party/rcheevos/src/util/md5.c) |
 | libcurl (Linux, dynamically linked) | curl licence (MIT-style): [curl.txt](licenses/curl.txt) |
 | Spleen 2.2.0 | BSD-2-Clause: [LICENSE](third_party/spleen/LICENSE); compiled OSD cells |
+| XZ Embedded v2024-12-30 | 0BSD: [COPYING](third_party/xz-embedded/COPYING); decodes the Linux compiler archive |
 | Dear ImGui 1.91.9b | MIT: [LICENSE.txt](third_party/imgui/LICENSE.txt) |
 | nativefiledialog-extended 1.2.1 | zlib: [LICENSE](third_party/nativefiledialog-extended/LICENSE) |
 | Chakra Petch | OFL-1.1: [licence text](third_party/chakra-petch/OFL.txt); GUI fonts and logo typography |
