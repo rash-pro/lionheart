@@ -1,4 +1,5 @@
 #include "native_setup.h"
+#include "native_player.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -9,7 +10,8 @@ static struct {
     SDL_mutex *guard;
     SDL_Thread *thread;
     SDL_atomic_t cancel;
-    char data[4096], archive[4096], compiler[4096];
+    char data[4096], archive[4096];
+    native_setup_compiler_t compiler;
     int has_archive;
     native_setup_status_t status;
 } setup;
@@ -45,7 +47,8 @@ static int load_fixture(const char *path) {
     fclose(f);
     fixture.text[n] = 0;
     memset(m, 0, sizeof(*m));
-    m->format = "zip";
+    /* The archive kind this system downloads, unless the fixture names one. */
+    m->format = host_tc_pinned()->format;
     m->urls = fixture.urls;
     m->files = fixture.files;
     for (line = fixture.text; line && *line; line = next) {
@@ -56,6 +59,7 @@ static int load_fixture(const char *path) {
         if (!(value = strchr(line, '='))) continue;
         *value++ = 0;
         if (!strcmp(line, "version")) m->version = value;
+        else if (!strcmp(line, "format")) m->format = value;
         else if (!strcmp(line, "prefix")) m->prefix = value;
         else if (!strcmp(line, "executable")) m->executable = value;
         else if (!strcmp(line, "sha256")) m->sha256 = value;
@@ -98,27 +102,36 @@ static int progress(void *user, host_tc_phase phase, uint64_t done, uint64_t tot
     return SDL_AtomicGet(&setup.cancel);
 }
 
+/* The installed Zig, named by the archive it came from. */
+static int installed_zig(const host_tc_manifest *m, native_setup_compiler_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!host_tc_executable(setup.data, m, out->path, sizeof(out->path))) return 0;
+    out->family = NATIVE_BUILD_ZIG;
+    snprintf(out->identity, sizeof(out->identity), "zig %s %s", m->version, m->sha256);
+    snprintf(out->version, sizeof(out->version), "%s", m->version);
+    return 1;
+}
+
 static int install_main(void *unused) {
     const host_tc_manifest *m = native_setup_manifest();
     host_tc_error error;
-    char compiler[4096] = "";
+    native_setup_compiler_t compiler;
     int ok;
     (void)unused;
     memset(&error, 0, sizeof(error));
-    ok = host_tc_install(setup.data, m, setup.has_archive ? setup.archive : NULL, progress, NULL, &error) &&
-         host_tc_executable(setup.data, m, compiler, sizeof(compiler));
+    ok = host_tc_install(setup.data, m, setup.has_archive ? setup.archive : NULL, progress, NULL, &error) && installed_zig(m, &compiler);
     if (!ok && !*error.reason) snprintf(error.reason, sizeof(error.reason), "The installed compiler cannot be found");
     SDL_LockMutex(setup.guard);
     if (ok) {
-        snprintf(setup.compiler, sizeof(setup.compiler), "%s", compiler);
-        setup.status.state = NATIVE_SETUP_INSTALLED;
+        setup.compiler = compiler;
+        setup.status.state = NATIVE_SETUP_READY;
         setup.status.reason[0] = 0;
     } else {
         setup.status.state = NATIVE_SETUP_FAILED;
         snprintf(setup.status.reason, sizeof(setup.status.reason), "%s", error.reason);
     }
     SDL_UnlockMutex(setup.guard);
-    fprintf(stderr, ok ? "Compiler installed: %s\n" : "Compiler not installed: %s\n", ok ? compiler : error.reason);
+    fprintf(stderr, ok ? "Compiler installed: %s\n" : "Compiler not installed: %s\n", ok ? compiler.path : error.reason);
     return ok;
 }
 
@@ -127,15 +140,19 @@ void native_setup_configure(const char *data) {
     if (!setup.guard && !(setup.guard = SDL_CreateMutex())) return;
     snprintf(setup.data, sizeof(setup.data), "%s", data ? data : "");
     memset(&setup.status, 0, sizeof(setup.status));
-    setup.compiler[0] = 0;
-    if (*setup.data && host_tc_executable(setup.data, native_setup_manifest(), setup.compiler, sizeof(setup.compiler)))
-        setup.status.state = NATIVE_SETUP_INSTALLED;
+    memset(&setup.compiler, 0, sizeof(setup.compiler));
+    if (!*setup.data) return;
+    if (installed_zig(native_setup_manifest(), &setup.compiler)) setup.status.state = NATIVE_SETUP_READY;
+    else if (host_native_system_compiler(setup.data, &setup.compiler)) {
+        setup.status.state = NATIVE_SETUP_READY;
+        setup.status.system = 1;
+    }
 }
 
 int native_setup_install(const char *archive) {
     if (!setup.guard || !*setup.data) return 0;
     SDL_LockMutex(setup.guard);
-    if (setup.status.state == NATIVE_SETUP_RUNNING || setup.status.state == NATIVE_SETUP_INSTALLED) {
+    if (setup.status.state == NATIVE_SETUP_RUNNING || setup.status.state == NATIVE_SETUP_READY) {
         SDL_UnlockMutex(setup.guard);
         return 0;
     }
@@ -169,12 +186,12 @@ void native_setup_status(native_setup_status_t *status) {
     SDL_UnlockMutex(setup.guard);
 }
 
-int native_setup_compiler(char *path, size_t size) {
+int native_setup_compiler(native_setup_compiler_t *compiler) {
     int ok;
     if (!setup.guard) return 0;
     SDL_LockMutex(setup.guard);
-    ok = setup.status.state == NATIVE_SETUP_INSTALLED && strlen(setup.compiler) < size;
-    if (ok) strcpy(path, setup.compiler);
+    ok = setup.status.state == NATIVE_SETUP_READY;
+    if (ok) *compiler = setup.compiler;
     SDL_UnlockMutex(setup.guard);
     return ok;
 }

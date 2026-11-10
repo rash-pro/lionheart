@@ -1,3 +1,5 @@
+/* For nanosecond file times in struct stat, which strict C99 hides. */
+#define _POSIX_C_SOURCE 200809L
 #include "native_player.h"
 #include "native_modules.h"
 #include "native_module.h"
@@ -9,6 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #define NATIVE_TARGET "x86_64-windows-gnu"
@@ -28,7 +34,8 @@ static const char windows_entry[] =
 static struct {
     int booted, running, service, verbose;
     unsigned workers;
-    char root[4096], compiler[4096], cache_id[33], exe_id[33];
+    char root[4096], cache_id[33], exe_id[33];
+    native_setup_compiler_t compiler;
     char discs[4][4096];
     unsigned disc_mask;
     lhg_catalog_file catalog[8];
@@ -37,7 +44,8 @@ static struct {
     lhg_session *session;
 } np;
 
-static const char *const driver[] = {"cc"};
+/* zig is a driver for several tools; cc is the C compiler. */
+static const char *const zig_driver[] = {"cc"};
 
 static lhg_options generator_options(void) {
     lhg_options options;
@@ -179,6 +187,187 @@ int host_native_boot(cpu_t *c) {
     return 1;
 }
 
+/* The headers modules compile against and, on Windows, the entry point. */
+static void support_files(void) {
+    size_t i;
+    np.file_count = 0;
+    for (i = 0; i < host_native_headers_count; ++i) {
+        np.files[np.file_count].name = host_native_headers[i].name;
+        np.files[np.file_count].data = host_native_headers[i].data;
+        np.files[np.file_count++].size = host_native_headers[i].size;
+    }
+#ifdef _WIN32
+    np.files[np.file_count].name = "entry.c";
+    np.files[np.file_count].data = windows_entry;
+    np.files[np.file_count++].size = sizeof(windows_entry) - 1;
+#endif
+}
+
+#ifndef _WIN32
+/* ---- a compiler the system has ---- */
+
+/* The compiler's own predefined macros say which compiler it is: a name on
+ * the PATH may be anything, and the recipe depends on the answer. */
+static const char identify_source[] =
+    "#if defined(__clang__)\nLIONHEART_COMPILER clang __clang_version__\n"
+    "#elif defined(__GNUC__)\nLIONHEART_COMPILER gcc __VERSION__\n#endif\n";
+
+/* A module as the generator writes one, small: guest registers and memory,
+ * locals on the stack, an entry table and the call table. */
+static const char check_source[] =
+    "#include \"native_module.h\"\n"
+    "lh_module_api lh_api;\n"
+    "void f_check(cpu_t *c);\n"
+    "void f_check(cpu_t *c) {\n"
+    "    uint32_t local[16];\n"
+    "    unsigned k;\n"
+    "    for (k = 0; k < 16; ++k) local[k] = c->r[4] * k + c->ram[k];\n"
+    "    c->r[2] = local[c->r[5] & 15] ^ 0x5a5a5a5au;\n"
+    "}\n"
+    "static const code_span_t check_spans[] = {{0x80010000u, 4}};\n"
+    "static const code_region_t check_region = {check_spans, 1, 0, 0, NULL};\n"
+    "static const entry_t check_entries[] = {{0x80010000u, f_check}};\n"
+    "static const code_region_t *const check_regions[] = {&check_region};\n"
+    "LH_MODULE_EXPORT const lh_module_descriptor_t lh_module_descriptor = {\n"
+    "LH_MODULE_MAGIC, LH_MODULE_ABI_VERSION, (uint32_t)sizeof(lh_module_descriptor_t), LH_MODULE_ABI_ID,\n"
+    "LH_MODULE_TRAITS_INIT, 0, 0x80010000u, 4, {0}, 0, 0, 0, check_entries, 1, check_regions, NULL, 0, &lh_api};\n";
+
+/* Accepted only as the loader accepts a module, and only if its code, run
+ * on a blank processor, computes what it says. */
+static int check_module(void *user, const char *module, char *error, size_t size) {
+    void *handle;
+    recompiled_fn first;
+    cpu_t *c;
+    int ok;
+    (void)user;
+    if (native_module_try(module, &handle, &first, error, size) != NATIVE_MODULE_OK) return 0;
+    ok = (c = calloc(1, sizeof(*c))) != NULL;
+    if (ok) {
+        c->r[4] = 7; c->r[5] = 3; c->ram[3] = 9;
+        first(c);
+        ok = c->r[2] == ((7u * 3u + 9u) ^ 0x5a5a5a5au);
+        if (!ok) snprintf(error, size, "its code computes a wrong result");
+    }
+    free(c);
+    native_module_untry(handle);
+    return ok;
+}
+
+/* Absolute PATH folders only: a compiler is never taken from wherever the
+ * player happens to start. */
+static int find_program(const char *name, char *out, size_t size) {
+    const char *path = getenv("PATH"), *at, *end;
+    struct stat s;
+    for (at = path; at && *at; at = *end ? end + 1 : end) {
+        size_t n;
+        end = strchr(at, ':');
+        if (!end) end = at + strlen(at);
+        n = (size_t)(end - at);
+        if (!n || *at != '/' || snprintf(out, size, "%.*s/%s", (int)n, at, name) >= (int)size) continue;
+        if (!stat(out, &s) && S_ISREG(s.st_mode) && !access(out, X_OK)) return 1;
+    }
+    return 0;
+}
+
+/* The verdict on one file, kept so that later launches start no compiler
+ * until that file changes, or the headers, or the recipe. */
+static int verdict_key(const char *path, native_build_family_t family, char *out, size_t size) {
+    struct stat s;
+    if (stat(path, &s) || strchr(path, '\n')) return 0;
+    return snprintf(out, size, "%s %llu %llu %llu %lld.%09ld %s %s", path, (unsigned long long)s.st_dev, (unsigned long long)s.st_ino,
+                    (unsigned long long)s.st_size, (long long)s.st_mtim.tv_sec, (long)s.st_mtim.tv_nsec, LH_MODULE_ABI_ID,
+                    native_build_recipe(family)) < (int)size;
+}
+
+static int read_verdict(const char *record, const char *path, native_setup_compiler_t *out) {
+    char text[2048], key[1024], expected[1024], *line, *next, *family = NULL, *identity = NULL, *version = NULL, *recorded = NULL;
+    FILE *f = fopen(record, "rb");
+    size_t n;
+    if (!f) return 0;
+    n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = 0;
+    for (line = text; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (!strncmp(line, "family ", 7)) family = line + 7;
+        else if (!strncmp(line, "identity ", 9)) identity = line + 9;
+        else if (!strncmp(line, "version ", 8)) version = line + 8;
+        else if (!strncmp(line, "key ", 4)) recorded = line + 4;
+    }
+    if (!family || !identity || !version || !recorded || (strcmp(family, "gcc") && strcmp(family, "clang"))) return 0;
+    memset(out, 0, sizeof(*out));
+    out->family = strcmp(family, "gcc") ? NATIVE_BUILD_CLANG : NATIVE_BUILD_GCC;
+    snprintf(key, sizeof(key), "%s", recorded);
+    if (!verdict_key(path, out->family, expected, sizeof(expected)) || strcmp(key, expected) ||
+        snprintf(out->path, sizeof(out->path), "%s", path) >= (int)sizeof(out->path)) return 0;
+    snprintf(out->identity, sizeof(out->identity), "%s", identity);
+    snprintf(out->version, sizeof(out->version), "%s", version);
+    out->system = 1;
+    return 1;
+}
+
+static void write_verdict(const char *record, const native_setup_compiler_t *c) {
+    char key[1024], temporary[4200];
+    FILE *f;
+    int ok;
+    if (!verdict_key(c->path, c->family, key, sizeof(key)) || snprintf(temporary, sizeof(temporary), "%s.tmp", record) >= (int)sizeof(temporary) ||
+        !(f = fopen(temporary, "wb"))) return;
+    ok = fprintf(f, "family %s\nidentity %s\nversion %s\nkey %s\n", c->family == NATIVE_BUILD_GCC ? "gcc" : "clang", c->identity, c->version, key) > 0;
+    if (fclose(f) || !ok || rename(temporary, record)) remove(temporary);
+}
+
+static int try_compiler(const char *root, const char *path, native_setup_compiler_t *out, char *error, size_t size) {
+    native_build_config_t config;
+    char said[160], *version, *end;
+    memset(out, 0, sizeof(*out));
+    snprintf(error, size, "it does not say which compiler it is");
+    if (!native_build_identify(root, path, identify_source, "LIONHEART_COMPILER", said, sizeof(said))) return 0;
+    /* `gcc "16.2.1 20260810"` or `clang "21.1.8 "`: the family, then a string. */
+    if (!strncmp(said, "gcc ", 4)) out->family = NATIVE_BUILD_GCC;
+    else if (!strncmp(said, "clang ", 6)) out->family = NATIVE_BUILD_CLANG;
+    else return 0;
+    if (!(version = strchr(said, '"')) || !(end = strchr(++version, '"'))) return 0;
+    while (end > version && end[-1] == ' ') --end;
+    if (end == version) return 0;
+    snprintf(out->identity, sizeof(out->identity), "%.*s %.*s", (int)(strchr(said, ' ') - said), said, (int)(end - version), version);
+    snprintf(out->version, sizeof(out->version), "%.*s", (int)strcspn(version, " \""), version);
+    snprintf(out->path, sizeof(out->path), "%s", path);
+    out->system = 1;
+    memset(&config, 0, sizeof(config));
+    config.root = root; config.compiler = path; config.family = out->family;
+    config.abi_id = LH_MODULE_ABI_ID; config.files = np.files; config.file_count = np.file_count;
+    return native_build_try(&config, check_source, check_module, NULL, error, size);
+}
+
+int host_native_system_compiler(const char *data, native_setup_compiler_t *compiler) {
+    /* Clang first: it builds the game's code faster than GCC, and it is the
+     * compiler inside Zig. */
+    static const char *const names[] = {"clang", "gcc"};
+    char root[4096], record[4200], path[4096], error[256];
+    size_t i;
+    if (snprintf(root, sizeof(root), "%s/native", data) >= (int)sizeof(root) || snprintf(record, sizeof(record), "%s/compiler", root) >= (int)sizeof(record))
+        return 0;
+    support_files();
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (!find_program(names[i], path, sizeof(path))) continue;
+        if (read_verdict(record, path, compiler)) return 1;
+        if (try_compiler(root, path, compiler, error, sizeof(error))) {
+            write_verdict(record, compiler);
+            fprintf(stderr, "Compiler found: %s (%s)\n", path, compiler->identity);
+            return 1;
+        }
+        fprintf(stderr, "Compiler not used: %s: %s\n", path, error);
+    }
+    return 0;
+}
+#else
+int host_native_system_compiler(const char *data, native_setup_compiler_t *compiler) {
+    (void)data; (void)compiler;
+    return 0;
+}
+#endif
+
 static int set_discs(const char *const discs[4]) {
     unsigned d;
     np.disc_mask = 0;
@@ -198,8 +387,8 @@ static int start_service(unsigned inserted) {
     char error[256];
     memset(&config, 0, sizeof(config));
     config.root = np.root; config.cache_id = np.cache_id; config.exe_id = np.exe_id;
-    config.compiler = np.compiler; config.driver = driver; config.driver_count = 1;
-    config.target = NATIVE_TARGET;
+    config.compiler = np.compiler.path; config.family = np.compiler.family;
+    if (np.compiler.family == NATIVE_BUILD_ZIG) { config.driver = zig_driver; config.driver_count = 1; config.target = NATIVE_TARGET; }
 #ifdef _WIN32
     config.windows = 1;
 #endif
@@ -219,14 +408,14 @@ static int start_service(unsigned inserted) {
 }
 
 int host_native_start(const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options) {
-    const host_tc_manifest *manifest = native_setup_manifest();
     lhg_sha256 hash;
     size_t i;
-    if (np.running || !np.booted || !data || !*data || !native_setup_compiler(np.compiler, sizeof(np.compiler)))
+    if (np.running || !np.booted || !data || !*data || !native_setup_compiler(&np.compiler))
         return 0;
+    /* The developer's driver takes the place of the chosen one's, options and all. */
     if (options && options->compiler) {
-        if (strlen(options->compiler) >= sizeof(np.compiler)) return 0;
-        strcpy(np.compiler, options->compiler);
+        if (strlen(options->compiler) >= sizeof(np.compiler.path)) return 0;
+        strcpy(np.compiler.path, options->compiler);
     }
     if (snprintf(np.root, sizeof(np.root), "%s/native", data) >= (int)sizeof(np.root)) return 0;
     if (!set_discs(discs)) return 0;
@@ -236,17 +425,7 @@ int host_native_start(const char *data, const char *const discs[4], unsigned ins
         np.catalog[i].data = host_native_catalog[i].data;
         np.catalog[i].size = host_native_catalog[i].size;
     }
-    np.file_count = 0;
-    for (i = 0; i < host_native_headers_count; ++i) {
-        np.files[np.file_count].name = host_native_headers[i].name;
-        np.files[np.file_count].data = host_native_headers[i].data;
-        np.files[np.file_count++].size = host_native_headers[i].size;
-    }
-#ifdef _WIN32
-    np.files[np.file_count].name = "entry.c";
-    np.files[np.file_count].data = windows_entry;
-    np.files[np.file_count++].size = sizeof(windows_entry) - 1;
-#endif
+    support_files();
     /* Everything that shapes module code names the cache folder: a change to
      * any of it starts a new folder, and the old one goes once unused. */
     lhg_sha256_init(&hash);
@@ -254,10 +433,9 @@ int host_native_start(const char *data, const char *const discs[4], unsigned ins
     add_line(&hash, LH_MODULE_ABI_ID);
     add_line(&hash, lhg_generator_fingerprint());
     add_line(&hash, host_native_catalog_digest);
-    add_line(&hash, manifest->version);
-    add_line(&hash, manifest->sha256);
+    add_line(&hash, np.compiler.identity);
     add_line(&hash, NATIVE_TARGET);
-    add_line(&hash, NATIVE_BUILD_RECIPE);
+    add_line(&hash, native_build_recipe(np.compiler.family));
     hex_digest(&hash, np.cache_id);
 
     np.workers = options ? options->workers : 0;

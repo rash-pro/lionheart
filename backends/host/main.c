@@ -156,9 +156,17 @@ static void gui_native(void *context, host_gui_native_t *out) {
     memset(out,0,sizeof(*out));
     out->compiler = setup.state==NATIVE_SETUP_RUNNING ? HOST_GUI_COMPILER_INSTALLING :
         setup.state==NATIVE_SETUP_FAILED ? HOST_GUI_COMPILER_FAILED :
-        setup.state==NATIVE_SETUP_INSTALLED ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
+        setup.state==NATIVE_SETUP_READY ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
     out->step = (host_gui_step_t)setup.phase; out->done = setup.done; out->total = setup.total;
+    if (setup.system) {
+        native_setup_compiler_t compiler;
+        if (native_setup_compiler(&compiler)) {
+            out->system = compiler.family==NATIVE_BUILD_GCC ? HOST_GUI_SYSTEM_GCC : HOST_GUI_SYSTEM_CLANG;
+            snprintf(out->version,sizeof(out->version),"%s",compiler.version);
+        }
+    }
     out->bytes = manifest->size; out->downloadable = manifest->url_count>0;
+    snprintf(out->format,sizeof(out->format),"%s",manifest->format);
     if (manifest->url_count) {
         const char *name = strrchr(manifest->urls[0],'/');
         if (name && name[1] && strlen(name+1)<sizeof(out->archive)) strcpy(out->archive,name+1);
@@ -261,7 +269,7 @@ static void native_poll(void) {
     native_build_status_t status;
     if (native_waiting) {
         native_setup_status(&setup);
-        if (setup.state == NATIVE_SETUP_INSTALLED) {
+        if (setup.state == NATIVE_SETUP_READY) {
             native_waiting = 0;
             host_native_start(native_data, disc_paths, host_display_disc_value(), &native_options);
         }

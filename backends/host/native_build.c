@@ -963,36 +963,84 @@ static void forget_job(job_t *j, int keep) {
     free(j->units); free(j->sets); free(j);
 }
 
-static void command_base(const char **argv, size_t *n) {
-    size_t i;
-    argv[(*n)++] = b.config.compiler;
-    for (i = 0; i < b.config.driver_count; ++i) argv[(*n)++] = b.config.driver[i];
-    argv[(*n)++] = "-target";
-    argv[(*n)++] = b.config.target;
+/* ---- the recipe ---- */
+
+const char *native_build_recipe(native_build_family_t family) {
+    switch (family) {
+    case NATIVE_BUILD_GCC: return "gcc -O2 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE, -shared -nostdlib; 1";
+    case NATIVE_BUILD_CLANG: return "clang -O2 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE, -shared -nostdlib; 1";
+    default: return "zig cc -O2 -mcpu=baseline -fPIC, -shared -nostdlib; 1";
+    }
+}
+
+static size_t command_base(const native_build_config_t *c, const char **argv) {
+    size_t n = 0, i;
+    argv[n++] = c->compiler;
+    for (i = 0; i < c->driver_count; ++i) argv[n++] = c->driver[i];
+    if (c->family == NATIVE_BUILD_ZIG) { argv[n++] = "-target"; argv[n++] = c->target; }
+    return n;
+}
+
+/* The compiler's own files go to the build folder, and with it: Zig keeps
+ * caches that would hold copies of objects, the others write temporary files. */
+static int compiler_env(const native_build_config_t *c, const char *directory, char global[PATH_CAP], char local[PATH_CAP], const char *env[3]) {
+    if (c->family == NATIVE_BUILD_ZIG) {
+        if (!path_of(global, "ZIG_GLOBAL_CACHE_DIR=%s/cache", directory) || !path_of(local, "ZIG_LOCAL_CACHE_DIR=%s/cache", directory)) return 0;
+        env[0] = global; env[1] = local; env[2] = NULL;
+        return 1;
+    }
+    if (!path_of(global, "TMPDIR=%s", directory)) return 0;
+    env[0] = global; env[1] = NULL;
+    return 1;
+}
+
+/* argv has room for 40. Diagnostics carry no source text: no carets. */
+static size_t compile_command(const native_build_config_t *c, const char *include, const char *define, const char *source,
+                              const char *output, const char **argv) {
+    size_t n = command_base(c, argv);
+    if (c->family == NATIVE_BUILD_ZIG) argv[n++] = "-mcpu=baseline";
+    else {
+        /* Zig's baseline, and none of what distributions turn on by default
+         * that needs a C library modules do not link: the stack canary and
+         * the checked string functions. */
+        argv[n++] = "-march=x86-64"; argv[n++] = "-mtune=generic";
+        argv[n++] = "-fno-stack-protector"; argv[n++] = "-U_FORTIFY_SOURCE";
+    }
+    argv[n++] = "-O2"; argv[n++] = "-s"; argv[n++] = "-fomit-frame-pointer";
+    argv[n++] = "-std=c99"; argv[n++] = "-DNDEBUG"; argv[n++] = "-fPIC"; argv[n++] = "-w";
+    if (c->family == NATIVE_BUILD_GCC) { argv[n++] = "-fno-diagnostics-show-caret"; argv[n++] = "-fdiagnostics-color=never"; }
+    else { argv[n++] = "-fno-caret-diagnostics"; argv[n++] = "-fno-color-diagnostics"; }
+    if (c->windows) argv[n++] = "-mno-stack-arg-probe";
+    argv[n++] = "-DFF8_NATIVE_MODULE"; argv[n++] = define;
+    argv[n++] = "-I"; argv[n++] = include;
+    argv[n++] = "-c"; argv[n++] = source; argv[n++] = "-o"; argv[n++] = output;
+    argv[n] = NULL;
+    return n;
+}
+
+/* argv has room for 24 and the objects. */
+static size_t link_command(const native_build_config_t *c, const char *output, char *const *objects, size_t count, const char **argv) {
+    size_t n = command_base(c, argv), i;
+    argv[n++] = "-shared"; argv[n++] = "-nostdlib"; argv[n++] = "-s";
+    /* Anything but the call table is a mistake; fail here rather than at load. */
+    if (!c->windows) argv[n++] = "-Wl,--no-undefined";
+    argv[n++] = "-o"; argv[n++] = output;
+    for (i = 0; i < count; ++i) argv[n++] = objects[i];
+    argv[n] = NULL;
+    return n;
 }
 
 static int compile_unit(unsigned worker, job_t *j, size_t unit, int *code) {
     const char *argv[48];
     char object[PATH_CAP], part[PATH_CAP], log[PATH_CAP], define[160], global[PATH_CAP], local[PATH_CAP];
     const char *env[3];
-    size_t n = 0;
     snprintf(define, sizeof(define), "-DLH_MODULE_ABI_ID=\"%s\"", b.config.abi_id);
-    /* The compiler's caches would keep copies of objects; they live and die with the build. */
     if (!path_of(object, "%s.o", j->units[unit]) || !path_of(part, "%s.o.part", j->units[unit]) || !path_of(log, "%s.log", j->units[unit]) ||
-        !path_of(global, "ZIG_GLOBAL_CACHE_DIR=%s/cache", j->directory) || !path_of(local, "ZIG_LOCAL_CACHE_DIR=%s/cache", j->directory))
+        !compiler_env(&b.config, j->directory, global, local, env))
         return 0;
     /* Finished by an earlier launch: an object exists only once it is whole. */
     if (exists(object, NULL)) { *code = 0; return 1; }
-    env[0] = global; env[1] = local; env[2] = NULL;
-    command_base(argv, &n);
-    argv[n++] = "-mcpu=baseline"; argv[n++] = "-O2"; argv[n++] = "-s"; argv[n++] = "-fomit-frame-pointer";
-    argv[n++] = "-std=c99"; argv[n++] = "-DNDEBUG"; argv[n++] = "-fPIC"; argv[n++] = "-w";
-    argv[n++] = "-fno-caret-diagnostics"; argv[n++] = "-fno-color-diagnostics";
-    if (b.config.windows) argv[n++] = "-mno-stack-arg-probe";
-    argv[n++] = "-DFF8_NATIVE_MODULE"; argv[n++] = define;
-    argv[n++] = "-I"; argv[n++] = b.include;
-    argv[n++] = "-c"; argv[n++] = j->units[unit]; argv[n++] = "-o"; argv[n++] = part;
-    argv[n] = NULL;
+    compile_command(&b.config, b.include, define, j->units[unit], part, argv);
     if (run(argv, env, log, &b.children[worker], &b.guard, code)) return 0;
     if (*code) keep_tail(j, log);
     else if (!publish(part, object, 1)) *code = 1;
@@ -1003,23 +1051,14 @@ static int link_module(unsigned worker, job_t *j, const char *output, int *code)
     const char **argv = malloc((j->unit_count + 24) * sizeof(*argv));
     char log[PATH_CAP], global[PATH_CAP], local[PATH_CAP], **objects = calloc(j->unit_count, sizeof(*objects));
     const char *env[3];
-    size_t n = 0, i;
-    int ok = argv && objects && path_of(log, "%s/link.log", j->directory) &&
-             path_of(global, "ZIG_GLOBAL_CACHE_DIR=%s/cache", j->directory) && path_of(local, "ZIG_LOCAL_CACHE_DIR=%s/cache", j->directory);
-    env[0] = global; env[1] = local; env[2] = NULL;
-    if (ok) {
-        command_base(argv, &n);
-        argv[n++] = "-shared"; argv[n++] = "-nostdlib"; argv[n++] = "-s";
-        /* Anything but the call table is a mistake; fail here rather than at load. */
-        if (!b.config.windows) argv[n++] = "-Wl,--no-undefined";
-        argv[n++] = "-o"; argv[n++] = output;
-        for (i = 0; i < j->unit_count && ok; ++i) {
-            size_t length = strlen(j->units[i]) + 3;
-            if (!(objects[i] = malloc(length))) ok = 0;
-            else { snprintf(objects[i], length, "%s.o", j->units[i]); argv[n++] = objects[i]; }
-        }
-        argv[n] = NULL;
+    size_t i;
+    int ok = argv && objects && path_of(log, "%s/link.log", j->directory) && compiler_env(&b.config, j->directory, global, local, env);
+    for (i = 0; i < j->unit_count && ok; ++i) {
+        size_t length = strlen(j->units[i]) + 3;
+        if (!(objects[i] = malloc(length))) ok = 0;
+        else snprintf(objects[i], length, "%s.o", j->units[i]);
     }
+    if (ok) link_command(&b.config, output, objects, j->unit_count, argv);
     if (ok) ok = !run(argv, env, log, &b.children[worker], &b.guard, code);
     if (ok && *code) keep_tail(j, log);
     for (i = 0; objects && i < j->unit_count; ++i) free(objects[i]);
@@ -1330,7 +1369,8 @@ static void folder_entry(void *user, const char *name, int directory) {
     char path[PATH_CAP], in_use[PATH_CAP];
     file_lock_t held;
     (void)user;
-    if (!directory || !strcmp(name, b.config.cache_id)) return;
+    /* check is where a compiler is tried, not a cache. */
+    if (!directory || !strcmp(name, b.config.cache_id) || !strcmp(name, "check")) return;
     if (!join(path, b.root, name) || !join(in_use, path, "in-use")) return;
     held = file_lock(in_use, 1, 0);
     if (held == NO_FILE_LOCK) return;
@@ -1704,7 +1744,7 @@ finished:
 int native_build_start(const native_build_config_t *config, char *error, size_t size) {
     size_t i;
     if (b.running) { snprintf(error, size, "already running"); return 0; }
-    if (!config->root || !config->cache_id || !config->exe_id || !config->compiler || !config->target || !config->abi_id ||
+    if (!config->root || !config->cache_id || !config->exe_id || !config->compiler || (config->family == NATIVE_BUILD_ZIG && !config->target) || !config->abi_id ||
         !config->source || !config->source->plan || !config->source->open || !config->source->emit || !config->deliver) {
         snprintf(error, size, "incomplete configuration"); return 0;
     }
@@ -1851,4 +1891,106 @@ size_t native_build_failures(native_build_failure_t *rows, size_t capacity) {
     }
     free(identities);
     return total;
+}
+
+/* ---- trying a compiler ---- */
+
+/* <root>/check, empty, and this player's until check_leave: players starting
+ * together on one data folder take turns. */
+static file_lock_t check_enter(const char *root, char directory[PATH_CAP]) {
+    char guard[PATH_CAP];
+    file_lock_t held;
+    if (!root || !make_directory(root) || !join(directory, root, "check") || !path_of(guard, "%s.lock", directory)) return NO_FILE_LOCK;
+    if ((held = file_lock(guard, 1, 1)) == NO_FILE_LOCK) return NO_FILE_LOCK;
+    if (!remove_tree(directory) || !make_directory(directory)) { file_unlock(held); return NO_FILE_LOCK; }
+    return held;
+}
+
+static void check_leave(const char *directory, file_lock_t held) {
+    remove_tree(directory);
+    file_unlock(held);
+}
+
+int native_build_identify(const char *root, const char *compiler, const char *source, const char *marker, char *out, size_t size) {
+    char directory[PATH_CAP], unit[PATH_CAP], said[PATH_CAP], log[PATH_CAP], temporary[PATH_CAP], *text, *line, *next;
+    const char *argv[8], *env[2];
+    child_t child;
+    lock_t guard;
+    int code = 0, ok = 0;
+    size_t length = strlen(marker);
+    file_lock_t held = check_enter(root, directory);
+    if (held == NO_FILE_LOCK) return 0;
+    memset(&child, 0, sizeof(child));
+    lock_init(&guard);
+    if (join(unit, directory, "identify.c") && write_file(unit, source, strlen(source)) && join(said, directory, "identify.txt") &&
+        join(log, directory, "identify.log") && path_of(temporary, "TMPDIR=%s", directory)) {
+        argv[0] = compiler; argv[1] = "-E"; argv[2] = "-P"; argv[3] = unit; argv[4] = "-o"; argv[5] = said; argv[6] = NULL;
+        env[0] = temporary; env[1] = NULL;
+        if (!run(argv, env, log, &child, &guard, &code) && !code && (text = read_small(said, 4096, NULL))) {
+            for (line = text; line && *line && !ok; line = next) {
+                next = strchr(line, '\n');
+                if (next) *next++ = 0;
+                if (!strncmp(line, marker, length) && line[length] == ' ') ok = snprintf(out, size, "%s", line + length + 1) < (int)size;
+            }
+            free(text);
+        }
+    }
+    check_leave(directory, held);
+    return ok;
+}
+
+/* The first line of the compiler's words that says what went wrong. */
+static void first_error(const char *log, const char *what, int code, char *error, size_t size) {
+    char *text = read_small(log, 1u << 16, NULL), *line, *next;
+    snprintf(error, size, "%s failed (exit code %d)", what, code);
+    for (line = text; line && *line; line = next) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
+        if (strstr(line, "error") || strstr(line, "undefined")) { snprintf(error, size, "%s failed: %s", what, line); break; }
+    }
+    free(text);
+}
+
+int native_build_try(const native_build_config_t *config, const char *source,
+                     int (*check)(void *user, const char *module, char *error, size_t size), void *user, char *error, size_t size) {
+    char directory[PATH_CAP], include[PATH_CAP], unit[PATH_CAP], object[PATH_CAP], module[PATH_CAP];
+    char log[PATH_CAP], define[160], global[PATH_CAP], local[PATH_CAP];
+    char **objects = calloc(config->file_count + 1, sizeof(*objects));
+    const char *argv[48 + 24], *env[3];
+    size_t count = 0, i;
+    int ok = 0, code = 0;
+    child_t child;
+    lock_t guard;
+    file_lock_t held = check_enter(config->root, directory);
+    memset(&child, 0, sizeof(child));
+    lock_init(&guard);
+    snprintf(error, size, "cannot prepare a folder to try the compiler in");
+    snprintf(define, sizeof(define), "-DLH_MODULE_ABI_ID=\"%s\"", config->abi_id);
+    if (held == NO_FILE_LOCK || !objects || !join(include, directory, "include") || !make_directory(include) ||
+        !join(unit, directory, "check.c") || !write_file(unit, source, strlen(source)) ||
+        !path_of(module, "%s/check%s", directory, config->windows ? ".dll" : ".so") || !join(log, directory, "check.log") ||
+        !compiler_env(config, directory, global, local, env))
+        goto done;
+    for (i = 0; i < config->file_count; ++i)
+        if (!join(object, include, config->files[i].name) || !write_file(object, config->files[i].data, config->files[i].size)) goto done;
+    /* The module's own unit, then every support unit a build compiles in. */
+    for (i = 0; i <= config->file_count; ++i) {
+        const char *name = i ? config->files[i - 1].name : NULL;
+        size_t n = name ? strlen(name) : 0;
+        if (name && (n < 3 || strcmp(name + n - 2, ".c"))) continue;
+        if ((name && !join(unit, include, name)) || !path_of(object, "%s.o", unit) || !(objects[count] = malloc(strlen(object) + 1))) goto done;
+        strcpy(objects[count++], object);
+        compile_command(config, include, define, unit, object, argv);
+        if (run(argv, env, log, &child, &guard, &code)) { snprintf(error, size, "cannot run %s", config->compiler); goto done; }
+        if (code) { first_error(log, "compiling", code, error, size); goto done; }
+    }
+    link_command(config, module, objects, count, argv);
+    if (run(argv, env, log, &child, &guard, &code)) { snprintf(error, size, "cannot run %s", config->compiler); goto done; }
+    if (code) { first_error(log, "linking", code, error, size); goto done; }
+    ok = check(user, module, error, size);
+done:
+    for (i = 0; objects && i < count; ++i) free(objects[i]);
+    free(objects);
+    if (held != NO_FILE_LOCK) check_leave(directory, held);
+    return ok;
 }

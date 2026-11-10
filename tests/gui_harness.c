@@ -68,14 +68,15 @@ int main(int argc,char **argv) {
     }
     if (!strcmp(argv[1],"disc-error") && argc==3) { puts(gui_disc_error_id(argv[2])); return 0; }
     if (!strcmp(argv[1],"native-reason") && argc==3) { puts(gui_native_reason_id(argv[2])); return 0; }
-    if (!strcmp(argv[1],"native-summary") && argc==11) {
-        /* compiler step done total build sets ready failed seconds_left */
+    if (!strcmp(argv[1],"native-summary") && (argc==11 || argc==13)) {
+        /* compiler step done total build sets ready failed seconds_left [system version] */
         host_gui_native_t native; char line[256]; int alert;
         memset(&native,0,sizeof(native));
         native.compiler=(host_gui_compiler_t)atoi(argv[2]); native.step=(host_gui_step_t)atoi(argv[3]);
         native.done=strtoull(argv[4],NULL,10); native.total=strtoull(argv[5],NULL,10);
         native.build=(host_gui_build_t)atoi(argv[6]); native.sets=(unsigned)atoi(argv[7]);
         native.ready=(unsigned)atoi(argv[8]); native.failed=(unsigned)atoi(argv[9]); native.seconds_left=atoi(argv[10]);
+        if (argc==13) { native.system=(host_gui_system_t)atoi(argv[11]); snprintf(native.version,sizeof(native.version),"%s",argv[12]); }
         snprintf(native.reason,sizeof(native.reason),"Download failed; retry to resume");
         gui_native_summary(&native,line,sizeof(line),&alert);
         printf("%d %s\n",alert,line); return 0;
