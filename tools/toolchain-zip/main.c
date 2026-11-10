@@ -1,6 +1,7 @@
-/* Writes the release archive of the trimmed compiler. Everything that does not
- * depend on the compressor is fixed (order, dates, modes), so two builds with the
- * same zlib give the same bytes; a third of the download is worth that condition. */
+/* Writes the release archives of the trimmed compiler and of the Windows player.
+ * Everything that does not depend on the compressor is fixed (order, dates, modes),
+ * so two builds with the same zlib give the same bytes; a third of the download is
+ * worth that condition. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
