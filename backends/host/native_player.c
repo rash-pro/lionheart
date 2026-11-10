@@ -84,12 +84,42 @@ static int source_plan(void *user, unsigned discs, native_build_set_t **rows, si
     return ok;
 }
 
+/* The generator reads discs through cue sheets, and the player also takes a
+ * raw image. Such an image gets a sheet beside the cache while the discs are
+ * read; an open session holds all it needs. 1 made, 0 none needed, -1 failed. */
+static int raw_sheet(unsigned d, char *sheet, size_t size) {
+    char absolute[4096];
+    const char *path = np.discs[d];
+    size_t n = strlen(path);
+    FILE *f;
+    int ok;
+    if (n >= 4 && path[n - 4] == '.' && (path[n - 3] | 32) == 'c' && (path[n - 2] | 32) == 'u' && (path[n - 1] | 32) == 'e') return 0;
+#ifdef _WIN32
+    if (!_fullpath(absolute, path, sizeof(absolute))) return -1;
+#else
+    if (!realpath(path, absolute)) return -1;
+#endif
+    if (strchr(absolute, '"') || snprintf(sheet, size, "%s/disc%u.cue", np.root, d + 1) >= (int)size || !(f = fopen(sheet, "wb"))) return -1;
+    ok = fprintf(f, "FILE \"%s\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n", absolute) > 0;
+    if (fclose(f) || !ok) { remove(sheet); return -1; }
+    return 1;
+}
+
 static int source_open(void *user, char *error, size_t size) {
     lhg_options options = generator_options();
+    char sheets[4][4200];
+    int made[4] = {0}, ok = 1;
     unsigned d;
     (void)user;
-    for (d = 0; d < 4; ++d) if (*np.discs[d]) options.disc_paths[options.disc_count++] = np.discs[d];
-    return lhg_session_open(&options, &np.session, error, size) == LHG_OK;
+    for (d = 0; d < 4 && ok; ++d) {
+        if (!*np.discs[d]) continue;
+        made[d] = raw_sheet(d, sheets[d], sizeof(sheets[d]));
+        if (made[d] < 0) { snprintf(error, size, "cannot read %s", np.discs[d]); ok = 0; }
+        else options.disc_paths[options.disc_count++] = made[d] ? sheets[d] : np.discs[d];
+    }
+    ok = ok && lhg_session_open(&options, &np.session, error, size) == LHG_OK;
+    for (d = 0; d < 4; ++d) if (made[d] > 0) remove(sheets[d]);
+    return ok;
 }
 
 static int source_emit(void *user, size_t set, const char *directory, char key[65], char *error, size_t size) {
