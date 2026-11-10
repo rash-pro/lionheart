@@ -104,7 +104,13 @@ LH_TEST_P(test_catalog_sources_are_rejected,sources) {
     rejects([&]{pc::check_compile_commands(database(t,{},p));},"generated catalog source");
 }
 LH_TEST(test_named_catalog_directory_and_symlink_are_rejected) {
-    auto catalog=t.temp()/"catalog"; lh::fs::create_directory(catalog); lh::fs::create_directory_symlink(catalog,t.temp()/"alias");
+    auto catalog=t.temp()/"catalog"; lh::fs::create_directory(catalog);
+    // The scan can only follow a link the system resolves: Windows may refuse to create one without the
+    // privilege, and older Wine creates it without resolving it.
+    std::error_code link;
+    lh::fs::create_directory_symlink(catalog,t.temp()/"alias",link);
+    if(link || lh::fs::weakly_canonical(t.temp()/"alias",link)!=lh::fs::weakly_canonical(catalog,link) || link)
+        lh::skip("this system cannot create or resolve directory symlinks");
     rejects([&]{pc::check_compile_commands(database(t,{"-Ialias"}),{catalog});},"generated catalog include");
     lh::write_file(t.temp()/"CMakeCache.txt","GENERATED_DIR:PATH="+catalog.string()+"\n");
     rejects([&]{pc::check_compile_commands(database(t,{},"alias/module.c"));},"generated catalog source");
