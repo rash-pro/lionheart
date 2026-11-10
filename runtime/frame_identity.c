@@ -263,15 +263,33 @@ static int same_inputs(const segment_t *a, const frame_identity_run_t *x, const 
     return 1;
 }
 
-/* Squared, in view-space units; exact in a double for 32-bit coordinates. */
-static double distance(const frame_identity_projection_t *a, const frame_identity_projection_t *b) {
+/* Newton's method from above, so that the result never depends on a math
+ * library: the stream must be the same wherever the player runs. */
+static double root(double x) {
+    double r = x > 1 ? x : 1, n;
+    unsigned i;
+    if (x <= 0) return 0;
+    for (i = 0; i < 2000; ++i) {
+        n = 0.5 * (r + x / r);
+        if (n >= r) break;
+        r = n;
+    }
+    return r;
+}
+
+/* How far two runs are apart: their translations and their first vertices
+ * in view space, both counted, so that two parts placed alike by different
+ * transforms still differ. */
+static double distance(const segment_t *a, const frame_identity_run_t *x, const segment_t *b, const frame_identity_run_t *y) {
+    const frame_identity_projection_t *p = &a->projections[x->first], *q = &b->projections[y->first];
     double d = 0;
     unsigned i;
     for (i = 0; i < 3; ++i) {
-        double x = (double)a->view[i] - (double)b->view[i];
-        d += x * x;
+        double t = (double)a->setups[x->setup].translation[i] - (double)b->setups[y->setup].translation[i];
+        double v = (double)p->view[i] - (double)q->view[i];
+        d += t * t + v * v;
     }
-    return d;
+    return root(d);
 }
 
 static int form_runs(segment_t *g) {
@@ -337,24 +355,24 @@ static int pair_runs(segment_t *cur, const segment_t *prev) {
         if (!na) continue;
         if (na == 1 && nb == 1) match = a[0];
         else {
-            /* Repeated content: identical instances, particles. The nearest in
-             * view space both ways, at most half as far as the next (a quarter,
-             * squared), and close on screen; anything less is held. */
+            /* Repeated content: identical instances, particles. The nearest
+             * both ways, at most half as far as the next, and close on screen;
+             * anything less is held. */
             const frame_identity_projection_t *mine = &cur->projections[r->first], *theirs;
             double best = 1e300, second = 1e300, back = 1e300, back_second = 1e300;
             int32_t arg = -1, back_arg = -1;
             int dx, dy;
             for (x = 0; x < na; ++x) {
-                double d = distance(&prev->projections[prev->runs[a[x]].first], mine);
+                double d = distance(prev, &prev->runs[a[x]], cur, r);
                 if (d < best) { second = best; best = d; arg = a[x]; } else if (d < second) second = d;
             }
             theirs = &prev->projections[prev->runs[arg].first];
             for (x = 0; x < nb; ++x) {
-                double d = distance(theirs, &cur->projections[cur->runs[b[x]].first]);
+                double d = distance(prev, &prev->runs[arg], cur, &cur->runs[b[x]]);
                 if (d < back) { back_second = back; back = d; back_arg = b[x]; } else if (d < back_second) back_second = d;
             }
             dx = low(theirs->sxy) - low(mine->sxy); dy = high(theirs->sxy) - high(mine->sxy);
-            if (back_arg == (int32_t)i && best * 4 + 1 < second && back * 4 + 1 < back_second &&
+            if (back_arg == (int32_t)i && best * 2 + 1 < second && back * 2 + 1 < back_second &&
                 (double)dx * dx + (double)dy * dy <= (double)s.config.repeat_pixels * s.config.repeat_pixels)
                 match = arg;
         }

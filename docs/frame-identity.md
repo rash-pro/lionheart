@@ -23,8 +23,8 @@ of a frame the service:
   translation, OFX, OFY, H, sf and lm): in practice a bone or a rigid part;
 - keys each run by its length and exact model-space inputs, and pairs it with the run of the same key in the
   previous frame; vertex k pairs with vertex k. A key present more than once in either frame pairs only with the
-  mutually nearest run in view space, at most half as far as the next candidate both ways and within 8 pixels on
-  screen; otherwise it is held;
+  mutually nearest run (by translation and first vertex in view space), at most half as far as the next candidate
+  both ways and within 8 pixels on screen; otherwise it is held;
 - gives the frame no history (`FRAME_IDENTITY_RESET`) when it is the first, after `frame_identity_reset` (a
   restored state), or when more than 8 VBlanks passed since the previous end;
 - links each corner of each polygon drawn during the frame to a projection: in the newest of this frame and the
