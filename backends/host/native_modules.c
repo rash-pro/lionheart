@@ -19,7 +19,17 @@ struct native_module {
     void *handle;
     const lh_module_descriptor_t *descriptor;
     int registered;
+    /* Host copies of the tables, made only when some entry was redirected to
+     * an identical body that an earlier module already registered. */
+    entry_t *entries;
+    const code_region_t **regions;
 };
+
+/* A function body registered first, by its region's content. */
+typedef struct {
+    const code_region_t *region;
+    recompiled_fn fn;
+} twin_t;
 
 static const lh_module_api host_api = {
 #define LHM_VOID_ENTRY(name, params, args) .name = name,
@@ -45,6 +55,8 @@ static struct {
     native_module_t *modules[CODE_OVERLAYS];
     size_t count;
     native_module_t *pending;
+    twin_t *twins;
+    size_t twin_capacity, twin_count;
     char **scan;
     size_t scan_count, scan_next;
 } state;
@@ -291,7 +303,82 @@ native_module_status_t native_module_open(const char *path, native_module_t **mo
 void native_module_close(native_module_t *module) {
     if (!module || module->registered) return;
     library_close(module->handle);
+    free(module->entries);
+    free(module->regions);
     free(module);
+}
+
+static uint64_t region_key(const code_region_t *region) {
+    uint64_t key = region->hash ^ (uint64_t)region->count * UINT64_C(0x9e3779b97f4a7c15);
+    size_t i;
+    for (i = 0; i < region->count; ++i)
+        key = (key ^ ((uint64_t)region->spans[i].address << 32 | region->spans[i].size)) * UINT64_C(0x100000001b3);
+    return key ^ key >> 31;
+}
+
+static int same_region(const code_region_t *a, const code_region_t *b) {
+    size_t i;
+    if (a->hash != b->hash || a->count != b->count) return 0;
+    for (i = 0; i < a->count; ++i)
+        if (a->spans[i].address != b->spans[i].address || a->spans[i].size != b->spans[i].size) return 0;
+    return 1;
+}
+
+static int grow_twins(void) {
+    size_t capacity = state.twin_capacity ? state.twin_capacity * 2 : 4096, i;
+    twin_t *grown = calloc(capacity, sizeof(*grown)), *old = state.twins;
+    if (!grown) return 0;
+    for (i = 0; i < state.twin_capacity; ++i) if (old[i].region) {
+        size_t at = (size_t)region_key(old[i].region) & (capacity - 1);
+        while (grown[at].region) at = (at + 1) & (capacity - 1);
+        grown[at] = old[i];
+    }
+    free(old);
+    state.twins = grown; state.twin_capacity = capacity;
+    return 1;
+}
+
+/* The body to run for a region: the one registered first with the same spans
+ * and fingerprint. Sets that share a function then share one body and one
+ * validity cache entry, as the linked shape's single owner does. A precise
+ * body is a function of its instructions alone, so the twin behaves the same.
+ * Without memory for the table, every module simply keeps its own bodies. */
+static const twin_t *canonical(const code_region_t *region, recompiled_fn fn) {
+    size_t at;
+    if (state.twin_count * 2 >= state.twin_capacity && !grow_twins()) return NULL;
+    at = (size_t)region_key(region) & (state.twin_capacity - 1);
+    while (state.twins[at].region) {
+        if (state.twins[at].region == region || same_region(state.twins[at].region, region)) return &state.twins[at];
+        at = (at + 1) & (state.twin_capacity - 1);
+    }
+    state.twins[at].region = region; state.twins[at].fn = fn;
+    ++state.twin_count;
+    return &state.twins[at];
+}
+
+/* Tables as the dispatcher will walk them: the module's own unless some
+ * entry was redirected, then a host copy. */
+static void share_bodies(native_module_t *module, const entry_t **entries, const code_region_t *const **regions) {
+    const lh_module_descriptor_t *d = module->descriptor;
+    uint32_t i;
+    *entries = d->entries; *regions = d->regions;
+    for (i = 0; i < d->entry_count; ++i) {
+        const twin_t *twin = canonical(d->regions[i], d->entries[i].fn);
+        if (!twin || twin->region == d->regions[i]) continue;
+        if (!module->entries) {
+            module->entries = malloc(d->entry_count * sizeof(*module->entries));
+            module->regions = malloc(d->entry_count * sizeof(*module->regions));
+            if (!module->entries || !module->regions) {
+                free(module->entries); free(module->regions); module->entries = NULL; module->regions = NULL;
+                return;
+            }
+            memcpy(module->entries, d->entries, d->entry_count * sizeof(*module->entries));
+            memcpy(module->regions, d->regions, d->entry_count * sizeof(*module->regions));
+        }
+        module->entries[i].fn = twin->fn;
+        module->regions[i] = twin->region;
+    }
+    if (module->entries) { *entries = module->entries; *regions = module->regions; }
 }
 
 static void commit_at_boundary(cpu_t *c) { native_modules_commit(c); }
@@ -307,13 +394,16 @@ void native_module_publish(native_module_t *module) {
  * is the arrival race a later builder must resolve by not opening it twice. */
 static void register_module(cpu_t *c, native_module_t *module) {
     const lh_module_descriptor_t *d = module->descriptor;
+    const entry_t *entries;
+    const code_region_t *const *regions;
     int already = 0;
     size_t i;
     if (d->set_index == LH_MODULE_MAIN_SET) {
         if (state.main_module) { native_module_close(module); return; }
         module->registered = 1;
         __atomic_store_n(&state.main_module, module, __ATOMIC_RELEASE);
-        c->entries = d->entries; c->entry_count = d->entry_count; c->entry_regions = d->regions;
+        share_bodies(module, &entries, &regions);
+        c->entries = entries; c->entry_count = d->entry_count; c->entry_regions = regions;
         return;
     }
     if (state.count == CODE_OVERLAYS) { native_module_close(module); return; }
@@ -322,9 +412,10 @@ static void register_module(cpu_t *c, native_module_t *module) {
         if (state.overlays[i].index > (uint32_t)d->set_index) break;
     }
     if (already) { native_module_close(module); return; }
+    share_bodies(module, &entries, &regions);
     memmove(&state.overlays[i + 1], &state.overlays[i], (state.count - i) * sizeof(*state.overlays));
     memmove(&state.modules[i + 1], &state.modules[i], (state.count - i) * sizeof(*state.modules));
-    state.overlays[i] = (overlay_t){(uint32_t)d->set_index, d->base, d->size, {0}, d->entries, d->entry_count, d->regions};
+    state.overlays[i] = (overlay_t){(uint32_t)d->set_index, d->base, d->size, {0}, entries, d->entry_count, regions};
     memcpy(state.overlays[i].sha1, d->image_sha1, sizeof(d->image_sha1));
     state.modules[i] = module;
     state.count++;
@@ -332,10 +423,14 @@ static void register_module(cpu_t *c, native_module_t *module) {
 }
 
 void native_modules_commit(cpu_t *c) {
-    native_module_t *module;
+    native_module_t *module, *ordered = NULL;
     __atomic_store_n(&dispatch_safe_point, NULL, __ATOMIC_RELEASE);
     module = __atomic_exchange_n(&state.pending, NULL, __ATOMIC_ACQUIRE);
     if (!module) return;
+    /* Publication order, so that among identical bodies the first published
+     * one is shared, as the lowest set owns a shared body in the linked shape. */
+    while (module) { native_module_t *next = module->next; module->next = ordered; ordered = module; module = next; }
+    module = ordered;
     while (module) {
         native_module_t *next = module->next;
         register_module(c, module);
@@ -362,6 +457,7 @@ void native_modules_shutdown(cpu_t *c) {
     if (state.main_module) { state.main_module->registered = 0; native_module_close(state.main_module); }
     for (i = 0; i < state.scan_count; ++i) free(state.scan[i]);
     free(state.scan);
+    free(state.twins);
     free(state.text);
     memset(&state, 0, sizeof(state));
 }
