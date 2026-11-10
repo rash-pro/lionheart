@@ -133,7 +133,7 @@ int run_case(const std::string &name) {
             const auto stem = stem_of(name);
             if (stem == "module_loader") skip("native module fixtures require ELF freestanding libraries");
             if (stem == "test_frame_probe") skip("sampler requires Linux x86-64 processes");
-            if (stem == "test_generator_parity" || stem == "test_generator_rules")
+            if (stem == "test_generator_parity" || stem == "test_generator_rules" || stem == "test_setup_cache")
                 skip("generator test programs are built for the host");
             if (stem == "test_frame_bench") skip("benchmark fixture requires POSIX process and script conventions");
             if (stem == "test_state_bridge") skip("state bridge fixture requires POSIX sockets and syscalls");

@@ -305,6 +305,33 @@ native_module_status_t native_module_open(const char *path, native_module_t **mo
     return NATIVE_MODULE_OK;
 }
 
+native_module_status_t native_module_try(const char *path, void **handle, recompiled_fn *first, char *error, size_t error_size) {
+    native_module_status_t status;
+    const lh_module_descriptor_t *d;
+    char reason[256] = "";
+    *handle = NULL; *first = NULL;
+    if ((status = check_complete(path, reason, sizeof(reason))) != NATIVE_MODULE_OK)
+        return refuse(status, error, error_size, "%s", reason);
+    if (!(*handle = library_open(path, reason, sizeof(reason))))
+        return refuse(NATIVE_MODULE_LOAD_FAILED, error, error_size, "%s", reason);
+    d = library_symbol(*handle, LH_MODULE_SYMBOL);
+    if (!d) status = refuse(NATIVE_MODULE_NO_DESCRIPTOR, error, error_size, "no module descriptor");
+    else if (memcmp(d->magic, host_magic, sizeof(host_magic)) || d->abi_version != LH_MODULE_ABI_VERSION ||
+             d->descriptor_size != sizeof(lh_module_descriptor_t))
+        status = refuse(NATIVE_MODULE_BAD_ABI, error, error_size, "descriptor from another ABI version");
+    else if (!strcmp(d->abi_id, "unconfigured") || memcmp(d->abi_id, LH_MODULE_ABI_ID, sizeof(LH_MODULE_ABI_ID)) ||
+             memcmp(&d->traits, &host_traits, sizeof(host_traits)))
+        status = refuse(NATIVE_MODULE_BAD_ABI, error, error_size, "built against different headers or build settings");
+    else if ((status = check_tables(d, reason, sizeof(reason))) != NATIVE_MODULE_OK) status = refuse(status, error, error_size, "%s", reason);
+    else if (!d->entry_count || !d->api) status = refuse(NATIVE_MODULE_BAD_TABLES, error, error_size, "no entry or no call table");
+    if (status != NATIVE_MODULE_OK) { library_close(*handle); *handle = NULL; return status; }
+    *d->api = host_api;
+    *first = d->entries[0].fn;
+    return NATIVE_MODULE_OK;
+}
+
+void native_module_untry(void *handle) { if (handle) library_close(handle); }
+
 void native_module_close(native_module_t *module) {
     if (!module || module->registered) return;
     library_close(module->handle);

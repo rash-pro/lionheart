@@ -14,6 +14,7 @@ source, the Linux AppImage or the Windows distribution. Vendored sources retain 
 | rcheevos | MIT: [LICENSE](third_party/rcheevos/LICENSE); MD5 also retains its zlib-style notice in [md5.c](third_party/rcheevos/src/util/md5.c) |
 | libcurl 8.22.0 (Linux; bundled in the AppImage, HTTP and HTTPS only) | curl licence (MIT-style): [curl.txt](licenses/curl.txt) |
 | Spleen 2.2.0 | BSD-2-Clause: [LICENSE](third_party/spleen/LICENSE); compiled OSD cells |
+| XZ Embedded v2024-12-30 | 0BSD: [COPYING](third_party/xz-embedded/COPYING); decodes the Linux compiler archive |
 | Dear ImGui 1.91.9b | MIT: [LICENSE.txt](third_party/imgui/LICENSE.txt) |
 | nativefiledialog-extended 1.2.1 | zlib: [LICENSE](third_party/nativefiledialog-extended/LICENSE) |
 | Chakra Petch | OFL-1.1: [licence text](third_party/chakra-petch/OFL.txt); GUI fonts and logo typography |
@@ -44,10 +45,8 @@ distribution's licence and source packages.
 The RetroAchievements transport uses system libcurl on Linux and the Windows WinHTTP system API on Windows.
 The badge decoder uses the existing zlib dependency; no additional image library is shipped.
 
-The player does not contain a compiler. To build the game's native code it downloads, when the user starts that
-step, a trimmed copy of the official Zig 0.17.1 release from this project's
-[releases page](https://github.com/rash-pro/lionheart/releases/tag/toolchain-zig-0.17.1) and installs it in the
-user's data folder. Zig is MIT-licensed and includes LLVM under Apache-2.0 with LLVM exceptions; both licence texts
-and a notice of the archive's origin are inside each archive and are installed beside the compiler.
-[tools/player-check/README.md](tools/player-check/README.md) describes how the archives are rebuilt from the
-official ones.
+The player does not contain a compiler. To build the game's native code it uses a C compiler the system already
+has (Clang or GCC on Linux) when one works; nothing of it is copied or shipped. Otherwise, when the user starts that
+step, it downloads the official Zig 0.17.1 archive from [ziglang.org](https://ziglang.org/download/) and installs
+only the files it needs in the user's data folder. Zig is MIT-licensed and includes LLVM under Apache-2.0 with LLVM
+exceptions; both licence texts (`LICENSE` and `lib/libcxx/LICENSE.TXT`) are among the installed files.

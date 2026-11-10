@@ -28,11 +28,11 @@ file(GLOB_RECURSE files LIST_DIRECTORIES FALSE RELATIVE "${work}" "${work}/Lionh
 list(SORT files)
 string(JOIN "\n" entries ${files})
 file(WRITE "${BUILD}/package-entries.txt" "${entries}\n")
-release_run("${CMAKE_COMMAND}" -S "${RELEASE_ROOT}/tools/toolchain-zip" -B "${BUILD}/zip-writer" -DCMAKE_BUILD_TYPE=Release)
+release_run("${CMAKE_COMMAND}" -S "${RELEASE_ROOT}/tools/package-zip" -B "${BUILD}/zip-writer" -DCMAKE_BUILD_TYPE=Release)
 release_run("${CMAKE_COMMAND}" --build "${BUILD}/zip-writer" --parallel 2)
 file(MAKE_DIRECTORY "${OUT}")
 set(package "${OUT}/Lionheart-${VERSION}-windows-x86_64.zip")
-execute_process(COMMAND "${BUILD}/zip-writer/toolchain-zip" "${package}" "${BUILD}/package-entries.txt" Lionheart/Lionheart.exe
+execute_process(COMMAND "${BUILD}/zip-writer/package-zip" "${package}" "${BUILD}/package-entries.txt" Lionheart/Lionheart.exe
   WORKING_DIRECTORY "${work}" RESULT_VARIABLE status)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "ZIP writer failed")

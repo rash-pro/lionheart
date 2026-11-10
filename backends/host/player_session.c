@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "player_paths.h"
+#include "player_identity.h"
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,6 +96,28 @@ static int startup_error(const char *message, int headless) {
     return 2;
 }
 static int player_entry(int argc, char **argv) {
+    for (int i=1;i<argc;++i) {
+        if (strcmp(argv[i],"--version")) continue;
+#ifdef _WIN32
+        /* Preserve pipes; a GUI launch from a console may not inherit stdout. */
+        HANDLE output=GetStdHandle(STD_OUTPUT_HANDLE);
+        if (!output || output==INVALID_HANDLE_VALUE) {
+            if (AttachConsole(ATTACH_PARENT_PROCESS)) output=GetStdHandle(STD_OUTPUT_HANDLE);
+        }
+        if (fileno(stdout)<0) freopen("NUL","w",stdout);
+        if (output && output!=INVALID_HANDLE_VALUE &&
+            _get_osfhandle(fileno(stdout))!=(intptr_t)output) {
+            int fd=_open_osfhandle((intptr_t)output,O_WRONLY|O_BINARY);
+            if (fd>=0) { dup2(fd,fileno(stdout)); close(fd); }
+        }
+        _setmode(fileno(stdout),O_BINARY);
+#endif
+        puts(HOST_PLAYER_IDENTITY);
+        return 0;
+    }
+#ifdef _WIN32
+    if (fileno(stdout)<0) freopen("NUL","w",stdout);
+#endif
     char directory[4096], path[8192], from[8192], to[8192];
     session_log_t s={0};
     SDL_Thread *thread;
@@ -123,6 +146,7 @@ static int player_entry(int argc, char **argv) {
     snprintf(path,sizeof(path),"%s/logs/lionheart.log",directory);
     s.file=fopen(path,"wb");
     if (!s.file || pipe(fds)) { if (s.file) fclose(s.file); mark_close(mark,1); return startup_error("Cannot open Lionheart session log",headless); }
+    fprintf(s.file,"%s\n",HOST_PLAYER_IDENTITY); fflush(s.file);
     fatal_trace_install(fileno(s.file));
     fflush(stderr);
     s.original=dup(error_fd); s.read_fd=fds[0];
@@ -162,7 +186,6 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE previous, LPSTR command, int sh
     /* Explorer and detached processes have FILE descriptors of -2. Reopen the
      * streams before tee setup; changing descriptor 2 alone cannot fix FILE*. */
     if (fileno(stdin)<0) freopen("NUL","r",stdin);
-    if (fileno(stdout)<0) freopen("NUL","w",stdout);
     if (fileno(stderr)<0) freopen("NUL","w",stderr);
     int argc=0, result=2;
     wchar_t **wide=CommandLineToArgvW(GetCommandLineW(),&argc);

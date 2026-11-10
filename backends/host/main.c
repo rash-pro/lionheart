@@ -156,9 +156,17 @@ static void gui_native(void *context, host_gui_native_t *out) {
     memset(out,0,sizeof(*out));
     out->compiler = setup.state==NATIVE_SETUP_RUNNING ? HOST_GUI_COMPILER_INSTALLING :
         setup.state==NATIVE_SETUP_FAILED ? HOST_GUI_COMPILER_FAILED :
-        setup.state==NATIVE_SETUP_INSTALLED ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
+        setup.state==NATIVE_SETUP_READY ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
     out->step = (host_gui_step_t)setup.phase; out->done = setup.done; out->total = setup.total;
+    if (setup.system) {
+        native_setup_compiler_t compiler;
+        if (native_setup_compiler(&compiler)) {
+            out->system = compiler.family==NATIVE_BUILD_GCC ? HOST_GUI_SYSTEM_GCC : HOST_GUI_SYSTEM_CLANG;
+            snprintf(out->version,sizeof(out->version),"%s",compiler.version);
+        }
+    }
     out->bytes = manifest->size; out->downloadable = manifest->url_count>0;
+    snprintf(out->format,sizeof(out->format),"%s",manifest->format);
     if (manifest->url_count) {
         const char *name = strrchr(manifest->urls[0],'/');
         if (name && name[1] && strlen(name+1)<sizeof(out->archive)) strcpy(out->archive,name+1);
@@ -261,7 +269,7 @@ static void native_poll(void) {
     native_build_status_t status;
     if (native_waiting) {
         native_setup_status(&setup);
-        if (setup.state == NATIVE_SETUP_INSTALLED) {
+        if (setup.state == NATIVE_SETUP_READY) {
             native_waiting = 0;
             host_native_start(native_data, disc_paths, host_display_disc_value(), &native_options);
         }
@@ -535,11 +543,13 @@ int main(int argc, char **argv) {
     int option_start = 2;
 #ifdef FF8_PLAYER
     char default_card[4096] = {0}, default_states[4096] = {0};
+    int positional_disc = 0;
     if (argc < 2 || !strncmp(argv[1],"--",2)) { exe_path = NULL; option_start = 1; }
     else {
         size_t n = strlen(argv[1]);
         if (n >= 4 && (!SDL_strcasecmp(argv[1]+n-4,".cue") || !SDL_strcasecmp(argv[1]+n-4,".bin"))) {
             disc_paths[disc_count++] = argv[1]; exe_path = NULL;
+            positional_disc = 1;
         }
     }
 #endif
@@ -688,13 +698,15 @@ int main(int argc, char **argv) {
         if (!bad_disc) {
             char paths[4][512] = {{0}};
             const char *long_paths[4] = {0};
+            /* Opening one image from the desktop keeps the other known discs. */
+            if (positional_disc) memcpy(paths,options.discs,sizeof(paths));
             for (d=0;d<4;++d) if (sorted[d]) {
                 if (strlen(sorted[d]) >= sizeof(paths[d])) long_paths[d] = sorted[d];
                 else strcpy(paths[d],sorted[d]);
             }
             memcpy(options.discs,paths,sizeof(paths));
             for (d=0;d<4;++d) disc_paths[d] = long_paths[d] ? long_paths[d] : *options.discs[d] ? options.discs[d] : NULL;
-        } else {
+        } else if (!positional_disc) {
             /* Keep rejected paths visible to the GUI worker for replacement. */
             char paths[4][512] = {{0}};
             for (d=0;d<count;++d) {
@@ -702,6 +714,8 @@ int main(int argc, char **argv) {
                 strcpy(paths[d],supplied[d]);
             }
             memcpy(options.discs,paths,sizeof(paths));
+            for (d=0;d<4;++d) disc_paths[d] = *options.discs[d] ? options.discs[d] : NULL;
+        } else {
             for (d=0;d<4;++d) disc_paths[d] = *options.discs[d] ? options.discs[d] : NULL;
         }
         disc_count = 0;

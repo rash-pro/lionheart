@@ -86,6 +86,25 @@ cmake -DBUILD=build/native-tests -P tests/native/rewrite_generator_reference.cma
 
 This accepts current output. Review the entire manifest diff before committing it.
 
+`test_setup_cache` drives the cache through the real disc loader and generator with
+synthetic discs and versioned identity metadata. It checks disc rejection, a hit
+with no generation or emission progress, source fingerprint changes (by rebuilding
+a temporary source copy), input and output invalidation, cancellation after
+the first emitted unit, and late output write failures, both before and after a
+successful run. Cancellation uses
+the existing library callback; the shipped CLI has no cancellation test switch.
+Real-game identity validation is unchanged. The same standard-tier cases run the
+standalone cache unit executable and setup CLI argument checks in routine Linux CI.
+Windows targets skip these host generator fixtures with a prerequisite reason.
+`generator/test/setup_cache.sh` remains the contributor check with owned discs;
+it is not run in CI.
+
+To demonstrate cache regression detection in an idle native build, run
+`cmake -DBUILD=build/native-tests -P tests/native/mutate_setup_cache.cmake`.
+The script temporarily removes invalidation, output digests, fingerprint binding,
+duplicate-disc rejection and publication ordering, requires each corresponding
+case to fail, restores the sources, and reruns the cache cases.
+
 `test_metadata_tool` covers native disc metadata commands with synthetic ISO
 sectors and checks the supported upstream YAML subset. No interpreter is needed
 for the developer tools or this suite.

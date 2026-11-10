@@ -58,7 +58,9 @@ int main(int argc,char **argv) {
     mode=argv[3];
     if(!strcmp(mode,"checksum")) hex[0]=hex[0]=='0'?'1':'0';
     if(!strcmp(mode,"size")) size++;
-    host_tc_manifest m={"test","zip","payload/",files[0],hex,size,urls,argc>5?2:1,files,1};
+    size_t length=strlen(argv[2]);
+    const char *format=length>7 && !strcmp(argv[2]+length-7,".tar.xz")?"tar.xz":"zip";
+    host_tc_manifest m={"test",format,"payload/",files[0],hex,size,urls,argc>5?2:1,files,1};
     if(!strcmp(mode,"no-url")) {m.urls=NULL;m.url_count=0;}
     host_tc_error error;
     printf("before=%d\n",host_tc_query(argv[1],&m));

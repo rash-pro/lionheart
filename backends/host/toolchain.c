@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <zlib.h>
+#include "xz.h"
 #ifdef _WIN32
 #include <windows.h>
 #include <winhttp.h>
@@ -175,7 +176,7 @@ static int read_at(FILE *f,uint64_t at,void *b,size_t n) {
 }
 /* The central directory supplies sizes for ZIPs using data descriptors. Every
  * entry is validated, including entries outside the retained subset. */
-static int extract(install *i,const char *archive,const char *stage) {
+static int extract_zip(install *i,const char *archive,const char *stage) {
     FILE *f=fopen(archive,"rb"); unsigned char end[65557],h[46],local[30];
     unsigned char *seen=calloc(i->m->file_count,1); int ok=0;
     uint64_t tail=i->m->size<sizeof(end)?i->m->size:sizeof(end), base=i->m->size-tail;
@@ -242,7 +243,160 @@ static int extract(install *i,const char *archive,const char *stage) {
     ok=1; for(size_t j=0;j<i->m->file_count;++j) if(!seen[j]) ok=0;
 done:
     if(f) fclose(f);
-    free(seen); return ok || (i->cancelled?0:fail(i,"Invalid ZIP or missing retained file"));
+    free(seen); return ok || (i->cancelled?0:fail(i,"Invalid archive or missing retained file"));
+}
+/* The official Linux archive is a tar stream inside one xz stream. The xz
+ * checks cover every byte, and every entry is validated as the ZIP reader
+ * validates its entries: a link, a device or a name that leaves the
+ * destination refuses the whole archive, retained or not. */
+typedef struct {
+    install *i;
+    FILE *f;
+    struct xz_dec *dec;
+    struct xz_buf b;
+    unsigned char in[BLOCK];
+    uint64_t read;
+    int ended,bad;
+} xz_input;
+/* Up to n bytes; fewer only where the stream ends. */
+static size_t xz_take(xz_input *s,unsigned char *out,size_t n) {
+    s->b.out=out; s->b.out_pos=0; s->b.out_size=n;
+    while(!s->bad && !s->ended && s->b.out_pos<n) {
+        if(s->b.in_pos==s->b.in_size) {
+            size_t got=fread(s->in,1,sizeof(s->in),s->f);
+            if(ferror(s->f)) { s->bad=1; break; }
+            s->b.in=s->in; s->b.in_pos=0; s->b.in_size=got; s->read+=got;
+            if(!tick(s->i,HOST_TC_EXTRACT,s->read,s->i->m->size)) { s->bad=1; break; }
+        }
+        enum xz_ret r=xz_dec_run(s->dec,&s->b);
+        if(r==XZ_STREAM_END) s->ended=1;
+        else if(r!=XZ_OK) s->bad=1;
+    }
+    return s->b.out_pos;
+}
+static int xz_fill(xz_input *s,unsigned char *out,size_t n) { return xz_take(s,out,n)==n && !s->bad; }
+static int xz_skip(xz_input *s,uint64_t n) {
+    unsigned char b[BLOCK];
+    while(n) { size_t k=n>BLOCK?BLOCK:(size_t)n; if(!xz_fill(s,b,k)) return 0; n-=k; }
+    return 1;
+}
+static int zero(const unsigned char *p,size_t n) { while(n--) if(*p++) return 0; return 1; }
+static int octal(const unsigned char *p,size_t n,uint64_t *out) {
+    size_t k=0; uint64_t v=0;
+    while(k<n && p[k]==' ') ++k;
+    if(k==n || p[k]<'0' || p[k]>'7') return 0;
+    for(;k<n && p[k]>='0' && p[k]<='7';++k) { if(v>>60) return 0; v=v*8+(uint64_t)(p[k]-'0'); }
+    for(;k<n;++k) if(p[k] && p[k]!=' ') return 0;
+    *out=v; return 1;
+}
+static int tar_header(const unsigned char *h) {
+    uint64_t sum=0,recorded;
+    for(size_t k=0;k<512;++k) sum+=(k>=148 && k<156)?' ':h[k];
+    return octal(h+148,8,&recorded) && sum==recorded && (!memcmp(h+257,"ustar\0" "00",8) || !memcmp(h+257,"ustar  \0",8));
+}
+/* A pax record is "LENGTH key=value\n"; only the name and the size matter to
+ * an entry, and a global header may name neither. */
+static int pax(const char *text,size_t n,int global,char *name,int *named,uint64_t *size,int *sized) {
+    size_t at=0;
+    while(at<n) {
+        size_t length=0,k=at; const char *key,*value,*end;
+        while(k<n && text[k]>='0' && text[k]<='9') { if(length>n) return 0; length=length*10+(size_t)(text[k++]-'0'); }
+        if(k==at || k>=n || text[k]!=' ' || length<=k-at+1 || length>n-at || text[at+length-1]!='\n') return 0;
+        key=text+k+1; end=text+at+length-1;
+        value=memchr(key,'=',(size_t)(end-key));
+        if(!value || value==key) return 0;
+        size_t klen=(size_t)(value-key),vlen=(size_t)(end-++value);
+        int is_path=klen==4 && !memcmp(key,"path",4),is_size=klen==4 && !memcmp(key,"size",4);
+        if((is_path || is_size) && global) return 0;
+        if(is_path) {
+            if(!vlen || vlen>=PATH_CAP || memchr(value,0,vlen)) return 0;
+            memcpy(name,value,vlen); name[vlen]=0; *named=1;
+        } else if(is_size) {
+            uint64_t v=0;
+            if(!vlen || vlen>19) return 0;
+            for(size_t d=0;d<vlen;++d) { if(value[d]<'0' || value[d]>'9') return 0; v=v*10+(uint64_t)(value[d]-'0'); }
+            *size=v; *sized=1;
+        }
+        at+=length;
+    }
+    return 1;
+}
+static int extract_tar_xz(install *i,const char *archive,const char *stage) {
+    xz_input s; unsigned char h[512];
+    unsigned char *seen=calloc(i->m->file_count,1);
+    char name[PATH_CAP],next[PATH_CAP],out[PATH_CAP];
+    int ok=0,named=0,sized=0; uint64_t next_size=0;
+    size_t prefix=strlen(i->m->prefix);
+    memset(&s,0,sizeof(s)); s.i=i;
+    xz_crc32_init(); xz_crc64_init();
+    s.f=fopen(archive,"rb");
+    /* The dictionary the xz tool's strongest preset uses, with room to spare. */
+    s.dec=xz_dec_init(XZ_DYNALLOC,256u<<20);
+    if(!s.f || !s.dec || !seen) goto done;
+    for(;;) {
+        uint64_t size; char type; size_t j; const char *rel=NULL;
+        if(!xz_fill(&s,h,512)) goto done;
+        if(zero(h,512)) {
+            /* The end: a second zero block, then only zeros to the stream's end. */
+            if(!xz_fill(&s,h,512) || !zero(h,512) || named || sized) goto done;
+            while(!s.ended) { size_t got=xz_take(&s,h,512); if(s.bad || !zero(h,got)) goto done; }
+            if(s.b.in_pos!=s.b.in_size || fread(h,1,1,s.f)) goto done;
+            break;
+        }
+        if(!tar_header(h) || !octal(h+124,12,&size)) goto done;
+        type=(char)h[156];
+        if(type=='x' || type=='g' || type=='L') {
+            char *text; int good;
+            if(size>65536 || !(text=malloc((size_t)size+1))) goto done;
+            good=xz_fill(&s,(unsigned char *)text,(size_t)size) && xz_skip(&s,(512-size%512)%512);
+            text[size]=0;
+            if(good && type=='L') {
+                size_t n=strnlen(text,(size_t)size);
+                good=!named && n && n<PATH_CAP && (n==size || n+1==size);
+                if(good) { memcpy(next,text,n); next[n]=0; named=1; }
+            } else if(good) good=pax(text,(size_t)size,type=='g',next,&named,&next_size,&sized);
+            free(text);
+            if(!good) goto done;
+            continue;
+        }
+        if(sized) size=next_size;
+        if(named) strcpy(name,next);
+        else {
+            char field[101]; memcpy(field,h,100); field[100]=0;
+            if(!memcmp(h+257,"ustar\0",6) && h[345]) {
+                char head[156]; memcpy(head,h+345,155); head[155]=0;
+                if(snprintf(name,sizeof(name),"%s/%s",head,field)>=(int)sizeof(name)) goto done;
+            } else strcpy(name,field);
+        }
+        named=sized=0;
+        if(type=='5') { size_t n=strlen(name); while(n>1 && name[n-1]=='/') name[--n]=0; }
+        else if(type!='0' && type) goto done;
+        if(!safe_name(name)) goto done;
+        if(type!='5' && !strncmp(name,i->m->prefix,prefix)) rel=name+prefix;
+        for(j=0;j<i->m->file_count;++j) if(rel && !strcmp(rel,i->m->files[j])) break;
+        if(j==i->m->file_count) {
+            if(!xz_skip(&s,size+(512-size%512)%512)) goto done;
+            continue;
+        }
+        if(seen[j] || size>512*1024*1024 || !path(out,stage,rel) || !parent(out)) goto done;
+        seen[j]=1;
+        FILE *o=fopen(out,"wb"); if(!o) goto done;
+        int good=1; uint64_t left=size; unsigned char buf[BLOCK];
+        while(good && left) {
+            size_t n=left>BLOCK?BLOCK:(size_t)left;
+            good=xz_fill(&s,buf,n) && fwrite(buf,1,n,o)==n; left-=n;
+        }
+        if(fclose(o)) good=0;
+        if(!good || !xz_skip(&s,(512-size%512)%512)) goto done;
+#ifndef _WIN32
+        if(!strcmp(rel,i->m->executable) && chmod(out,0700)) goto done;
+#endif
+    }
+    ok=1; for(size_t j=0;j<i->m->file_count;++j) if(!seen[j]) ok=0;
+done:
+    if(s.dec) xz_dec_end(s.dec);
+    if(s.f) fclose(s.f);
+    free(seen); return ok || (i->cancelled?0:fail(i,"Invalid archive or missing retained file"));
 }
 static int run(const char *exe,const char *const *args) {
 #ifdef _WIN32
@@ -372,7 +526,8 @@ int host_tc_install(const char *data,const host_tc_manifest *m,const char *local
     char root[PATH_CAP],dest[PATH_CAP],stage[PATH_CAP],part[PATH_CAP],lock[PATH_CAP],receipt[PATH_CAP];
     int ok=0; if(error) error->reason[0]=0;
     if(!locations(data,m,root,dest) || !path(stage,root,"stage") || !path(part,root,"download.part") || !path(lock,root,"install.lock") || !directory(root)) return fail(&i,"Cannot create toolchain directory");
-    if(strcmp(m->format,"zip")) return fail(&i,"Unsupported archive format");
+    int tar=!strcmp(m->format,"tar.xz");
+    if(!tar && strcmp(m->format,"zip")) return fail(&i,"Unsupported archive format");
     for(size_t j=0;j<m->file_count;++j) if(!safe_name(m->files[j])) return fail(&i,"Invalid retained path");
 #ifdef _WIN32
     HANDLE guard=CreateFileA(lock,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
@@ -398,7 +553,7 @@ int host_tc_install(const char *data,const host_tc_manifest *m,const char *local
         if(!local) remove(part);
         fail(&i,size!=m->size?"Archive size mismatch":"Archive SHA-256 mismatch");goto done;
     }
-    if(!directory(stage) || !extract(&i,archive,stage) || !self_check(&i,stage) || !tick(&i,HOST_TC_COMMIT,0,1)) goto done;
+    if(!directory(stage) || !(tar?extract_tar_xz:extract_zip)(&i,archive,stage) || !self_check(&i,stage) || !tick(&i,HOST_TC_COMMIT,0,1)) goto done;
     if(!path(receipt,stage,"receipt")) goto done;
     FILE *f=fopen(receipt,"wb"); if(!f) {fail(&i,"Cannot write receipt");goto done;}
     ok=fprintf(f,"toolchain-v1 %s %s self-check=passed\n",m->version,m->sha256)>0;

@@ -4,7 +4,6 @@
       "executable": "zig",
       "files": [
         "LICENSE",
-        "NOTICE.txt",
         "lib/include/__stddef_header_macro.h",
         "lib/include/__stddef_null.h",
         "lib/include/__stddef_offsetof.h",
@@ -54,12 +53,12 @@
         "lib/std/std.zig",
         "zig"
       ],
-      "format": "zip",
-      "prefix": "zig-cc-slim/",
-      "sha256": "0dc39d72e7ee14a11e6dfe6883024c5a357e2e1d7d7ff832a10d05d542ab137d",
-      "size": 59429418,
+      "format": "tar.xz",
+      "prefix": "zig-x86_64-linux-0.17.1/",
+      "sha256": "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a",
+      "size": 57411036,
       "urls": [
-        "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-linux-cc.zip"
+        "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz"
       ],
       "version": "0.17.1"
     },
@@ -67,7 +66,6 @@
       "executable": "zig.exe",
       "files": [
         "LICENSE",
-        "NOTICE.txt",
         "lib/include/__stddef_header_macro.h",
         "lib/include/__stddef_null.h",
         "lib/include/__stddef_offsetof.h",
@@ -118,11 +116,11 @@
         "zig.exe"
       ],
       "format": "zip",
-      "prefix": "zig-cc-slim/",
-      "sha256": "e11e483f1b20870800a07db7ae5e5fc83de6b3d4bcad5ebcfe39b397ade585f8",
-      "size": 60288156,
+      "prefix": "zig-x86_64-windows-0.17.1/",
+      "sha256": "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e",
+      "size": 100343666,
       "urls": [
-        "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-windows-cc.zip"
+        "https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip"
       ],
       "version": "0.17.1"
     }
