@@ -107,7 +107,10 @@ static int player_entry(int argc, char **argv) {
      * directory. The player reports missing defaults after parsing its CLI. */
     if (!host_player_data(directory,sizeof(directory))) return host_player_main(argc,argv);
     snprintf(path,sizeof(path),"%s/logs",directory);
-    if (!host_player_directory(path)) return startup_error("Cannot create Lionheart log directory",headless);
+    if (!host_player_directory(path)) {
+        snprintf(from,sizeof(from),"Cannot create Lionheart log directory: %s",host_player_directory_failure());
+        return startup_error(from,headless);
+    }
     snprintf(path,sizeof(path),"%s/running",directory);
     mark=mark_open(path,&crashed);
     if (crashed) snprintf(crash_log,sizeof(crash_log),"%s/logs/lionheart.1.log",directory);

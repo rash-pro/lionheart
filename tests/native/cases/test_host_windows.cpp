@@ -32,7 +32,7 @@ LH_TEST(test_streaming_sha1_padding_and_chunks) {
 LH_TEST(test_log_directory_failure_has_fatal_diagnostic) {
     auto blocked=t.temp()/"not-a-directory"; lh::write_file(blocked,"owned test file");
     auto r=t.run(lh::dummy(session(t)).env("XDG_DATA_HOME",blocked.string()));
-    LH_EQ(r.rc,2); LH_EQ(r.err,"Cannot create Lionheart log directory\n"); LH_CONTAINS(r.out,"messagebox title=Lionheart"); LH_EQ(lh::read_file(blocked),"owned test file");
+    LH_EQ(r.rc,2); LH_CONTAINS(r.err,"Cannot create Lionheart log directory: cannot use "+blocked.string()+": "); LH_CONTAINS(r.out,"messagebox title=Lionheart"); LH_EQ(lh::read_file(blocked),"owned test file");
 }
 struct Signal { const char *id; int number; };
 static const Signal signals[]={{"11",SIGSEGV},{"6",SIGABRT},{"8",SIGFPE},{"4",SIGILL},{"7",SIGBUS}};

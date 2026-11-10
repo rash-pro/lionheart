@@ -58,4 +58,29 @@ LH_TEST(test_windows_stat_describes_files_and_directories) {
     LH_EQ(kind(forward.c_str(), &size), 2);
     LH_EQ(kind(t.temp().root_path().u8string().c_str(), &size), 1);
 }
+// The player builds its folders one level at a time from a path that mixes both
+// separators: the system's data folder, a forward slash, its own names.
+LH_TEST(test_windows_player_folders_are_created_level_by_level) {
+    auto tree = t.library("io").fn<const char *(const char *)>("lh_make_tree");
+    auto kind = t.library("io").fn<int(const char *, long long *)>("lh_stat_kind");
+    long long size = -1;
+    auto base = t.temp().string();
+    LH_EQ(std::string(tree((base + "/Lionheart/logs").c_str())), "");
+    LH_EQ(kind((base + "\\Lionheart\\logs").c_str(), &size), 1);
+    LH_EQ(std::string(tree((base + "/Lionheart/logs").c_str())), "");
+    auto forward = base; for (char &c : forward) if (c == '\\') c = '/';
+    LH_EQ(std::string(tree((forward + "/Second/saves").c_str())), "");
+    lh::write_file(t.temp() / "file", "x");
+    LH_CONTAINS(std::string(tree((base + "/file/logs").c_str())), "cannot use ");
+}
+// The folder the player would use on this machine must be one it can prepare a
+// subfolder path for; this is where a system-specific rule would show.
+LH_TEST(test_windows_data_folder_is_reachable) {
+    auto folder = std::string(t.library("io").fn<const char *()>("lh_data_folder")());
+    auto kind = t.library("io").fn<int(const char *, long long *)>("lh_stat_kind");
+    long long size = -1;
+    LH_CHECK(!folder.empty());
+    auto parent = folder.substr(0, folder.find_last_of("/\\"));
+    if (kind(parent.c_str(), &size) != 1) LH_FAIL("the parent of " + folder + " is not a directory the player can read");
+}
 #endif

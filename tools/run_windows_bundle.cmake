@@ -12,11 +12,13 @@ set(ENV{FF8_PLAYER_HOST} "${root}/Lionheart.exe")
 file(WRITE "${root}/smoke.ini" "")
 execute_process(COMMAND ${EMULATOR} "${root}/Lionheart.exe" --headless --config smoke.ini
   WORKING_DIRECTORY "${root}" RESULT_VARIABLE smoke OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
+# The suite runs even when the player does not start: its cases say more about
+# a system nobody can reach than one startup message does.
+execute_process(COMMAND ${EMULATOR} "${root}/lionheart_tests.exe" --suite
+  WORKING_DIRECTORY "${root}" RESULT_VARIABLE tests)
 if(NOT smoke EQUAL 2 OR NOT "${out}${err}" MATCHES "[Dd]isc")
   message(FATAL_ERROR "Unexpected player smoke result ${smoke}: ${out}${err}")
 endif()
-execute_process(COMMAND ${EMULATOR} "${root}/lionheart_tests.exe" --suite
-  WORKING_DIRECTORY "${root}" RESULT_VARIABLE tests)
 if(NOT tests EQUAL 0)
   message(FATAL_ERROR "Windows suite failed: ${tests}")
 endif()
