@@ -37,7 +37,9 @@
 #ifdef FF8_PGXP
 #include "pgxp.h"
 #endif
+#include "native_modules.h"
 #include <errno.h>
+#include <limits.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +54,9 @@ static int log_events;
 static int fast;
 static const char *disc_paths[4];
 static unsigned disc_count;
+#ifndef FF8_PLAYER
+static unsigned native_pace_count, native_pace_vblanks;
+#endif
 static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
@@ -218,6 +223,10 @@ static void present_frame(cpu_t *c, void *context) {
     c_perf_checkpoint(c, c->hw->vblanks);
     if (c->hw->vblanks % 30 == 0 && getenv("FF8_PERF_STATS")) c_perf_summary(c, c->hw->vblanks);
     if (max_vblanks && c->hw->vblanks >= max_vblanks) cpu_stop(c, "VBlank limit reached");
+#ifndef FF8_PLAYER
+    if (native_pace_vblanks && !(c->hw->vblanks % native_pace_vblanks) && native_modules_remaining())
+        native_modules_feed(native_pace_count);
+#endif
 }
 
 #ifdef FF8_PLAYER
@@ -456,6 +465,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s EXE [--disc CUE_OR_BIN] [--log PATH] [--stall N] [--max-instructions N] [--interpreter] [--dump-state PATH] [--headless] [--dump-frames DIR] [--dump-vram PATH]\n", argv[0]); return 2;
     }
 #endif
+#ifndef FF8_PLAYER
+    const char *native_module_dir = NULL;
+#endif
     if (!host_options_load(&options, argc, argv)) return 2;
     c = malloc(sizeof(*c));
     if (!c) { fprintf(stderr, "Cannot allocate guest CPU\n"); return 2; }
@@ -476,6 +488,16 @@ int main(int argc, char **argv) {
                 if (disc_count==4) { fprintf(stderr,"At most four --disc images are supported\n"); free(c); return 2; }
                 disc_paths[disc_count++] = argv[i];
             } else exe_path = argv[i];
+        }
+#endif
+#ifndef FF8_PLAYER
+        else if (!strcmp(argv[i], "--native-modules") && i + 1 < argc) native_module_dir = argv[++i];
+        else if (!strcmp(argv[i], "--native-modules-pace") && i + 1 < argc) {
+            char *end;
+            unsigned long count = strtoul(argv[++i], &end, 10), vblanks = 0;
+            if (*end == ':') vblanks = strtoul(end + 1, &end, 10);
+            if (*end || !count || !vblanks || count > UINT_MAX || vblanks > UINT_MAX) { fprintf(stderr, "Invalid module pace: %s\n", argv[i]); free(c); return 2; }
+            native_pace_count = (unsigned)count; native_pace_vblanks = (unsigned)vblanks;
         }
 #endif
         else if (!strcmp(argv[i], "--legacy-overlays")) legacy_overlays = 1;
@@ -858,6 +880,28 @@ int main(int argc, char **argv) {
     if (!c->interpreter_only) fprintf(stderr, "Generated code has no validity metadata; using interpreter. Regenerate to enable recompilation.\n");
     c->interpreter_only = 1;
 #endif
+#ifndef FF8_PLAYER
+    if (native_module_dir && generated_count) {
+        /* Modules would silently shadow the linked tables; neither run would be meaningful. */
+        fprintf(stderr, "--native-modules needs a host built from a tree generated with --shape modules\n");
+        host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+        host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
+    if (native_module_dir) {
+        /* The EXE text is intact only now; the loader keeps its own copy. */
+        if (!native_modules_configure(generated_hash,generated_base,generated_size,c->ram + (generated_base & 0x1fffffffu)) ||
+            !native_modules_scan(native_module_dir)) {
+            fprintf(stderr, "Cannot read native modules from %s\n", native_module_dir);
+            host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+            host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+            sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+        }
+        /* Paced loading starts empty, so the opening frames are interpreted
+         * like a player's first run before anything has been built. */
+        if (!native_pace_vblanks) { native_modules_feed(SIZE_MAX); native_modules_commit(c); }
+    }
+#endif
     if (!host_states_init(c,savestate_dir,card_paths[0],load_state,save_state,save_at,
                           disc_paths,
 #ifdef FF8_PLAYER
@@ -916,6 +960,12 @@ int main(int argc, char **argv) {
     if (!host_achievements_close(achievements)) result = 2;
     
     host_state_bridge_close(state_bridge);
+#ifndef FF8_PLAYER
+    if (native_module_dir) {
+        fprintf(stderr, "Native modules: %zu registered\n", native_modules_registered());
+        native_modules_shutdown(c);
+    }
+#endif
     sio_destroy(c);
     fclose(log); hw_destroy(c); free(legacy_registry); free(c);
     HOST_GUI_CLEANUP(); return result;

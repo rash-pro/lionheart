@@ -148,10 +148,27 @@ struct cpu {
     unsigned pc_profile_active;
 };
 
+/* code_valid's first answer: the region asked about last, unchanged since.
+ * Module code takes it without crossing into the runtime. */
+static inline int code_valid_recent(const cpu_t *c, const code_region_t *region) {
+    return c->recent_region == region && c->recent_epoch == c->code_epoch;
+}
+
+/* Module builds reach the runtime through a table, not through symbols. This
+ * has to precede every prototype and inline below so that they all see it. */
+#ifdef FF8_NATIVE_MODULE
+#include "native_module_api.h"
+#endif
+
 void cpu_init(cpu_t *c);
 void dispatch_invalidate(cpu_t *c);
+/* Runs once at the next dispatch boundary, the only point where the registry
+ * may change. Publishers store it; the callback clears it. */
+extern void (*dispatch_safe_point)(cpu_t *c);
 void cpu_log(cpu_t *c, const char *format, ...);
+#ifndef FF8_NATIVE_MODULE
 void cpu_stop(cpu_t *c, const char *format, ...);
+#endif
 void cpu_exception(cpu_t *c, unsigned code, uint32_t bad_address);
 void c_poll(cpu_t *c);
 void hw_event(cpu_t *c);

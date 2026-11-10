@@ -53,14 +53,39 @@ typedef struct {
     lhg_host_mode host_mode;
     lhg_timing timing;
     const lhg_register_cache *register_cache;
+    lhg_shape shape;
 } lhg_emit_options;
 
 typedef struct {
     size_t functions, instructions, jump_tables;
 } lhg_emit_result;
 
+typedef struct {
+    uint32_t start, size;
+} lhg_span;
+
+typedef struct {
+    const lhg_span *items;
+    uint32_t count;
+    uint64_t fingerprint;
+} lhg_span_list;
+
+typedef struct {
+    uint32_t pc, owner, sequence;
+} lhg_entry_pair;
+
+/* The source spans one function occupies, instructions and jump tables merged. */
+void lhg_code_spans(lhg_arena *arena, const lhg_function *function, lhg_span_list *list);
+const uint8_t *lhg_image_bytes(const lhg_image *image, uint32_t pc);
+uint64_t lhg_spans_fingerprint(const lhg_image *image, const lhg_span_list *list);
+/* Every resume point mapped to its owning function, sorted by pc, in a tracked allocation. */
+size_t lhg_build_entry_map(lhg_ctx *ctx, const lhg_functions *functions, lhg_arena *scratch, int compact, lhg_entry_pair **out);
+
 void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *functions, const char *output,
               const lhg_overlay_set *overlays, size_t overlay_count, const lhg_emit_options *options,
               lhg_emit_result *result);
+/* The module shape: one self-contained, separately loadable tree per set. */
+void lhg_emit_modules(lhg_arena *arena, const lhg_image *image, const lhg_functions *functions, const char *output,
+                      const lhg_overlay_set *overlays, size_t overlay_count, lhg_emit_result *result);
 
 #endif

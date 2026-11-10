@@ -14,6 +14,8 @@ typedef enum { LHG_OK = 0, LHG_FAILED = 1, LHG_CANCELLED = 2 } lhg_status;
 typedef enum { LHG_MODE_FAST = 0, LHG_MODE_TRACE = 1 } lhg_mode;
 typedef enum { LHG_HOST_PRECISE = 0, LHG_HOST_FAST = 1 } lhg_host_mode;
 typedef enum { LHG_TIMING_EXACT = 0, LHG_TIMING_BLOCK = 1, LHG_TIMING_LOOSE = 2 } lhg_timing;
+/* Linked: one tree compiled into the executable. Modules: one tree per set, loaded at run time. */
+typedef enum { LHG_SHAPE_LINKED = 0, LHG_SHAPE_MODULES = 1 } lhg_shape;
 
 /* Returns nonzero to cancel. Called between units of work on the caller's thread. */
 typedef int (*lhg_progress_fn)(void *user, const char *stage, unsigned long done, unsigned long total);
@@ -52,6 +54,7 @@ typedef struct {
      * call, including hits. Requires disc 1. Callers must own output_dir
      * exclusively until the call returns. Old setup caches are never reused. */
     int use_cache;
+    lhg_shape shape;
 } lhg_options;
 
 typedef struct {
