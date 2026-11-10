@@ -1,3 +1,5 @@
+/* For nanosecond file times in struct stat, which strict C99 hides. */
+#define _POSIX_C_SOURCE 200809L
 #include "native_player.h"
 #include "native_modules.h"
 #include "native_module.h"
