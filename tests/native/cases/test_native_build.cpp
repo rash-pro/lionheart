@@ -288,3 +288,14 @@ LH_TEST(test_relaunch_resumes_an_interrupted_module) {
     LH_CHECK_MSG(after + before <= 9 + 1 + 1, "compiler calls before " + std::to_string(before) + ", after " + std::to_string(after));
     LH_EQ(b.files("work", ""), size_t(0));
 }
+
+LH_TEST(test_quitting_keeps_what_was_compiled) {
+    Build b(t);
+    b.sets("-1 0x1e 0 main slow units=8\n");
+    LH_CONTAINS(b.run({"--workers", 1, "--stop-after-ms", 1800}), "state building ");
+    const size_t before = b.compiler_calls();
+    LH_CHECK_MSG(b.files("work", "") == 1, "the interrupted build is kept");
+    LH_CONTAINS(b.run({"--workers", 1}), "state done sets 1 ready 1 failed 0 compiled 1 ");
+    const size_t after = b.compiler_calls() - before;
+    LH_CHECK_MSG(before + after <= 9 + 1 + 1, "compiler calls before " + std::to_string(before) + ", after " + std::to_string(after));
+}

@@ -861,12 +861,14 @@ static void finish_failed(job_t *j) {
     count();
 }
 
-static void drop_job(job_t *j) {
+/* keep: the player is quitting, and the next launch resumes from these files. */
+static void forget_job(job_t *j, int keep) {
     job_t **at = &b.jobs;
     size_t i;
     while (*at && *at != j) at = &(*at)->next;
     if (*at) *at = j->next;
-    remove_tree(j->directory);
+    /* A stop keeps what was compiled, whatever ended the job. */
+    if (!keep && !b.stopping && b.status.state != NATIVE_BUILD_STOPPED) remove_tree(j->directory);
     for (i = 0; i < j->unit_count; ++i) free(j->units[i]);
     free(j->units); free(j->sets); free(j);
 }
@@ -1117,7 +1119,7 @@ static void unit_done(unsigned worker, job_t *j) {
         if (!ran) {
             if (!b.stopping) stop_building("cannot run the compiler: %s", b.config.compiler);
             for (i = 0; i < j->set_count; ++i) { b.sets[j->sets[i]].state = SET_PENDING; b.sets[j->sets[i]].job = NULL; }
-            drop_job(j);
+            forget_job(j, 0);
             return;
         }
         if (code) j->failed = 1;
@@ -1125,7 +1127,7 @@ static void unit_done(unsigned worker, job_t *j) {
             /* A module published whole is handed over even after a stop elsewhere. */
             if (!finish_built(j)) {
                 for (i = 0; i < j->set_count; ++i) { b.sets[j->sets[i]].state = SET_PENDING; b.sets[j->sets[i]].job = NULL; }
-                drop_job(j);
+                forget_job(j, 0);
                 return;
             }
             {
@@ -1137,7 +1139,7 @@ static void unit_done(unsigned worker, job_t *j) {
                     s->state = SET_DELIVERING; s->job = NULL;
                     snprintf(s->key, sizeof(s->key), "%s", key);
                 }
-                drop_job(j);
+                forget_job(j, 0);
                 serve(key, first);
             }
             return;
@@ -1147,7 +1149,7 @@ static void unit_done(unsigned worker, job_t *j) {
     if (b.stopping || b.status.state == NATIVE_BUILD_STOPPED) {
         for (i = 0; i < j->set_count; ++i) { b.sets[j->sets[i]].state = SET_PENDING; b.sets[j->sets[i]].job = NULL; }
     } else finish_failed(j);
-    drop_job(j);
+    forget_job(j, 0);
 }
 
 static void lower_priority(void) {
@@ -1607,7 +1609,7 @@ void native_build_stop(void) {
     pthread_join(b.service, NULL);
     for (i = 0; i < b.worker_count; ++i) pthread_join(b.workers[i], NULL);
 #endif
-    while (b.jobs) drop_job(b.jobs);
+    while (b.jobs) forget_job(b.jobs, 1);
     if (b.source_open && b.source.close) b.source.close(b.source.user);
     b.source_open = 0;
     file_unlock(b.builder_lock);
