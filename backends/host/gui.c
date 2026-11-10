@@ -39,7 +39,7 @@ static struct {
      * installation that finished setup before that step existed. */
     host_gui_native_t native; host_gui_failure_t failures[6]; unsigned failure_count;
     int native_offered,native_only,native_seen,native_local,after_browser;
-    char native_archive[512];
+    char crash_log[512],native_archive[512];
 } gui;
 
 const char *host_gui_string(const char *id) {
@@ -140,7 +140,8 @@ int host_gui_configure(host_options_t *options,const char *data,const host_gui_s
 }
 void host_gui_attach_game(void) { gui.game=1; gui.mode=HOST_GUI_HIDDEN; gui.started=SDL_GetTicks64(); }
 static int native_offer(void);
-int host_gui_wants_shell(void) { return gui.configured && native_offer(); }
+void host_gui_previous_crash(const char *log) { if (gui.configured) snprintf(gui.crash_log,sizeof(gui.crash_log),"%s",log ? log : ""); }
+int host_gui_wants_shell(void) { return gui.configured && (*gui.crash_log || native_offer()); }
 host_gui_result_t host_gui_shell(void) {
     gui.native_only=!gui.force_hub && gui.options->disc1_configured && native_offer();
     gui.mode=(!gui.force_hub && !gui.options->disc1_configured) || gui.native_only ? HOST_GUI_SETUP : HOST_GUI_HUB;
@@ -382,7 +383,7 @@ static void finish_setup(void) {
     if (has_native() && !gui.native_offered) { gui.native_offered=1; persist_ui(); }
     gui.native_only=0; gui.mode=HOST_GUI_HUB; gui.pane=HOST_GUI_GAME; request_focus();
     /* Offered on its own, the step stood between the player and the game. */
-    if (only && ready_to_play()) set_result(HOST_GUI_PLAY);
+    if (only && !*gui.crash_log && ready_to_play()) set_result(HOST_GUI_PLAY);
 }
 static void setup_next(void) {
     if (!gui.setup_step) {
@@ -640,6 +641,13 @@ static void draw_native_details(float x,float y,float width) {
     if (gui.native.failed>shown) { snprintf(more,sizeof(more),S("native.more"),gui.native.failed-shown); text("native.more",more,x,row,width,GUI_SUB,GUI_MUTED); }
     if (gui.first_focus) gui_ui_focus("btn.close");
 }
+static void open_log(void) {
+    char url[1100];
+    snprintf(url,sizeof(url),"file://%s%s",gui.crash_log[0]=='/' ? "" : "/",gui.crash_log);
+    /* A scripted run must not start the desktop's viewer. */
+    if (host_gui_test_active()) fprintf(stderr,"GUI test: open %s\n",url);
+    else SDL_OpenURL(url);
+}
 static void draw_setup(void) {
     float x=(gui.width-800)/2;
     gui_ui_emblem(R(48,24,44,44)); label("app.name",106,30,200,GUI_TITLE,GUI_TEXT);
@@ -718,6 +726,10 @@ static void draw_game(void) {
         if (!ready_to_play()) {
             label("disc.needed",x+190,138,width-360,GUI_SUB,GUI_ERROR);
             if (gui_ui_button("hub.locate",S("btn.locate"),R(x+width-150,126,150,42),gui.discs[0].state==GUI_DISC_CHECKING ? GUI_DISABLED : 0)) pick(GUI_PICK_DISC,0);
+        } else if (*gui.crash_log) {
+            char line[640]; snprintf(line,sizeof(line),S("crash.line"),base_name(gui.crash_log));
+            text("crash.line",line,x+190,138,width-360,GUI_SUB,GUI_ERROR);
+            if (gui_ui_button("crash.open",S("btn.open_log"),R(x+width-150,126,150,42),0)) open_log();
         }
         /* One more row when native code has one: the same rows, a little closer. */
         float top=has_native() ? 196 : 210,step=has_native() ? 68 : 72,tall=has_native() ? 64 : 68;

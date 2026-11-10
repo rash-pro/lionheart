@@ -10,6 +10,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #define pipe(fds) _pipe(fds,65536,O_BINARY)
+#else
+#include <sys/file.h>
 #endif
 
 #include "fatal_trace.h"
@@ -39,6 +41,54 @@ static int copy_stderr(void *data) {
     }
     close(s->read_fd); return 0;
 }
+/* A session marks itself running and clears the mark when it ends as it
+ * meant to. A mark left behind means the previous one crashed, was killed or
+ * stopped abnormally, and its log is the one just rotated to .1. The mark is
+ * held locked for the session, so a second player beside this one does not
+ * mistake it for a crash. */
+static char crash_log[8192];
+const char *host_session_crash_log(void) { return *crash_log ? crash_log : NULL; }
+#ifdef _WIN32
+typedef HANDLE session_mark_t;
+#define NO_MARK INVALID_HANDLE_VALUE
+static session_mark_t mark_open(const char *path, int *crashed) {
+    wchar_t wide[4096]; char text[16]={0}; DWORD n=0;
+    HANDLE h;
+    *crashed=0;
+    if (!MultiByteToWideChar(CP_UTF8,0,path,-1,wide,4096)) return NO_MARK;
+    /* No sharing: a second player cannot open it while this one runs. */
+    h=CreateFileW(wide,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    if (h==INVALID_HANDLE_VALUE) return NO_MARK;
+    if (ReadFile(h,text,sizeof(text)-1,&n,NULL) && !strncmp(text,"running",7)) *crashed=1;
+    SetFilePointer(h,0,NULL,FILE_BEGIN); SetEndOfFile(h);
+    WriteFile(h,"running\n",8,&n,NULL); FlushFileBuffers(h);
+    return h;
+}
+static void mark_close(session_mark_t h, int clean) {
+    if (h==NO_MARK) return;
+    if (clean) { SetFilePointer(h,0,NULL,FILE_BEGIN); SetEndOfFile(h); }
+    CloseHandle(h);
+}
+#else
+typedef int session_mark_t;
+#define NO_MARK (-1)
+static session_mark_t mark_open(const char *path, int *crashed) {
+    char text[16]={0};
+    int fd=open(path,O_RDWR|O_CREAT|O_CLOEXEC,0600);
+    *crashed=0;
+    if (fd<0) return NO_MARK;
+    if (flock(fd,LOCK_EX|LOCK_NB)) { close(fd); return NO_MARK; }
+    if (read(fd,text,sizeof(text)-1)>=7 && !strncmp(text,"running",7)) *crashed=1;
+    if (ftruncate(fd,0) || lseek(fd,0,SEEK_SET) || write(fd,"running\n",8)!=8) { close(fd); return NO_MARK; }
+    fsync(fd);
+    return fd;
+}
+static void mark_close(session_mark_t fd, int clean) {
+    if (fd==NO_MARK) return;
+    if (clean && !ftruncate(fd,0)) fsync(fd);
+    close(fd);
+}
+#endif
 static int startup_error(const char *message, int headless) {
     fprintf(stderr,"%s\n",message);
     if (!headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,"Lionheart",message,NULL);
@@ -48,7 +98,8 @@ static int player_entry(int argc, char **argv) {
     char directory[4096], path[8192], from[8192], to[8192];
     session_log_t s={0};
     SDL_Thread *thread;
-    int fds[2], result, headless=0, error_fd=fileno(stderr);
+    session_mark_t mark=NO_MARK;
+    int fds[2], result, headless=0, crashed=0, error_fd=fileno(stderr);
     for (int i=1;i<argc;++i)
         if (!strcmp(argv[i],"--headless") || !strcmp(argv[i],"--gui-test")) headless=1;
     fatal_trace_install(error_fd);
@@ -57,6 +108,9 @@ static int player_entry(int argc, char **argv) {
     if (!host_player_data(directory,sizeof(directory))) return host_player_main(argc,argv);
     snprintf(path,sizeof(path),"%s/logs",directory);
     if (!host_player_directory(path)) return startup_error("Cannot create Lionheart log directory",headless);
+    snprintf(path,sizeof(path),"%s/running",directory);
+    mark=mark_open(path,&crashed);
+    if (crashed) snprintf(crash_log,sizeof(crash_log),"%s/logs/lionheart.1.log",directory);
     for (int i=4;i>=1;--i) {
         snprintf(to,sizeof(to),"%s/logs/lionheart.%d.log",directory,i);
         if (i==1) snprintf(from,sizeof(from),"%s/logs/lionheart.log",directory);
@@ -65,11 +119,11 @@ static int player_entry(int argc, char **argv) {
     }
     snprintf(path,sizeof(path),"%s/logs/lionheart.log",directory);
     s.file=fopen(path,"wb");
-    if (!s.file || pipe(fds)) { if (s.file) fclose(s.file); return startup_error("Cannot open Lionheart session log",headless); }
+    if (!s.file || pipe(fds)) { if (s.file) fclose(s.file); mark_close(mark,1); return startup_error("Cannot open Lionheart session log",headless); }
     fatal_trace_install(fileno(s.file));
     fflush(stderr);
     s.original=dup(error_fd); s.read_fd=fds[0];
-    if (dup2(fds[1],error_fd)<0) { fatal_trace_install(error_fd); close(fds[0]); close(fds[1]); fclose(s.file); if (s.original>=0) close(s.original); return startup_error("Cannot redirect Lionheart stderr",headless); }
+    if (dup2(fds[1],error_fd)<0) { fatal_trace_install(error_fd); close(fds[0]); close(fds[1]); fclose(s.file); if (s.original>=0) close(s.original); mark_close(mark,1); return startup_error("Cannot redirect Lionheart stderr",headless); }
     close(fds[1]);
 #ifdef _WIN32
     SetStdHandle(STD_ERROR_HANDLE,(HANDLE)_get_osfhandle(error_fd));
@@ -82,9 +136,13 @@ static int player_entry(int argc, char **argv) {
 #ifdef _WIN32
         SetStdHandle(STD_ERROR_HANDLE,s.original>=0 ? (HANDLE)_get_osfhandle(error_fd) : NULL);
 #endif
+        mark_close(mark,1);
         return startup_error("Cannot start Lionheart session log worker",headless);
     }
     result=host_player_main(argc,argv);
+    /* An abnormal guest stop closes the window without a word (status 1);
+     * like a crash, it is reported on the next start. */
+    mark_close(mark,result!=1);
     fflush(stderr); close(error_fd); SDL_WaitThread(thread,NULL);
     if (s.original>=0) { dup2(s.original,error_fd); close(s.original); }
     fatal_trace_install(error_fd);

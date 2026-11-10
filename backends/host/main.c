@@ -782,6 +782,9 @@ int main(int argc, char **argv) {
         if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
         if (!host_gui_configure(&options,data_dir,&services,options.gui_test)) { host_gui_shutdown(); free(c); return 2; }
         gui_configured = 1;
+#ifdef FF8_PLAYER
+        if (host_session_crash_log()) host_gui_previous_crash(host_session_crash_log());
+#endif
         if (!headless && (options.gui || startup_problem || host_gui_wants_shell())) {
             host_gui_result_t shell;
             if (*startup_detail) host_gui_startup_error(startup_pane,startup_detail);

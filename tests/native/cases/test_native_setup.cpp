@@ -3,7 +3,8 @@
 // address, no network and no game data. Downloading with its progress, a
 // cancel and a resume, a failed download and its retry, an archive chosen in
 // the file browser, skipping the step, coming back to it from the hub while
-// the game runs, and the one offer an older installation gets.
+// the game runs, the one offer an older installation gets, and the report of
+// a session that ended abnormally.
 #include "synthetic_player.h"
 #include "host_fixtures.h"
 #include "network.h"
@@ -277,4 +278,22 @@ LH_TEST(test_an_existing_installation_is_offered_the_step_once) {
     LH_CONTAINS(first.out, "Hardware:");
     // Straight into the game: a script cannot schedule a frame while a menu shows.
     s.run("at 30\nopen\nwait 3\nassert-text hub.native.sub \"Compiler not installed\"\nclose\nquit\n", "second");
+}
+
+LH_TEST(test_a_killed_session_is_reported_with_its_log) {
+    Setup s(t);
+    lh::write_file(s.ini, "disc1=" + s.disc.string() + "\n");
+    lh::fs::create_directories(s.folder());
+    lh::write_file(s.folder() / "gui-state.ini", "last-folder=\nlast-input=keyboard\nnative-offered=1\n");
+    // The game runs until the case gives up on it and kills it.
+    auto killed = synthetic::play(t, {"--config", s.ini, "--fast", "--mute", "--max-vblanks", "0", "--log", "/dev/null"}, false, s.binary)
+                      .env("XDG_DATA_HOME", s.data.string()).timeout(3);
+    // A timeout here is the point, so the runner's own rule does not apply.
+    const auto first = lh::internal::run_process(killed);
+    LH_CHECK_MSG(first.timed_out, first.out + first.err);
+    const auto r = s.run("wait-text crash.line \"The last session ended unexpectedly · lionheart.1.log\" 600\nwait 2\n"
+                         "assert-focus btn.play\nshot hub-crash\nnav right\nassert-focus crash.open\nselect\nwait 3\nquit\n", "after");
+    LH_CONTAINS(r.err, "GUI test: open file://" + (s.folder() / "logs/lionheart.1.log").string());
+    // That session ended as it meant to: the next one starts straight in.
+    s.run("at 30\nopen\nwait 3\nclose\nquit\n", "clean");
 }

@@ -400,6 +400,8 @@ static const gui_string_t gui_strings[] = {
     {"native.minutes", "%u min"},
     {"native.hours", "%u h %u min"},
     {"native.more", "%u more"},
+    {"crash.line", "The last session ended unexpectedly · %s"},
+    {"btn.open_log", "Open log"},
     {"browser.archives", "ZIP archives"},
     {"osd.native", "Native code"},
     {"osd.native.value", "now running"},

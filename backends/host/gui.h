@@ -55,8 +55,10 @@ int host_gui_configure(host_options_t *, const char *data_dir, const host_gui_se
 void host_gui_attach_game(void);
 void host_gui_startup_error(host_gui_pane_t,const char *detail);
 void host_gui_hub(void);
+/* The previous session ended without saying so; its log is at path. */
+void host_gui_previous_crash(const char *log);
 /* Something must be shown before the game starts: the compiler step to an
- * installation that finished setup without it. */
+ * installation that finished setup without it, or a crash. */
 int host_gui_wants_shell(void);
 host_gui_result_t host_gui_shell(void);
 void host_gui_request(host_gui_pane_t);
