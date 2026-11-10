@@ -650,6 +650,9 @@ typedef struct {
     job_t *job;
     unsigned attempts;
     uint32_t promoted;
+    /* An earlier set has its name, address and size: most likely another
+     * disc's copy of the same code, which its module will serve. */
+    int twin;
     char key[65];
 } set_t;
 
@@ -662,6 +665,7 @@ struct job {
     int failed, linking;
     char tail[TAIL_CAP];
     uint64_t work;
+    double began;
 };
 
 typedef enum { KNOWN_NEW, KNOWN_DELIVERING, KNOWN_DELIVERED, KNOWN_REFUSED } known_state_t;
@@ -703,7 +707,13 @@ static struct {
     unsigned sequence;
     native_build_status_t status;
     double start, compile_start, start_cpu;
+    /* Work compiled; the estimate shown and when it was made. */
     uint64_t compiled_work;
+    double shown_left, shown_at;
+    int figure;
+    /* Work done, in-flight units included, sampled every few seconds. */
+    struct { double at, done; } samples[64];
+    unsigned sample_count;
     /* Lock-free ring from the guest thread. */
     sample_t ring[RING];
     unsigned ring_write, ring_read;
@@ -1036,7 +1046,7 @@ static int finish_built(job_t *j) {
     for (i = 0; i < j->set_count; ++i) write_set_receipt(&b.sets[j->sets[i]], j->key);
     b.status.compiled++;
     b.compiled_work += j->work;
-    say("built %s (%s)", b.sets[j->sets[0]].info.name, j->key);
+    say("built %s (%s), work %llu, %.1f s", b.sets[j->sets[0]].info.name, j->key, (unsigned long long)j->work, now() - j->began);
     return 1;
 }
 
@@ -1081,6 +1091,27 @@ static int building(void) {
 }
 
 /* Under the guard; returns with it held. */
+static void mark_twins(void) {
+    size_t i, k;
+    for (i = 0; i < b.set_count; ++i) {
+        const native_build_set_t *a = &b.sets[i].info;
+        b.sets[i].twin = 0;
+        for (k = 0; k < i && !b.sets[i].twin; ++k) {
+            const native_build_set_t *o = &b.sets[k].info;
+            b.sets[i].twin = a->base == o->base && a->size == o->size && !strcmp(a->name, o->name);
+        }
+    }
+}
+
+static unsigned twins(void) {
+    size_t i;
+    unsigned n = 0;
+    for (i = 0; i < b.set_count; ++i) n += b.sets[i].twin;
+    return n;
+}
+
+static uint64_t set_work(const set_t *s) { return s->info.work ? s->info.work : s->info.size; }
+
 static void emit_set(size_t row) {
     set_t *s = &b.sets[row];
     char directory[PATH_CAP], key[65], error[512] = "";
@@ -1151,7 +1182,8 @@ static void emit_set(size_t row) {
     snprintf(j->key, sizeof(j->key), "%s", key);
     snprintf(j->directory, sizeof(j->directory), "%s", directory);
     j->sets[0] = row; j->set_count = 1;
-    j->work = s->info.work ? s->info.work : s->info.size;
+    j->work = set_work(s);
+    j->began = now();
     if (!list(directory, add_unit, j) || !j->unit_count) j->failed = 1;
     {
         size_t i;
@@ -1442,17 +1474,59 @@ static void drain_samples(void) {
     }
 }
 
+/* Measured on full builds of four discs: the first tier is a few large sets
+ * that cost far more per instruction than the hundreds of small effect sets
+ * after them, so a rate taken over the whole build said twice the time left
+ * from start to end, and in its first minutes jumped between one and sixty
+ * hours; and the last sets are mostly other discs' copies of code already
+ * built, which take no time. The rate is taken only once the first tier is
+ * done, over the last few minutes, with units already compiled in modules
+ * still in progress counted; sets that look like copies count as no work;
+ * and what is shown counts down with the clock, moving only part of the way
+ * to each new figure. */
+#define ESTIMATE_WINDOW 300.0
+#define ESTIMATE_GROUND 60.0
+#define ESTIMATE_SETTLE 90.0
 static void estimate(void) {
-    double elapsed = now() - b.compile_start;
-    uint64_t left = 0;
+    double t = now(), done = (double)b.compiled_work, left = 0, figure, rate = 0;
     size_t i;
+    unsigned k;
     char *out = b.status.compiling;
     size_t room = sizeof(b.status.compiling);
     job_t *j;
     for (i = 0; i < b.set_count; ++i)
-        if (b.sets[i].state != SET_READY && b.sets[i].state != SET_FAILED) left += b.sets[i].info.work ? b.sets[i].info.work : b.sets[i].info.size;
-    b.status.seconds_left = b.compiled_work && b.compile_start > 0 ? (int)(elapsed * (double)left / (double)b.compiled_work + 0.5) : -1;
+        if (b.sets[i].state != SET_READY && b.sets[i].state != SET_FAILED && !b.sets[i].twin) left += (double)set_work(&b.sets[i]);
+    for (j = b.jobs; j; j = j->next) {
+        /* The link is one more step after the units. */
+        double part = (double)j->work * (double)j->finished / (double)(j->unit_count + 1);
+        done += part; left -= part;
+    }
+    if (left < 0) left = 0;
+    if (b.status.first_tier_seconds > 0 && (!b.sample_count || t - b.samples[(b.sample_count - 1) % 64].at >= 5)) {
+        b.samples[b.sample_count % 64].at = t;
+        b.samples[b.sample_count % 64].done = done;
+        b.sample_count++;
+    }
+    for (k = b.sample_count > 64 ? b.sample_count - 64 : 0; k < b.sample_count; ++k) {
+        double since = t - b.samples[k % 64].at;
+        if (since > ESTIMATE_WINDOW) continue;
+        if (since >= ESTIMATE_GROUND && done > b.samples[k % 64].done) rate = (done - b.samples[k % 64].done) / since;
+        break;
+    }
     if (!left) b.status.seconds_left = 0;
+    else if (rate <= 0) b.status.seconds_left = b.shown_at > 0 ? b.status.seconds_left : -1;
+    else {
+        figure = left / rate;
+        if (b.shown_at <= 0) b.shown_left = figure;
+        else {
+            double since = t - b.shown_at, counted = b.shown_left - since;
+            b.shown_left = counted + (figure - counted) * since / (since + ESTIMATE_SETTLE);
+        }
+        b.shown_at = t;
+        if (b.shown_left < 1) b.shown_left = 1;
+        b.status.seconds_left = (int)(b.shown_left + 0.5);
+        b.figure = (int)(figure + 0.5);
+    }
     *out = 0;
     for (j = b.jobs; j; j = j->next) {
         const char *name = b.sets[j->sets[0]].info.name;
@@ -1510,6 +1584,7 @@ static int open_source(void) {
             ok = rows[i].index == b.sets[i].info.index && !strcmp(rows[i].identity, b.sets[i].info.identity);
         if (!ok) snprintf(error, sizeof(error), "the discs do not match the catalog plan");
         for (i = 0; ok && i < count; ++i) b.sets[i].info = rows[i];
+        if (ok) mark_twins();
     }
     free(rows);
     lock(&b.guard);
@@ -1542,6 +1617,7 @@ static void *service_main(void *argument)
     b.sets = calloc(count, sizeof(*b.sets));
     if (!b.sets) { stop_building("out of memory"); unlock(&b.guard); free(rows); goto finished; }
     for (i = 0; i < count; ++i) b.sets[i].info = rows[i];
+    mark_twins();
     b.set_count = count;
     b.status.sets = (unsigned)count;
     free(rows);
@@ -1583,14 +1659,15 @@ static void *service_main(void *argument)
         if (!b.source_open) {
             if (!open_source()) break;
             if (!start_workers()) { stop_building("cannot start build threads"); break; }
-            say("building %u sets with %u workers", b.status.sets - b.status.ready - b.status.failed, b.worker_count);
+            say("building %u sets with %u workers; %u look like copies of others", b.status.sets - b.status.ready - b.status.failed,
+                b.worker_count, twins());
         }
         drain_samples();
         estimate();
         if (b.config.verbose && now() - last_report >= 10) {
             last_report = now();
-            say("%u/%u ready, %u failed, compiling %s, about %d s left", b.status.ready, b.status.sets, b.status.failed,
-                *b.status.compiling ? b.status.compiling : "-", b.status.seconds_left);
+            say("%u/%u ready, %u failed, compiling %s, about %d s left (%d at the recent rate)", b.status.ready, b.status.sets, b.status.failed,
+                *b.status.compiling ? b.status.compiling : "-", b.status.seconds_left, b.figure);
         }
         cond_wait(&b.changed, &b.guard, 100);
     }
