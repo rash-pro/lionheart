@@ -643,6 +643,9 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     lhg_ctx *ctx = arena->ctx;
     if (options->timing != LHG_TIMING_EXACT && options->mode == LHG_MODE_TRACE)
         lhg_fail(ctx, "experimental timing requires fast emission");
+    /* Exact code has no register-cache variant; a selection would be dropped unseen. */
+    if (options->register_cache && options->timing == LHG_TIMING_EXACT)
+        lhg_fail(ctx, "a register-cache selection needs block or loose timing");
     lhg_make_directories(ctx, output);
 
     size_t set_count = overlay_count + 1;

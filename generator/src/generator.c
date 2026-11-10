@@ -64,9 +64,11 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         lhg_fail(&ctx, "--cache requires the linked output shape");
 
     const lhg_register_cache *selection = options->register_cache;
-    if (selection)
+    if (selection) {
         lhg_cache_validate(&ctx, selection);
-    else if (options->timing != LHG_TIMING_EXACT)
+        if (options->timing == LHG_TIMING_EXACT)
+            lhg_fail(&ctx, "a register-cache selection needs block or loose timing");
+    } else if (options->timing != LHG_TIMING_EXACT)
         selection = lhg_cache_read(&arena, lhg_join_path(&arena, options->catalog_dir, "play-register-cache.json"));
 
     const char *assets = options->assets_dir;

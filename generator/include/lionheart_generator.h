@@ -58,7 +58,7 @@ typedef struct {
     lhg_progress_fn progress;
     void *progress_user;
     /* NULL uses the catalog's play-register-cache.json for experimental timing.
-     * Exact timing accepts a selection but does not apply the lowering. */
+     * Exact timing has no register-cache lowering and refuses a selection. */
     const lhg_register_cache *register_cache;
     /* Cache the developer (legacy disc) catalog. Inputs are verified on every
      * call, including hits. Requires disc 1. Callers must own output_dir

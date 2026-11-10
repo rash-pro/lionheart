@@ -146,7 +146,8 @@ void programs(lh::Case &t, const std::string &fn, const J &p) {
                 main["seeds"] = seeds;
                 O spec = {
                     {"main", main}, {"overlays", overlays}, {"mode", mode}, {"host_mode", host}, {"timing", timing}};
-                if (p["cache"].boolean()) {
+                // Exact timing has no register-cache lowering and refuses a selection.
+                if (p["cache"].boolean() && timing != "exact") {
                     A names;
                     for (const auto &s : seeds)
                         names.push_back(symbol(s.integer()));
@@ -671,14 +672,20 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
         main["code_ranges"] = A{A{num(BASE), num(BASE + data.size())}};
         main["timing_entry_points"] = A{num(BASE + 16)};
         auto timing = p["timing"].text();
-        auto out = parity(t,
-                          O{{"timing", timing},
-                            {"main", main},
-                            {"exe_path", ep.string()},
-                            {"catalog_dir", cp.string()},
-                            {"register_cache", selection(A{symbol(BASE + 16)}, 1)}},
-                          "public-api");
-        contains_if(source(out), "#ifdef FF8_PLAY_REG_CACHE", timing != "exact");
+        O spec = {{"timing", timing},
+                  {"main", main},
+                  {"exe_path", ep.string()},
+                  {"catalog_dir", cp.string()},
+                  {"register_cache", selection(A{symbol(BASE + 16)}, 1)}};
+        // Exact code has no register-cache variant, so a selection is refused
+        // rather than dropped, through the public call and the emitter alike.
+        if (timing == "exact") {
+            spec_error(t, spec, "a register-cache selection needs block or loose timing");
+            spec.erase("exe_path");
+            spec_error(t, spec, "a register-cache selection needs block or loose timing");
+            return;
+        }
+        LH_CONTAINS(source(parity(t, spec, "public-api")), "#ifdef FF8_PLAY_REG_CACHE");
         return;
     }
     if (fn == "test_experimental_trace_rejected") {
