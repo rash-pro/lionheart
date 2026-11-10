@@ -72,7 +72,7 @@ Start Lionheart with no arguments. The setup screen asks for your discs and a me
 card or import a copy of an existing one. Then press **Play**.
 
 Lionheart compiles the game from your discs into native code for your PC while you play: what a disc needs first
-takes a few minutes, and all four discs about 20 minutes on a 16-thread PC, longer on a smaller one. The result
+takes a few minutes, and all four discs between 20 and 45 minutes on a 16-thread PC, longer on a smaller one. The result
 takes about 600 MB and later launches use it at once. On Linux it uses Clang or GCC when one is installed and works,
 and asks nothing more. Otherwise the third setup step installs the Zig C compiler from ziglang.org, a download made
 once: 55 MB on Linux, 96 MB on Windows. You can skip the step and install the compiler later from the menu; the
