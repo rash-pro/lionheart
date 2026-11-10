@@ -30,6 +30,8 @@ void host_osd_pause(int paused);
 void host_osd_post(const char *label, const char *value, int persistent);
 void host_osd_event(unsigned event, unsigned number, const char *detail);
 void host_osd_clear(unsigned event);
+/* The label showing now, or "" when nothing shows. */
+const char *host_osd_showing(void);
 /* The visible picture: the scanout clipped to the TV aperture (frame when empty). */
 host_rect_t host_osd_area(host_viewport_t view);
 const host_osd_panel_t *host_osd_panel(int width, int height, host_rect_t area);

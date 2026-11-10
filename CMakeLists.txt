@@ -1,9 +1,11 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.21)
 project(lionheart VERSION 0.1.0 LANGUAGES C)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Declared first so none of the host-only settings below reach the generator.
+add_subdirectory(generator)
 if(WIN32)
   add_compile_definitions(SDL_MAIN_HANDLED _FILE_OFFSET_BITS=64)
   # These warnings also occur in unchanged vendored rcheevos and savestate.c.
@@ -29,7 +31,7 @@ if(FF8_STATS)
 endif()
 if(NOT FF8_PLAYER)
 if(NOT EXISTS "${GENERATED_DIR}/sources.cmake")
-  message(FATAL_ERROR "Run python tools/setup.py --disc1 DISC first")
+  message(FATAL_ERROR "Run cmake -P tools/setup.cmake -- --disc1 DISC first")
 endif()
 include("${GENERATED_DIR}/sources.cmake")
 file(READ "${GENERATED_DIR}/manifest.json" RECOMP_MANIFEST)
@@ -72,19 +74,25 @@ target_sources(ff8_runtime PRIVATE runtime/spu.c)
 target_include_directories(ff8_runtime PUBLIC runtime)
 target_compile_options(ff8_runtime PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(ff8 backends/host/main.c backends/host/input.c ${HOST_GENERATED_SOURCES})
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.py" "${CMAKE_SOURCE_DIR}/games/ff8-usa/exe-identity.json")
+  "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.cmake" "${CMAKE_SOURCE_DIR}/games/ff8-usa/exe-identity.json")
 foreach(disc RANGE 1 4)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/ff8-usa/files-disc${disc}.json")
 endforeach()
-execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.py"
-  "${CMAKE_SOURCE_DIR}/games/ff8-usa" "${CMAKE_CURRENT_BINARY_DIR}/disc_identity.h"
+execute_process(COMMAND "${CMAKE_COMMAND}"
+  "-DINPUT=${CMAKE_SOURCE_DIR}/games/ff8-usa" "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/disc_identity.h"
+  -P "${CMAKE_SOURCE_DIR}/tools/disc_identity_header.cmake"
   RESULT_VARIABLE disc_identity_result)
 if(NOT disc_identity_result EQUAL 0)
   message(FATAL_ERROR "Cannot compile disc identity metadata")
 endif()
 target_sources(ff8 PRIVATE backends/host/disc_iso.c backends/host/disc_id.c)
+include(cmake/native_module_abi.cmake)
+lh_native_module_abi_id(LH_MODULE_ABI_ID "${CMAKE_SOURCE_DIR}" "${FF8_STATS}")
+target_sources(ff8 PRIVATE backends/host/native_modules.c)
+set_source_files_properties(backends/host/native_modules.c
+  PROPERTIES COMPILE_DEFINITIONS "LH_MODULE_ABI_ID=\"${LH_MODULE_ABI_ID}\"" COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+target_link_libraries(ff8 PRIVATE ${CMAKE_DL_LIBS})
 if(FF8_PLAYER)
   target_sources(ff8 PRIVATE backends/host/player_session.c)
   if(WIN32)
@@ -98,6 +106,23 @@ if(FF8_PLAYER)
   endif()
   set_source_files_properties(backends/host/player_paths.c backends/host/player_catalog.c
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  # The player builds its own native code from the player's discs: it carries
+  # the generator, the catalog it reads and the headers modules compile against.
+  include(cmake/native_embedded.cmake)
+  set(native_embedded "${CMAKE_CURRENT_BINARY_DIR}/native_embedded.c")
+  lh_native_embedded("${native_embedded}" "${CMAKE_SOURCE_DIR}" "${WIN32}")
+  file(GLOB native_embedded_inputs "${CMAKE_SOURCE_DIR}/games/ff8-usa/*.json")
+  list(APPEND native_embedded_inputs "${CMAKE_SOURCE_DIR}/runtime/cpu.h" "${CMAKE_SOURCE_DIR}/runtime/perf_stats.h"
+    "${CMAKE_SOURCE_DIR}/runtime/gte.h" "${CMAKE_SOURCE_DIR}/runtime/native_module.h" "${CMAKE_SOURCE_DIR}/runtime/native_module_api.h")
+  set_source_files_properties("${native_embedded}" PROPERTIES OBJECT_DEPENDS "${native_embedded_inputs}")
+  target_sources(ff8 PRIVATE backends/host/native_build.c backends/host/native_player.c backends/host/native_setup.c
+    "${native_embedded}")
+  set_source_files_properties(backends/host/native_build.c backends/host/native_setup.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  set_source_files_properties(backends/host/native_player.c PROPERTIES
+    COMPILE_DEFINITIONS "LH_MODULE_ABI_ID=\"${LH_MODULE_ABI_ID}\"" COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic"
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/generator/src")
+  find_package(Threads REQUIRED)
+  target_link_libraries(ff8 PRIVATE lionheart_generator Threads::Threads)
 endif()
 set_source_files_properties(backends/host/disc_iso.c backends/host/disc_id.c
   PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
@@ -142,6 +167,8 @@ add_library(ff8_screenshot backends/host/screenshot.c)
 target_include_directories(ff8_screenshot PUBLIC backends/host runtime)
 target_compile_options(ff8_screenshot PRIVATE -Wall -Wextra -Wpedantic)
 find_package(ZLIB REQUIRED)
+include(cmake/toolchain.cmake)
+target_link_libraries(ff8 PRIVATE lionheart_toolchain)
 target_link_libraries(ff8_screenshot PUBLIC ff8_osd PkgConfig::SDL2 PRIVATE ZLIB::ZLIB)
 add_library(ff8_display backends/host/display.c)
 target_include_directories(ff8_display PUBLIC backends/host)
@@ -273,8 +300,9 @@ else()
 endif()
 # The catalog identities plus emitter/runtime sources define the restoration ABI.
 file(GLOB STATE_ID_SOURCES CONFIGURE_DEPENDS runtime/*.c runtime/*.h runtime/*.inc
-  backends/host/*.c backends/host/*.h recomp/*.py)
-set(STATE_ID "${RECOMP_MANIFEST};stats=${FF8_STATS};interpreter=${FF8_HOST_INTERPRETER_ONLY}")
+  backends/host/*.c backends/host/*.h)
+list(SORT STATE_ID_SOURCES)
+set(STATE_ID "generator=${LIONHEART_GENERATOR_FINGERPRINT};${RECOMP_MANIFEST};stats=${FF8_STATS};interpreter=${FF8_HOST_INTERPRETER_ONLY}")
 foreach(source IN LISTS STATE_ID_SOURCES)
   file(SHA256 "${source}" digest)
   string(APPEND STATE_ID "${digest}")
@@ -309,17 +337,18 @@ if(FF8_VULKAN)
     pkg_check_modules(AV REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
   endif()
   find_package(Threads REQUIRED)
-  find_package(Python3 REQUIRED COMPONENTS Interpreter)
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json")
-  execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/movie_map_header.py"
-    "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "${CMAKE_CURRENT_BINARY_DIR}/movie_map.inc"
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "${CMAKE_SOURCE_DIR}/tools/movie_map_header.cmake")
+  execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DINPUT=${CMAKE_SOURCE_DIR}/games/ff8-usa/movies.json" "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/movie_map.inc"
+    -P "${CMAKE_SOURCE_DIR}/tools/movie_map_header.cmake"
     RESULT_VARIABLE movie_map_result)
   if(NOT movie_map_result EQUAL 0)
     message(FATAL_ERROR "Cannot compile host movie mapping")
   endif()
   add_library(ff8_vulkan backends/host/vulkan_renderer.cpp)
   # CRT presentation shaders: glslc builds them from source; the committed
-  # prebuilt includes are the fallback and must match (tests/test_host_crt.py).
+  # prebuilt includes are the fallback and must match (tests/native/cases/test_host_crt.cpp).
   set(CRT_SHADERS crt_fullscreen.vert crt_lines.frag crt_beam.frag crt_glow.frag crt_final.frag osd.frag)
   find_program(GLSLC glslc)
   if(GLSLC)
@@ -406,10 +435,11 @@ option(FF8_NFD "Build the optional native file dialog adapter" ON)
 if(FF8_GUI)
   enable_language(CXX)
   add_compile_definitions(FF8_GUI)
+  include(tools/assetgen/host.cmake)
   set(GUI_ASSETS "${CMAKE_CURRENT_BINARY_DIR}/gui_assets.h")
   add_custom_command(OUTPUT "${GUI_ASSETS}"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/embed_gui_assets.py" "${GUI_ASSETS}"
-    DEPENDS tools/embed_gui_assets.py third_party/chakra-petch/ChakraPetch-Regular.ttf
+    COMMAND ${ASSETGEN_COMMAND} gui "${CMAKE_SOURCE_DIR}" "${GUI_ASSETS}"
+    DEPENDS ${ASSETGEN_DEPENDENCY} third_party/chakra-petch/ChakraPetch-Regular.ttf
       third_party/chakra-petch/ChakraPetch-SemiBold.ttf assets/branding/icon-128.png VERBATIM)
   add_library(ff8_gui STATIC backends/host/gui.c backends/host/gui_media.c backends/host/gui_browser.c
     backends/host/gui_achievements.c

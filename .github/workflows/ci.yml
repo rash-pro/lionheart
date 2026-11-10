@@ -2,40 +2,89 @@ name: Build and test
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  TMPDIR: ${{ github.workspace }}/../lionheart-tests-tmp
 jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+      - name: Create temporary directory
+        run: cmake -E make_directory "$TMPDIR"
       - name: Install build dependencies
-        run: python tools/ci_deps.py linux
-      - name: Install Python dependencies
-        run: python -m pip install -e '.[test]'
-      - name: Build the player and synthetic harnesses
-        run: cmake -S . -B build && cmake --build build -j8
+        run: cmake -DPLATFORM=linux -P tools/ci_deps.cmake
+      - name: Build the player
+        run: cmake -S . -B build && nice -n 10 cmake --build build -j4
+      - name: Build native tests
+        run: cmake -S tests/native -B build/native-tests && nice -n 10 cmake --build build/native-tests -j4
       - name: Run tests without discs
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
           FF8_PLAYER_HOST: ${{ github.workspace }}/build/lionheart
-        run: python -m pytest -q -m 'not game and not realtime'
+        run: ctest --test-dir build/native-tests -j4 --output-on-failure -LE 'game|realtime'
+      - name: Scan player with public synthetic inputs
+        run: build/native-tests/harness/test_player_legal/check_player_binary build/lionheart build/native-tests/synthetic-disc/exe --compile-commands build/compile_commands.json
   windows:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+      - name: Create temporary directory
+        run: cmake -E make_directory "$TMPDIR"
       - name: Install cross-build prerequisites
-        run: python tools/ci_deps.py windows
+        run: cmake -DPLATFORM=windows -P tools/ci_deps.cmake
       - uses: actions/cache@v4
         with:
           path: |
             build/windows-deps
             build/downloads
-          key: windows-ucrt-${{ runner.os }}-${{ hashFiles('tools/windows-deps.json', 'tools/build_windows.py') }}
+          key: windows-ucrt-${{ runner.os }}-${{ hashFiles('tools/windows-deps.json', 'tools/*windows*.cmake', 'tools/release_common.cmake', 'tools/stage_player.cmake', 'cmake/toolchains/windows-llvm-mingw.cmake') }}
       - name: Cross-build and stage player
-        run: python tools/build_windows.py
+        run: nice -n 10 cmake -DJOBS=4 -P tools/build_windows.cmake
+      - name: Build host test runner
+        run: cmake -S tests/native -B build/native-tests && nice -n 10 cmake --build build/native-tests --target lionheart_tests -j4
+      - name: Cross-build tests
+        run: nice -n 10 cmake -DJOBS=4 -P tools/build_windows_tests.cmake
+      - name: Run Windows target tests under Wine
+        env:
+          DISPLAY: ""
+          WINEDEBUG: "-all"
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+          FF8_PLAYER_HOST: ${{ github.workspace }}/build/windows/Lionheart.exe
+          WINEPATH: ${{ github.workspace }}/build/windows/dist-windows
+        run: |
+          wine cmd /c exit 0
+          nice -n 10 ctest --test-dir build/windows-tests -j4 --output-on-failure -LE "game|realtime"
+      - name: Bundle Windows tests
+        run: cmake -P tools/bundle_windows_tests.cmake
+      - name: Rehearse relocated Windows bundle
+        env:
+          DISPLAY: ""
+          WINEDEBUG: "-all"
+        run: |
+          cmake -E make_directory build/relocated-windows-tests
+          cmake -E chdir build/relocated-windows-tests cmake -E tar xf ../windows-test-bundle.zip
+          cmake -DEMULATOR=wine -P build/relocated-windows-tests/run_windows_bundle.cmake
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-tests
+          path: build/windows-test-bundle.zip
+      - name: Build release scanner
+        run: cmake -S tools/player-check -B build/player-check && nice -n 10 cmake --build build/player-check -j4
+      - name: Scan player with public synthetic inputs
+        run: build/player-check/check_player_binary build/windows/Lionheart.exe build/native-tests/synthetic-disc/exe --compile-commands build/windows/compile_commands.json
+  # Pending verification on a hosted Windows runner; rehearsed locally with Wine.
+  windows-native:
+    needs: windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-native-tests
+          path: bundle
+      - name: Run staged player and native tests
+        shell: pwsh
+        run: |
+          cmake -E chdir bundle cmake -E tar xf windows-test-bundle.zip
+          cmake -P bundle/run_windows_bundle.cmake

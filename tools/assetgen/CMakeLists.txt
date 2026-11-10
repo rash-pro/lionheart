@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(lionheart_assetgen LANGUAGES C)
+add_executable(assetgen assetgen.c)
+set_target_properties(assetgen PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+target_include_directories(assetgen SYSTEM PRIVATE ../../third_party/stb)
+if(NOT MSVC)
+  target_compile_options(assetgen PRIVATE -Wall -Wextra -Wpedantic)
+endif()

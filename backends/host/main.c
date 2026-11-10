@@ -1,3 +1,4 @@
+#include "toolchain.h"
 #include "cpu.h"
 #ifdef FF8_PLAYER
 #include "player_catalog.h"
@@ -36,7 +37,14 @@
 #ifdef FF8_PGXP
 #include "pgxp.h"
 #endif
+#include "native_modules.h"
+#ifdef FF8_PLAYER
+#include "native_player.h"
+#include "native_setup.h"
+#endif
 #include <errno.h>
+#include <limits.h>
+#include <signal.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,6 +59,22 @@ static int log_events;
 static int fast;
 static const char *disc_paths[4];
 static unsigned disc_count;
+#ifndef FF8_PLAYER
+static unsigned native_pace_count, native_pace_vblanks;
+#else
+/* Hidden: drive and observe the native build headless. */
+static int native_off, native_status, native_wait, native_only;
+static unsigned native_workers;
+static const char *native_compiler;
+static volatile sig_atomic_t native_interrupted;
+static void native_interrupt(int signal_number) { (void)signal_number; native_interrupted = 1; }
+/* Building starts at boot when the compiler is there, or as soon as it is
+ * installed during the session. */
+static host_native_options_t native_options;
+static int native_waiting, native_announced;
+static char native_data[4096];
+static void native_poll(void);
+#endif
 static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
@@ -97,6 +121,9 @@ static void gui_changed(void *context, const char *key, int overlay) {
         disc_count = 0;
         for (d=0;d<4;++d) if (disc_paths[d]) disc_count = d+1;
         gui_hotkeys(o);
+#ifdef FF8_PLAYER
+        host_native_discs(disc_paths,host_display_disc_value());
+#endif
     }
 }
 static void gui_action(void *context, unsigned scancode) {
@@ -119,9 +146,57 @@ static const char *gui_device(void *context) { (void)context; return host_displa
 static const char *gui_controller(void *context) { (void)context; return host_display_gui_controller(); }
 static int gui_controller_type(void *context) { (void)context; return host_display_gui_controller_type(); }
 static int gui_fullscreen_exclusive(void *context) { (void)context; return host_display_gui_fullscreen_exclusive(); }
+#ifdef FF8_PLAYER
+static void gui_native(void *context, host_gui_native_t *out) {
+    const host_tc_manifest *manifest = native_setup_manifest();
+    native_setup_status_t setup;
+    (void)context;
+    native_poll();
+    native_setup_status(&setup);
+    memset(out,0,sizeof(*out));
+    out->compiler = setup.state==NATIVE_SETUP_RUNNING ? HOST_GUI_COMPILER_INSTALLING :
+        setup.state==NATIVE_SETUP_FAILED ? HOST_GUI_COMPILER_FAILED :
+        setup.state==NATIVE_SETUP_INSTALLED ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
+    out->step = (host_gui_step_t)setup.phase; out->done = setup.done; out->total = setup.total;
+    out->bytes = manifest->size; out->downloadable = manifest->url_count>0;
+    if (manifest->url_count) {
+        const char *name = strrchr(manifest->urls[0],'/');
+        if (name && name[1] && strlen(name+1)<sizeof(out->archive)) strcpy(out->archive,name+1);
+    }
+    snprintf(out->reason,sizeof(out->reason),"%s",setup.reason);
+    out->seconds_left = -1;
+    if (host_native_running()) {
+        native_build_status_t status;
+        native_build_status(&status);
+        out->build = status.state==NATIVE_BUILD_DONE ? HOST_GUI_BUILD_DONE : status.state==NATIVE_BUILD_STOPPED ? HOST_GUI_BUILD_STOPPED :
+            status.state==NATIVE_BUILD_OFF ? HOST_GUI_BUILD_OFF : HOST_GUI_BUILD_RUNNING;
+        out->sets = status.sets; out->ready = status.ready; out->failed = status.failed;
+        out->seconds_left = status.seconds_left;
+        snprintf(out->error,sizeof(out->error),"%s",status.error);
+    }
+}
+static void gui_native_install(void *context, const char *archive) { (void)context; native_setup_install(archive); }
+static void gui_native_cancel(void *context) { (void)context; native_setup_cancel(); }
+static unsigned gui_native_failures(void *context, host_gui_failure_t *rows, unsigned capacity) {
+    native_build_failure_t found[16];
+    size_t total, i;
+    (void)context;
+    if (!host_native_running()) return 0;
+    total = native_build_failures(found, capacity < 16 ? capacity : 16);
+    for (i = 0; i < total && i < capacity && i < 16; ++i) {
+        snprintf(rows[i].name,sizeof(rows[i].name),"%s",found[i].name);
+        snprintf(rows[i].words,sizeof(rows[i].words),"%s",found[i].words);
+    }
+    return (unsigned)total;
+}
+#endif
 static host_gui_services_t gui_services(gui_session_t *session) {
     host_gui_services_t services = {session,gui_changed,gui_action,gui_state_slot,gui_state_available,
-        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive};
+        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive,NULL,NULL,NULL,NULL};
+#ifdef FF8_PLAYER
+    services.native = gui_native; services.native_install = gui_native_install;
+    services.native_cancel = gui_native_cancel; services.native_failures = gui_native_failures;
+#endif
     return services;
 }
 static host_gui_result_t gui_shell_display(host_options_t *o) {
@@ -164,6 +239,9 @@ static void restored(cpu_t *c, unsigned disc) {
 #endif
     if (state_bridge) host_state_bridge_restore(state_bridge,c,c->hw->vblanks);
     if (disc) host_display_disc(disc);
+#ifdef FF8_PLAYER
+    if (disc) host_native_disc(disc);
+#endif
     if (disc && disc<=disc_count && disc_paths[disc-1]) host_ra_disc(disc_paths[disc-1]);
     host_ra_reset();
     /* Local unlock progress lives outside the guest session and survives loads. */
@@ -177,8 +255,35 @@ static void trace(void *context, const char *line) {
     fprintf((FILE *)context, "%s\n", line);
 }
 
+#ifdef FF8_PLAYER
+static void native_poll(void) {
+    native_setup_status_t setup;
+    native_build_status_t status;
+    if (native_waiting) {
+        native_setup_status(&setup);
+        if (setup.state == NATIVE_SETUP_INSTALLED) {
+            native_waiting = 0;
+            host_native_start(native_data, disc_paths, host_display_disc_value(), &native_options);
+        }
+    }
+    if (native_announced || !host_native_running()) return;
+    native_build_status(&status);
+    if (status.first_tier_seconds <= 0 || status.cached_seconds <= 0) return;
+    native_announced = 1;
+    /* Only news is said: a launch that found the first tier in the cache
+     * says nothing. */
+    if (status.first_tier_seconds <= status.cached_seconds) return;
+    fprintf(stderr, "native: first tier native after %.1f s\n", status.first_tier_seconds);
+#ifdef FF8_GUI
+    host_osd_post(host_gui_string("osd.native"), host_gui_string("osd.native.value"), 0);
+#endif
+}
+#endif
 static void present_frame(cpu_t *c, void *context) {
     (void)context;
+#ifdef FF8_PLAYER
+    native_poll();
+#endif
     if (!host_audio_pump(c->hw->spu)) cpu_stop(c, "host audio dump failed");
     host_present(c->hw->gpu);
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
@@ -202,6 +307,9 @@ static void present_frame(cpu_t *c, void *context) {
                 cpu_stop(c, "disc swap failed: %s", error);
             else {
                 host_states_disc(c,disc);
+#ifdef FF8_PLAYER
+                host_native_disc(disc);
+#endif
                 host_display_disc(disc);
                 host_ra_disc(disc_paths[disc-1]);
 #ifdef FF8_VULKAN
@@ -217,6 +325,10 @@ static void present_frame(cpu_t *c, void *context) {
     c_perf_checkpoint(c, c->hw->vblanks);
     if (c->hw->vblanks % 30 == 0 && getenv("FF8_PERF_STATS")) c_perf_summary(c, c->hw->vblanks);
     if (max_vblanks && c->hw->vblanks >= max_vblanks) cpu_stop(c, "VBlank limit reached");
+#ifndef FF8_PLAYER
+    if (native_pace_vblanks && !(c->hw->vblanks % native_pace_vblanks) && native_modules_remaining())
+        native_modules_feed(native_pace_count);
+#endif
 }
 
 #ifdef FF8_PLAYER
@@ -358,7 +470,27 @@ static void run_guest(cpu_t *c) {
 #undef main
 #define main host_player_main
 #endif
+static int toolchain_progress(void *user, host_tc_phase phase, uint64_t done, uint64_t total) {
+    (void)user;
+    fprintf(stderr,"toolchain %d %llu/%llu\n",(int)phase,(unsigned long long)done,(unsigned long long)total);
+    return 0;
+}
+static int toolchain_command(int argc, char **argv) {
+    char data[4096],exe[4096]; host_tc_error error;
+    host_tc_manifest manifest=*host_tc_pinned();
+    const char *url=NULL,*archive=NULL;
+    if(!host_player_data(data,sizeof(data))) return 2;
+    if(argc==4 && !strcmp(argv[2],"--url")) {url=argv[3];manifest.urls=&url;manifest.url_count=1;}
+    else if(argc==3) archive=argv[2];
+    else if(argc!=2) return 2;
+    if(!host_tc_install(data,&manifest,archive,toolchain_progress,NULL,&error)) {
+        fprintf(stderr,"toolchain: %s\n",error.reason);return 1;
+    }
+    if(!host_tc_executable(data,host_tc_pinned(),exe,sizeof(exe))) return 1;
+    fprintf(stderr,"toolchain installed: %s\n",exe);return 0;
+}
 int main(int argc, char **argv) {
+    if(argc>1 && !strcmp(argv[1],"--toolchain-install")) return toolchain_command(argc,argv);
     cpu_t *c;
     FILE *log;
     const char *log_path =
@@ -435,6 +567,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s EXE [--disc CUE_OR_BIN] [--log PATH] [--stall N] [--max-instructions N] [--interpreter] [--dump-state PATH] [--headless] [--dump-frames DIR] [--dump-vram PATH]\n", argv[0]); return 2;
     }
 #endif
+#ifndef FF8_PLAYER
+    const char *native_module_dir = NULL;
+#endif
     if (!host_options_load(&options, argc, argv)) return 2;
     c = malloc(sizeof(*c));
     if (!c) { fprintf(stderr, "Cannot allocate guest CPU\n"); return 2; }
@@ -447,7 +582,12 @@ int main(int argc, char **argv) {
         int setting = host_options_cli(&options, argc, argv, &i);
         if (setting < 0) { free(c); return 2; }
         if (setting) continue;
-        if (!strcmp(argv[i], "--interpreter")) c->interpreter_only = 1;
+        if (!strcmp(argv[i], "--interpreter")) {
+            c->interpreter_only = 1;
+#ifdef FF8_PLAYER
+            native_off = 1;
+#endif
+        }
 #ifdef FF8_PLAYER
         else if (argv[i][0] != '-' && !exe_path) {
             size_t n = strlen(argv[i]);
@@ -455,6 +595,29 @@ int main(int argc, char **argv) {
                 if (disc_count==4) { fprintf(stderr,"At most four --disc images are supported\n"); free(c); return 2; }
                 disc_paths[disc_count++] = argv[i];
             } else exe_path = argv[i];
+        }
+#endif
+#ifdef FF8_PLAYER
+        else if (!strcmp(argv[i], "--native-off")) native_off = 1;
+        else if (!strcmp(argv[i], "--native-status")) native_status = 1;
+        else if (!strcmp(argv[i], "--native-wait")) native_wait = 1;
+        else if (!strcmp(argv[i], "--native-build-only")) native_only = native_wait = 1;
+        else if (!strcmp(argv[i], "--native-compiler") && i + 1 < argc) native_compiler = argv[++i];
+        else if (!strcmp(argv[i], "--native-workers") && i + 1 < argc) {
+            char *end;
+            unsigned long count = strtoul(argv[++i], &end, 10);
+            if (*end || !count || count > 256) { fprintf(stderr, "Invalid worker count: %s\n", argv[i]); free(c); return 2; }
+            native_workers = (unsigned)count;
+        }
+#endif
+#ifndef FF8_PLAYER
+        else if (!strcmp(argv[i], "--native-modules") && i + 1 < argc) native_module_dir = argv[++i];
+        else if (!strcmp(argv[i], "--native-modules-pace") && i + 1 < argc) {
+            char *end;
+            unsigned long count = strtoul(argv[++i], &end, 10), vblanks = 0;
+            if (*end == ':') vblanks = strtoul(end + 1, &end, 10);
+            if (*end || !count || !vblanks || count > UINT_MAX || vblanks > UINT_MAX) { fprintf(stderr, "Invalid module pace: %s\n", argv[i]); free(c); return 2; }
+            native_pace_count = (unsigned)count; native_pace_vblanks = (unsigned)vblanks;
         }
 #endif
         else if (!strcmp(argv[i], "--legacy-overlays")) legacy_overlays = 1;
@@ -608,12 +771,21 @@ int main(int argc, char **argv) {
     if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
     host_ra_configure(data_dir,options.ra,options.ra_notify);
     atexit(host_ra_shutdown);
+#ifdef FF8_PLAYER
+    snprintf(native_data,sizeof(native_data),"%s",data_dir);
+    native_setup_configure(data_dir);
+    /* An installation still running when the player ends is cancelled. */
+    atexit(native_setup_shutdown);
+#endif
 #ifdef FF8_GUI
     if (gui_allowed) {
         if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
         if (!host_gui_configure(&options,data_dir,&services,options.gui_test)) { host_gui_shutdown(); free(c); return 2; }
         gui_configured = 1;
-        if (!headless && (options.gui || startup_problem)) {
+#ifdef FF8_PLAYER
+        if (host_session_crash_log()) host_gui_previous_crash(host_session_crash_log());
+#endif
+        if (!headless && (options.gui || startup_problem || host_gui_wants_shell())) {
             host_gui_result_t shell;
             if (*startup_detail) host_gui_startup_error(startup_pane,startup_detail);
             if (options.gui) host_gui_hub();
@@ -837,6 +1009,53 @@ int main(int argc, char **argv) {
     if (!c->interpreter_only) fprintf(stderr, "Generated code has no validity metadata; using interpreter. Regenerate to enable recompilation.\n");
     c->interpreter_only = 1;
 #endif
+#ifndef FF8_PLAYER
+    if (native_module_dir && generated_count) {
+        /* Modules would silently shadow the linked tables; neither run would be meaningful. */
+        fprintf(stderr, "--native-modules needs a host built from a tree generated with --shape modules\n");
+        host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+        host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
+    if (native_module_dir) {
+        /* The EXE text is intact only now; the loader keeps its own copy. */
+        if (!native_modules_configure(generated_hash,generated_base,generated_size,c->ram + (generated_base & 0x1fffffffu)) ||
+            !native_modules_scan(native_module_dir)) {
+            fprintf(stderr, "Cannot read native modules from %s\n", native_module_dir);
+            host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+            host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+            sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+        }
+        /* Paced loading starts empty, so the opening frames are interpreted
+         * like a player's first run before anything has been built. */
+        if (!native_pace_vblanks) { native_modules_feed(SIZE_MAX); native_modules_commit(c); }
+    }
+#endif
+#ifdef FF8_PLAYER
+    /* The player starts on the interpreter and switches set by set as its own
+     * modules arrive; without the compiler this starts nothing. */
+    if (!native_off) {
+        int started;
+        native_options.verbose = native_status; native_options.workers = native_workers; native_options.compiler = native_compiler;
+        started = host_native_boot(c) && host_native_start(data_dir, disc_paths, 1, &native_options);
+        native_waiting = !started && !native_only;
+        if (!started && native_only) {
+            fprintf(stderr, "No native compiler is installed\n");
+            host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+            host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+            sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+        }
+    }
+    {
+        /* Which code runs natively never changes guest state on the precise
+         * host, so a player's states do not record it: the bit stays as the
+         * interpreter-only player always wrote it, and a state saved before a
+         * module arrived loads after it, and the other way round. */
+        unsigned interpreted = 1;
+#else
+    {
+        unsigned interpreted = c->interpreter_only;
+#endif
     if (!host_states_init(c,savestate_dir,card_paths[0],load_state,save_state,save_at,
                           disc_paths,
 #ifdef FF8_PLAYER
@@ -847,21 +1066,48 @@ int main(int argc, char **argv) {
                           disc_count,
 #endif
                           generated_hash,
-                          c->interpreter_only | (legacy_overlays << 1) | (spu_control << 2) | (options.dualshock << 3),savestate_full_disc,options.snapshot_cards)) {
+                          interpreted | (legacy_overlays << 1) | (spu_control << 2) | (options.dualshock << 3),savestate_full_disc,options.snapshot_cards)) {
+#ifdef FF8_PLAYER
+        host_native_stop(c, 0);
+#endif
         host_state_bridge_close(state_bridge); host_achievements_close(achievements);
         host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
         sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); host_states_shutdown(); HOST_GUI_CLEANUP(); return 2;
+    }
     }
 #ifdef FF8_GUI
     if (gui_allowed) { gui_session.playing = 1; host_gui_attach_game(); }
 #endif
     host_states_recovery(restored);
-    host_states_apply(&c,&input);
-    if (!host_states_failed()) do { run_guest(c); } while (host_states_apply(&c,&input));
+#ifdef FF8_PLAYER
+    if (native_only) {
+        native_build_status_t status;
+        native_build_state_t state;
+        signal(SIGINT, native_interrupt);
+        signal(SIGTERM, native_interrupt);
+        do state = native_build_wait(0.5);
+        while (state != NATIVE_BUILD_DONE && state != NATIVE_BUILD_STOPPED && !native_interrupted);
+        native_build_status(&status);
+        host_native_stop(c, 0);
+        result = status.state == NATIVE_BUILD_DONE ? 0 : 1;
+        snprintf(c->stop_reason, sizeof(c->stop_reason), "VBlank limit reached");
+    } else
+#endif
+    {
+        host_states_apply(&c,&input);
+        if (!host_states_failed()) do { run_guest(c); } while (host_states_apply(&c,&input));
+    }
     if (host_states_failed()) result = 2;
 #ifdef FF8_GUI
     if (gui_allowed && host_gui_test_failed()) result = 2;
 #endif
+    /* Keep the runtime stop and its stdout summary intact for replay tools. */
+    if (strcmp(c->stop_reason, "VBlank limit reached") &&
+        strcmp(c->stop_reason, "instruction budget exhausted") &&
+        (strcmp(c->stop_reason, "host display closed or failed") || host_display_failed())) {
+        fprintf(stderr, "Stop: %s\nLast PC: %08x\n", c->stop_reason, c->pc);
+        if (!result) result = 1;
+    }
     hw_sync(c);
     summary(c);
     printf("Trace: %s\n", log_path);
@@ -888,6 +1134,14 @@ int main(int argc, char **argv) {
     if (!host_achievements_close(achievements)) result = 2;
     
     host_state_bridge_close(state_bridge);
+#ifndef FF8_PLAYER
+    if (native_module_dir) {
+        fprintf(stderr, "Native modules: %zu registered\n", native_modules_registered());
+        native_modules_shutdown(c);
+    }
+#else
+    host_native_stop(c, native_wait);
+#endif
     sio_destroy(c);
     fclose(log); hw_destroy(c); free(legacy_registry); free(c);
     HOST_GUI_CLEANUP(); return result;

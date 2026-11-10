@@ -162,7 +162,7 @@ cpu_t *savestate_read(const cpu_t *old, const char *path, savestate_identity_t *
     long length;
     snprintf(error, error_size, "invalid, corrupt, truncated, or unsupported section version in save state");
     if (!f) { snprintf(error,error_size,"%s: %s",path,strerror(errno)); return NULL; }
-    if (fseek(f,0,SEEK_END) || (length = ftell(f)) < 36 || length > SAVESTATE_MAX || fseek(f,0,SEEK_SET)) goto fail;
+    if (fseek(f,0,SEEK_END) || (length = ftell(f)) < 36 || (unsigned long)length > SAVESTATE_MAX || fseek(f,0,SEEK_SET)) goto fail;
     io->size = (size_t)length; io->reading = 1; io->data = malloc(io->size);
     if (!io->data || fread(io->data,1,io->size,f) != io->size) goto fail;
     S8(magic); S32(version); S32(size); S8(hash);

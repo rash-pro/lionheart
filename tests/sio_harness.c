@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <sys/resource.h>
+#include "native/support/file_size_limit.h"
 
 static cpu_t *c;
 static void advance(uint64_t cycles) { c->cycles += cycles; hw_event(c); }
@@ -171,9 +171,9 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "invalid_card")) {
         char error[256]; assert(!sio_open_card(c, 0, argv[2], error, sizeof(error)));
     } else if (!strcmp(argv[1], "card_failed")) {
-        char error[256]; struct rlimit limit = {0, 0};
+        char error[256];
         assert(sio_open_card(c, 0, argv[2], error, sizeof(error)));
-        signal(SIGXFSZ, SIG_IGN); assert(!setrlimit(RLIMIT_FSIZE, &limit));
+        lh_test_limit_file_size();
         assert(write_sector(1023, 8, 0) == 0x4e); assert(!sio_cards_ok(c));
         select_port(0); assert(byte(0x81, 1) == 255); assert(byte(0x53, 1) == 12);
     } else if (!strcmp(argv[1], "card_existing")) {

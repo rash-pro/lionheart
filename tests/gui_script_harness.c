@@ -7,6 +7,7 @@
 static int visible;
 int host_gui_visible(void) { return visible; }
 int host_gui_toast_visible(void) { return 0; }
+const char *host_osd_showing(void) { return ""; }
 const char *gui_ui_focused(void) { return "btn.browse"; }
 const char *gui_ui_text_for(const char *id) { return !strcmp(id,"app.name") ? "Lionheart" : NULL; }
 int main(int argc,char **argv) {

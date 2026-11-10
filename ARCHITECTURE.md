@@ -3,22 +3,43 @@
 Lionheart statically recompiles the original PlayStation executable and overlays into C99.
 The portable runtime provides the guest CPU, memory and hardware model.
 The SDL2 host supplies input, audio, storage and presentation.
-The distributable player uses that runtime's interpreter and an empty catalog.
+The distributable player starts on that runtime's interpreter with an empty catalog, and builds its own native
+code from the player's discs once a compiler is installed (docs/native-modules.md).
 No game-derived code or data is committed or distributed.
 
 ## Disc to native executable
 
-`tools/psxdisc.py` reads raw 2352-byte CUE/BIN images and their ISO9660 directories.
-Setup extracts the boot EXE and verifies its size and SHA-1 against `games/ff8-usa`.
-`recomp/disc.py` extracts and verifies the executable overlays using addresses, sizes and hashes.
-The setup uses the versioned top-table catalog, including movie overlays, across the supplied discs.
-`recomp/overlays.py` also supports the wider loader/effect catalog for diagnostics and legal scanning.
-All extracted bytes stay in the build directory.
+`generator/` is a standalone C99 library and the `lionheart-gen` command-line tool. Neither depends on
+SDL or the runtime. The library owns each call's state, reports progress and cancellation through
+callbacks, and unwinds failures back to the caller. Paths are UTF-8 and output uses binary writes with LF on
+Linux and Windows.
 
-`recomp/discover.py` follows function entries and control flow. `decode.py` decodes MIPS instructions.
-`emit.py`, `fast.py` and `precise.py` generate C with explicit guest registers, loads and retirement boundaries.
-Generated translation units and dispatch tables are compiled together with `runtime/` and `backends/host/`.
-Version metadata contains identities, addresses, boundaries and resource locations, never payload bytes.
+`generator/src/disc.c` reads raw 2352-byte CUE/BIN images and ISO9660 directories. `catalog.c` verifies the
+EXE and overlays against `games/ff8-usa`, and `lzs.c` decompresses stored resources. The developer setup uses
+the versioned top-table catalog, including movie overlays, across the supplied discs. The default CLI mode
+also supports the wider loader/effect catalog for diagnostics and legal scanning. `overlays.json` adds what the
+imported catalog cannot know: entry hints per set for functions reached only through pointers, and code
+prefixes, assets that start with code and continue with data (battle stages at 0x8013e000). Each distinct
+prefix is an image of its own, discovered within the record's bound; all of a record's images share one
+overlay row and one module, where an address two of them hold differently has an entry for each. All extracted bytes stay
+in the build directory. Metadata contains identities, addresses, boundaries and locations, never payload bytes.
+
+`decode.c` decodes MIPS instructions and `discover.c` follows function entries and control flow. `emit.c`,
+`fast.c` and `precise.c` generate C with explicit guest registers, loads and retirement boundaries.
+`locals.c` handles selected register caching for experimental timing. Generated translation units and dispatch
+tables compile together with `runtime/` and `backends/host/`.
+
+`tools/setup.cmake` builds the small host generator, invokes the library's cached developer generation, then
+configures and builds the developer executable. Cache identity lives in `generator/src/cache.c` for use by
+embedding hosts. CMake fingerprints the generator's C sources and headers with checkout-relative names.
+The key also covers catalog bytes, options, the verified EXE and overlay identities, and the disc set.
+Every hit verifies the supplied inputs and each generated output's SHA-256. The receipt is removed before
+emission and published by an atomic rename after success. Callers must exclusively own the output directory;
+the setup launcher locks `build/` for its whole run. Caches from the old setup are not accepted.
+
+The restoration ABI hashes that same native generator fingerprint, the generated manifest, runtime and host
+sources, and the statistics and interpreter options. Changing the generator source hashes changes the build
+identity and rejects older save states. Memory card saves do not depend on this identity.
 
 ## Dispatch and overlays
 

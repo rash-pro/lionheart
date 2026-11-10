@@ -10,8 +10,9 @@ typedef struct { float x,y,w,h; } gui_rect_t;
 float gui_scale(unsigned height);
 typedef enum { GUI_REGULAR, GUI_TITLE, GUI_SUB, GUI_MONO, GUI_HINT } gui_font_t;
 typedef enum { GUI_TEXT, GUI_DIM, GUI_MUTED, GUI_ACCENT, GUI_OK, GUI_WARN, GUI_ERROR, GUI_CASUAL } gui_colour_t;
-enum { GUI_DISABLED=1, GUI_PRIMARY=2, GUI_DANGER=4, GUI_SELECTED=8, GUI_GHOST=16 };
-typedef enum { GUI_PICK_DISC, GUI_PICK_CARD, GUI_PICK_MOVIES, GUI_PICK_SCREENSHOTS } gui_pick_t;
+/* GUI_ALERT colours only a row's second line, as a status in error. */
+enum { GUI_DISABLED=1, GUI_PRIMARY=2, GUI_DANGER=4, GUI_SELECTED=8, GUI_GHOST=16, GUI_ALERT=32 };
+typedef enum { GUI_PICK_DISC, GUI_PICK_CARD, GUI_PICK_MOVIES, GUI_PICK_SCREENSHOTS, GUI_PICK_ARCHIVE } gui_pick_t;
 
 /* Every rectangle is in logical 1280x720 coordinates. begin computes scale once. */
 int gui_ui_attach(SDL_Window *, SDL_Renderer *);
@@ -81,8 +82,12 @@ int gui_browser_refresh(gui_browser_t *);
 int gui_browser_up(gui_browser_t *);
 int gui_browser_accept(const gui_browser_t *,const char *path);
 unsigned gui_browser_places(char names[][512],char paths[][512],unsigned capacity,const char *last);
-int gui_state_load(const char *data_dir,char *folder,size_t,int *input);
-int gui_state_save(const char *data_dir,const char *folder,int input);
+int gui_state_load(const char *data_dir,char *folder,size_t,int *input,int *native_offered);
+int gui_state_save(const char *data_dir,const char *folder,int input,int native_offered);
+/* Native code in words: the hub row's second line (alert when it reports a
+ * failure), and the copy for an installer's reason. */
+void gui_native_summary(const host_gui_native_t *,char *,size_t,int *alert);
+const char *gui_native_reason_id(const char *reason);
 #ifdef __cplusplus
 }
 #endif

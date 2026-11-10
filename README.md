@@ -29,7 +29,7 @@ There are no prebuilt releases yet.
 ### Linux
 
 You need:
-- a C99/C++ compiler, CMake 3.16+, Python 3.13+ and pkg-config;
+- a C99/C++ compiler, CMake 3.21+ and pkg-config;
 - development files for SDL2 2.0.14+, libcurl 8+, D-Bus, Vulkan, zlib and FFmpeg (libavformat, libavcodec, libavutil,
   libswscale);
 - for Vulkan rendering, your GPU's Vulkan driver.
@@ -54,16 +54,30 @@ in [`tools/windows-deps.json`](tools/windows-deps.json), checks their sizes and 
 and the player:
 
 ```sh
-python3 tools/build_windows.py
+cmake -P tools/build_windows.cmake
 ```
 
 `build/windows/dist-windows/` then holds `Lionheart.exe`, its DLLs and the licence notices. Keep that folder
-together. It has not yet been tested on a physical Windows machine.
+together. It has not yet been tested on a physical Windows machine, and neither has compiling the game's native
+code there: reports from Windows are welcome on the issue tracker.
+
+Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` or `-DJOBS=4` before `-P` to override the defaults.
+`-DOFFLINE=ON` requires verified cached inputs and disables downloads.
+An installed dependency prefix has a receipt tied to the dependency lock, build recipe and installed file bytes.
+If an older cache has no receipt, remove its `install-ucrt` folder and rebuild from its verified cached sources.
 
 ## First run
 
 Start Lionheart with no arguments. The setup screen asks for your discs and a memory card; you can create a new
 card or import a copy of an existing one. Then press **Play**.
+
+The third step installs a C compiler, a 60 MB download made once. With it Lionheart compiles the game from your
+discs into native code for your PC while you play: what a disc needs first takes a few minutes, and all four discs
+about 20 minutes on a 16-thread PC, longer on a smaller one. The result takes about 600 MB and later launches use
+it at once. You can skip the step and install the compiler later from the menu; the game runs without it, more
+slowly. On a PC without a connection, download the compiler archive from the
+[releases page](https://github.com/rash-pro/lionheart/releases/tag/toolchain-zig-0.17.1) and choose it in that
+step.
 
 During the game, **Esc** or the controller's **Guide** button opens the menu. A renderer change made there applies
 at the next launch.
@@ -166,7 +180,7 @@ The repository contains everything: the recompiler, the runtime, the host and th
 recompiled build from their own discs with one command:
 
 ```sh
-python tools/setup.py --disc1 /path/to/disc1.cue
+cmake -P tools/setup.cmake -- --disc1 /path/to/disc1.cue
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and the rules, [ARCHITECTURE.md](ARCHITECTURE.md) for how

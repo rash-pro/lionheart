@@ -4,7 +4,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
+#include "native/support/file_size_limit.h"
 
 static cpu_t *c;
 static uint32_t call(unsigned table, unsigned fn, uint32_t a, uint32_t b, uint32_t n) {
@@ -131,10 +131,10 @@ static void callbacks_test(void) {
     hw_event(c); assert(mem_read32(c, 0x6000) == 1);
 }
 static void failure(const char *path) {
-    struct rlimit limit = {0, 0};
+
     uint32_t err = event(0xf0000011, 0x8000, 0x2000, 0);
     attach(0, path); start(); call(1, 0x50, 0, 0, 0);
-    signal(SIGXFSZ, SIG_IGN); assert(!setrlimit(RLIMIT_FSIZE, &limit));
+    lh_test_limit_file_size();
     assert(call(1, 0x4e, 0, 100, 0x10000));
     assert(call(1, 0x5d, 0, 0, 0) == 0x21 && ready(err));
     assert(!sio_cards_ok(c));
@@ -219,11 +219,11 @@ static void filesystem(const char *path) {
 }
 static void filesystem_async(const char *path, int failed) {
     uint32_t fd, sw, finished;
-    struct rlimit limit = {0, 0};
+
     attach(0, path); start(); fd = call(0, 0, text("bu00:ASYNC"), 0x18203, 0); assert(fd == 2);
     sw = event(0xf4000001, failed ? 0x8000 : 4, 0x2000, 0);
     finished = event(fd, 4, 0x2000, 0);
-    if (failed) { signal(SIGXFSZ, SIG_IGN); assert(!setrlimit(RLIMIT_FSIZE, &limit)); }
+    if (failed) { lh_test_limit_file_size(); }
     assert(call(0, 3, fd, 0x12000, 256) == 0);
     assert(!ready(sw) && !ready(finished));
     assert(call(0, 1, fd, 0, 0) == ~0u);
