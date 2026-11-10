@@ -126,3 +126,46 @@ LH_TEST(test_verify_synthetic_disc_and_corruption) {
   LH_EQ(bad.rc, 1);
   LH_CONTAINS(bad.err, "file SHA-1 mismatch: toc.bin");
 }
+LH_TEST(test_get_compressed_overlay_modes) {
+  using namespace metadata;
+  Fixture f(t.temp());
+  // The first top-table pair is also a valid bounded LZS prefix: a literal
+  // zero followed by a three-byte zero-ring reference.
+  std::string raw(8, 0);
+  raw[0] = 22;
+  raw[4] = 1;
+  J e = {{"path", "data/mag001.ovl"},
+         {"sector", 0},
+         {"size", 8},
+         {"sha1", "e3278f8bd947e68f85ecde940de8c95ee4588186"},
+         {"locator", J{{"table", "top"}, {"index", 0}}},
+         {"compressed", true},
+         {"read_size", 7},
+         {"overlay_sha1", "9069ca78e7450a285173431b3e52c5c25299e473"},
+         {"overlay_size", 4},
+         {"loaded_sha1", "5ba93c9db0cff93f52b521d7420e43f6eda2784f"},
+         {"loaded_size", 1}};
+  f.inv["entries"] = J::array({e});
+  write(f.dir / "files-disc1.json", f.inv);
+  write(
+      f.dir / "overlays-all.json",
+      J{{"overlays",
+         J::array({J{{"locations", J::array({J{{"disc", 1},
+                                               {"path", e["path"]},
+                                               {"name", "effect_001"}}})}}})}});
+  for (auto mode : std::vector<std::pair<std::string, std::string>>{
+           {"--raw", raw},
+           {"--loaded", std::string(1, 0)},
+           {"--decompress", std::string(4, 0)}}) {
+    auto out = f.dir / "decoded";
+    t.ok(t.harness("ff8files")
+             .arg("get")
+             .arg(f.cue)
+             .arg("effect_001")
+             .arg(out)
+             .arg(mode.first)
+             .arg("--metadata")
+             .arg(f.dir));
+    LH_BYTES_EQ(lh::read_file(out), mode.second);
+  }
+}
