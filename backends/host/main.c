@@ -38,6 +38,7 @@
 #include "pgxp.h"
 #endif
 #include "native_modules.h"
+#include "frame_identity_host.h"
 #ifdef FF8_PLAYER
 #include "native_player.h"
 #include "native_setup.h"
@@ -79,6 +80,9 @@ static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
 static int pgxp_mode;
+/* Developer switch: --frame-identity, --frame-identity-dump PATH. */
+static int frame_identity;
+static const char *frame_identity_dump;
 #ifdef FF8_PLAYER
 static int player_disc_insert(cpu_t *c, const char *path, int swap, char *error, size_t size) {
     host_disc_runtime_t prepared;
@@ -238,6 +242,7 @@ static void restored(cpu_t *c, unsigned disc) {
     (void)disc;
 #endif
     if (state_bridge) host_state_bridge_restore(state_bridge,c,c->hw->vblanks);
+    host_frame_identity_restored(c);
     if (disc) host_display_disc(disc);
 #ifdef FF8_PLAYER
     if (disc) host_native_disc(disc);
@@ -622,6 +627,8 @@ int main(int argc, char **argv) {
             native_pace_count = (unsigned)count; native_pace_vblanks = (unsigned)vblanks;
         }
 #endif
+        else if (!strcmp(argv[i], "--frame-identity")) frame_identity = 1;
+        else if (!strcmp(argv[i], "--frame-identity-dump") && i + 1 < argc) { frame_identity = 1; frame_identity_dump = argv[++i]; }
         else if (!strcmp(argv[i], "--legacy-overlays")) legacy_overlays = 1;
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-state") && i + 1 < argc) state_path = argv[++i];
@@ -1037,6 +1044,12 @@ int main(int argc, char **argv) {
         if (!native_pace_vblanks) { native_modules_feed(SIZE_MAX); native_modules_commit(c); }
     }
 #endif
+    /* Before any module is opened, so every one binds the recording entries. */
+    if (frame_identity && !host_frame_identity_start(c, frame_identity_dump, generated_count && !c->interpreter_only)) {
+        host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+        host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
 #ifdef FF8_PLAYER
     /* The player starts on the interpreter and switches set by set as its own
      * modules arrive; without the compiler this starts nothing. */
@@ -1116,6 +1129,7 @@ int main(int argc, char **argv) {
     }
     hw_sync(c);
     summary(c);
+    if (!host_frame_identity_stop()) result = 2;
     printf("Trace: %s\n", log_path);
     if (spu_path) {
         FILE *file = fopen(spu_path, "wb");

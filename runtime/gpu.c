@@ -17,6 +17,9 @@ struct gpu {
     gpu_vertex_t poly_last;
     gpu_paint_t poly_paint;
     unsigned display_start, horizontal, vertical, display_mode, disabled, dma, irq, field;
+    /* Host-side only: never saved, and a GPU restored from a state has none. */
+    const gpu_observer_t *observer;
+    void *observer_context;
 };
 
 static int signed11(unsigned n) { return (int)(n & 1023) - (int)(n & 1024); }
@@ -69,6 +72,10 @@ static void reset(gpu_t *g) {
     display_state(g);
 }
 
+void gpu_observe(gpu_t *g, const gpu_observer_t *observer, void *context) {
+    g->observer = observer; g->observer_context = context;
+}
+
 gpu_t *gpu_create(void) {
     gpu_t *g = calloc(1, sizeof(*g));
     if (g) reset(g);
@@ -108,6 +115,7 @@ static void execute(gpu_t *g) {
             v[i] = vertex(g, xy, color, uv);
         }
         p.dither = !!(op & 16) || (p.textured && !p.raw);
+        if (g->observer) g->observer->polygon(g->observer_context, op, w);
 #if defined(FF8_PGXP)
         pgxp_polygon(g, v, n, g->offset_x, g->offset_y);
 #endif
@@ -232,7 +240,10 @@ void gpu_gp1(gpu_t *g, uint32_t word) {
     case 2: g->irq = 0; break;
     case 3: g->disabled = word & 1; break;
     case 4: g->dma = word & 3; break;
-    case 5: g->display_start = word & 0x7ffff; break;
+    case 5:
+        g->display_start = word & 0x7ffff;
+        if (g->observer) g->observer->display_start(g->observer_context, g->display_start);
+        break;
     case 6: g->horizontal = word & 0xffffff; break;
     case 7: g->vertical = word & 0xfffff; break;
     case 8: g->display_mode = word & 0x7f; break;
@@ -294,6 +305,7 @@ uint32_t gpu_status_scanline(gpu_t *g, unsigned line) {
 
 void gpu_vblank(gpu_t *g) {
     g->field ^= 1; g->raster.field = (int)g->field;
+    if (g->observer) g->observer->vblank(g->observer_context);
 #if defined(FF8_PGXP)
     pgxp_vblank(g);
 #endif

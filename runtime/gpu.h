@@ -18,4 +18,16 @@ void gpu_display(gpu_t *, int *x, int *y, int *w, int *h, int *rgb24, int *enabl
 typedef struct { uint32_t horizontal, vertical, mode; } gpu_scanout_t;
 gpu_scanout_t gpu_scanout(const gpu_t *);
 
+/* A read-only view of what the guest asks the GPU to show: every GP1(05h)
+ * display-start write, every VBlank, and every polygon packet as it is drawn
+ * (opcode, then the packet's words). Without an observer, the default and the
+ * state of a new GPU, each of these costs one test. Observers must not call
+ * back into the GPU. */
+typedef struct {
+    void (*display_start)(void *context, uint32_t start);
+    void (*vblank)(void *context);
+    void (*polygon)(void *context, unsigned opcode, const uint32_t *packet);
+} gpu_observer_t;
+void gpu_observe(gpu_t *, const gpu_observer_t *, void *context);
+
 #endif
