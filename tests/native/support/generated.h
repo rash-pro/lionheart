@@ -1,6 +1,5 @@
-// Native cases that run the C generator on a synthetic program. A case builds
-// the program the way the pytest file does, asks for it compiled against the
-// runtime, and calls the result. See "Generated programs" in tests/README.md.
+// Build synthetic programs with the C generator, compile against the runtime,
+// and call the result. See "Generated programs" in tests/README.md.
 #pragma once
 
 #include "lh_test.h"
@@ -14,9 +13,7 @@ extern "C" {
 }
 
 namespace lh::gen {
-
-// The assemblers of tests/test_recompiler.py. Python's keyword arguments become
-// positions: r(18, rd=10) is r(18, 0, 0, 10).
+// Register operands follow the instruction fields: function, rs, rt, rd, shift.
 constexpr uint32_t r(uint32_t fn, uint32_t rs = 0, uint32_t rt = 0, uint32_t rd = 0, uint32_t sh = 0) {
     return rs << 21 | rt << 16 | rd << 11 | sh << 6 | fn;
 }
@@ -27,8 +24,6 @@ constexpr uint32_t j(uint32_t op, uint32_t target) { return op << 26 | ((target 
 constexpr uint32_t cop(uint32_t op, uint32_t rs, uint32_t rt, uint32_t rd) {
     return op << 26 | rs << 21 | rt << 16 | rd << 11;
 }
-
-// A Python list of words: `a + b`, `Words(n, 0)` for `[0] * n`.
 struct Words : std::vector<uint32_t> {
     using std::vector<uint32_t>::vector;
     Words() = default;
@@ -37,8 +32,7 @@ struct Words : std::vector<uint32_t> {
 inline Words operator+(Words a, const Words &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
 inline const Words RET = {r(8, 31), 0};
 
-// struct.pack('<%dI', *words): little-endian bytes of the words, which is what
-// both generators are given.
+// Pack instruction words as little-endian bytes.
 std::string pack(const Words &words);
 
 // recomp.discover.Image.
@@ -84,7 +78,7 @@ Effects effects(uint32_t word, uint32_t pc);
 class Json {
 public:
     Json() = default;
-    bool contains(const std::string &key) const;   // Python's `key in value`
+    bool contains(const std::string &key) const;
     Json at(const std::string &key) const;
     Json at(size_t index) const;
     Json at(int index) const { return at(static_cast<size_t>(index)); }
@@ -99,16 +93,11 @@ private:
     std::shared_ptr<lhgt_session> owner_;
     const lhg_json *value_ = nullptr;
 };
-
-// infer_effect_base(data); fails by raising the same message Python raises.
 struct EffectBase {
     uint32_t base;
     Json evidence;
 };
 EffectBase infer_effect_base(const std::string &data);
-
-// Lines a ValueError carried, or "" if the callable did not fail. Python's
-// pytest.raises(ValueError, match=...) becomes LH_CONTAINS on this.
 std::string error_of(const std::function<void()> &body);
 
 // One program to emit: the arguments of discover() and emit() in one value.
@@ -129,7 +118,6 @@ struct Program {
     Image image;
     std::vector<uint32_t> seeds = {};
     bool scan_calls = true;
-    // Python's defaults for emit(); the CLI's differ.
     std::string mode = "fast", host_mode = "fast", timing = "exact";
     std::vector<Overlay> overlays = {};
     explicit Program(Image program) : image(std::move(program)) {}
@@ -140,8 +128,7 @@ struct Program {
 };
 
 RegisterCache read_selection(const fs::path &path);
-// Emit without compiling, for output and manifest assertions. Records the same
-// inputs as Build, including failed requests, while Python remains authoritative.
+// Emit without compiling, for output and manifest assertions.
 void generate(Case &t, const Program &program, const fs::path &directory);
 
 // The compiled result: a Library plus where the generated files are.
@@ -153,8 +140,6 @@ public:
 private:
     fs::path directory_;
 };
-
-// Generates C for a program and compiles it, like the cc line of a pytest case.
 // Equal programs and equal flags are built once per build directory, however
 // many cases or processes ask, so a case pays for dlopen rather than for a
 // compile. Flags omit -shared and -fPIC, which are always present.
@@ -169,9 +154,7 @@ public:
     Build &runtime_all();
     // Compiled with each program, for sources that include "generated.h".
     Build &source(fs::path repository_relative);
-    // A C file under tests/native/cases, after Python's .replace() calls in order.
     Build &probe(const std::string &name, std::vector<std::pair<std::string, std::string>> replacements = {});
-    // Python fixtures sometimes prepend feature defines to generated.h only.
     Build &header_prefix(std::string text);
     Compiled library();
 private:

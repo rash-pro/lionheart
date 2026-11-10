@@ -1,5 +1,4 @@
-// Build the same isolated host contracts as pytest, outside the harness project:
-// its FF8_PLAYER definition must never reach a test harness.
+// Isolate host contract builds so FF8_PLAYER never reaches a test harness.
 #pragma once
 #include "lh_test.h"
 #include <cstdlib>

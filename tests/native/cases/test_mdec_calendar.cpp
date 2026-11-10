@@ -1,5 +1,4 @@
 // Observe the span model against the original word calendar between deadlines.
-#include "equiv.h"
 #include "../../../tools/devtools/mdec_trace.h"
 #include "lh_test.h"
 #include "mdec_calendar_model.h"
@@ -17,8 +16,6 @@ struct Row {
     std::string id;
     unsigned depth, layout, control;
 };
-
-// pytest builds this id from the innermost decorator outward: control, layout, depth.
 std::vector<Row> rows() {
     std::vector<Row> out;
     for (unsigned depth = 0; depth < 4; ++depth) {
@@ -75,7 +72,7 @@ LH_TEST_P(test_word_calendar_observations, rows()) {
         // random long gaps exercise the lazy path and overlapping grants.
         for (int step = 0; step < 600; ++step) {
             cycle += step < 80 ? 1 : static_cast<uint64_t>(rng.randrange(1, 1300));
-            lh::equiv::record(t, cycle);
+
             for (int i = 0; i < 2; ++i) models[i].advance(cpus[i], cycle);
             compare();
             for (uint32_t address : {0x1f801824u, 0x1f801080u, 0x1f801084u, 0x1f801088u,

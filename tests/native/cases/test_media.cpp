@@ -1,5 +1,4 @@
 // Synthetic MDEC/CD vectors. No disc data or emulator source is an oracle.
-#include "equiv.h"
 #include "lh_test.h"
 #include "oracles/media.h"
 #include "py_random.h"
@@ -75,7 +74,7 @@ LH_TEST(test_idct_fixed_point) {
         for (int16_t &value : coeff) value = static_cast<int16_t>(randomizer.randrange(-16384, 16384));
         for (int16_t &value : matrix) value = static_cast<int16_t>(randomizer.randrange(-32768, 32768));
         const auto expected = lh::oracle::idct_reference(coeff, matrix);
-        lh::equiv::record(t, coeff, matrix, expected);
+
         std::string input = pack(coeff.data(), coeff.size());
         input += pack(matrix.data(), matrix.size());
         const auto actual = unpack(run_media(t, {"idct"}, &input));
@@ -89,7 +88,7 @@ LH_TEST_P(test_xa_predictor_arithmetic_and_history, kXaRows) {
     std::vector<int16_t> expected = lh::oracle::xa_reference(raw, history);
     const std::vector<int16_t> second = lh::oracle::xa_reference(raw, history);
     expected.insert(expected.end(), second.begin(), second.end());
-    lh::equiv::record(t, raw, expected);
+
     const auto actual = unpack(run_media(t, {"xa"}, &raw));
     LH_SEQ_EQ(actual, expected, lh::str("bits=", p.bits, " stereo=", p.stereo));
 }

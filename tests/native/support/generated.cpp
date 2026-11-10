@@ -2,7 +2,6 @@
 // lh::gen::Build. Why the cache exists is in tests/README.md.
 #include "generated.h"
 
-#include "equiv.h"
 #include "lh_internal.h"
 
 #include <algorithm>
@@ -429,7 +428,7 @@ RegisterCache read_selection(const fs::path &path) {
 }
 
 void generate(Case &t, const Program &program, const fs::path &directory) {
-    equiv::record(t, program.canonical() + "\n");
+
     emit_program(program, directory);
 }
 
@@ -467,7 +466,7 @@ Compiled Build::library() {
         skip("generated programs are compiled for and loaded into the native runner");
     }
     const std::string canonical = program_->canonical();
-    equiv::record(t_, canonical + "\n");
+
 
     std::vector<std::string> runtime_files = runtime_;
     if (runtime_all_) {

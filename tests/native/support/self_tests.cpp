@@ -1,5 +1,4 @@
-// Tests of the test framework. Their names do not start with test_, so they are
-// labelled infra and never count toward parity with the Python suite.
+// Framework checks use the infra tier and do not count toward the coverage baseline.
 #include "lh_internal.h"
 
 #include <chrono>
@@ -27,7 +26,7 @@ LH_TEST(process_unsets_environment_and_uses_working_directory) {
     LH_TEXT_EQ(result.out, lh::fs::canonical(dir).string() + "\nunset");
 }
 
-LH_TEST(process_reports_signals_like_python) {
+LH_TEST(process_reports_signals) {
     auto result = t.run(t.host("/bin/sh").args({"-c", "kill -SEGV $$"}).timeout(10));
     LH_EQ(result.rc, -11);
 }

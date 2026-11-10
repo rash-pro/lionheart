@@ -1,4 +1,3 @@
-// Match the synthetic ISO and seeded EXE used by the host pytest fixtures.
 #pragma once
 #include "lh_test.h"
 #include "py_random.h"

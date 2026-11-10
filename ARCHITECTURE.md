@@ -9,7 +9,7 @@ No game-derived code or data is committed or distributed.
 ## Disc to native executable
 
 `generator/` is a standalone C99 library and the `lionheart-gen` command-line tool. Neither depends on
-Python, SDL or the runtime. The library owns each call's state, reports progress and cancellation through
+SDL or the runtime. The library owns each call's state, reports progress and cancellation through
 callbacks, and unwinds failures back to the caller. Paths are UTF-8 and output uses binary writes with LF on
 Linux and Windows.
 
@@ -33,7 +33,7 @@ emission and published by an atomic rename after success. Callers must exclusive
 the setup launcher locks `build/` for its whole run. Caches from the old setup are not accepted.
 
 The restoration ABI hashes that same native generator fingerprint, the generated manifest, runtime and host
-sources, and the statistics and interpreter options. Replacing the Python source hashes changes the build
+sources, and the statistics and interpreter options. Changing the generator source hashes changes the build
 identity and rejects older save states. Memory card saves do not depend on this identity.
 
 ## Dispatch and overlays

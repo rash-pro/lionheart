@@ -1,12 +1,4 @@
-// CPython's random.Random for integer seeds, so a native case draws the same
-// values a pytest case with the same seed drew. Many of the ported tests make
-// tens of thousands of draws, so a few dozen lines here replace megabytes of
-// frozen vectors, and later ports get the same inputs by construction.
-//
-// Only the methods those tests use are here. Each one follows the 3.9-3.14
-// implementation exactly: the generator is MT19937 seeded through
-// init_by_array with the integer's 32-bit digits, randrange rejection-samples
-// from getrandbits, and randbytes is getrandbits read little-endian.
+// Integer-seeded CPython random.Random sequences for reproducible test inputs.
 #pragma once
 
 #include <array>
@@ -27,7 +19,7 @@ public:
     }
 
     // random.Random('text') seeds from the integer whose big-endian bytes are
-    // the text followed by its SHA-512, digits little-endian; see random.py.
+    // the text followed by its SHA-512, digits little-endian; see the CPython random specification.
     explicit PyRandom(const std::string &seed) {
         std::string bytes = seed;
         std::array<uint8_t, 64> digest = sha512(seed);

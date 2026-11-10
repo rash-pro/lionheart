@@ -1,4 +1,3 @@
-// Integer equations from the GTE pytest reference; independent of runtime kernels.
 #pragma once
 #include "numeric.h"
 #include <array>

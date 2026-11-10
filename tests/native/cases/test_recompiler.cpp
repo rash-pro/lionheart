@@ -1,6 +1,4 @@
-// Differential tests of generated code against the interpreter, one shared
-// program for every case. Ported functions of tests/test_recompiler.py; the
-// rest are marked LH_PENDING below and stay authoritative in pytest.
+// Differential tests share a synthetic program and compare against the interpreter.
 #include "cases/recompiler_fixture.h"
 
 #include <set>

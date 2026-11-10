@@ -1,4 +1,3 @@
-// The shared program of tests/test_recompiler.py and its `compiled` fixture, used
 // by test_recompiler and by the files that import that fixture (test_runtime).
 #pragma once
 
@@ -19,8 +18,6 @@ namespace lh::recompiler {
 using namespace lh::gen;
 
 inline constexpr uint32_t BASE = 0x80010000, DATA = 0x80100000;
-
-// Python's dict keeps insertion order, and PCS depends on it.
 struct CaseTable {
     std::vector<std::string> order;
     std::map<std::string, Words> cases;
@@ -309,8 +306,6 @@ inline Harness functions_of(const Compiled &lib) {
     h.test_poll = lib.fn<void(void *, uint32_t, uint64_t)>("test_poll");
     return h;
 }
-
-// A Python dict: later keys replace in place, otherwise append, keeping order.
 using Pairs = std::vector<std::pair<uint32_t, uint32_t>>;
 inline Pairs dict_update(Pairs base, const Pairs &updates) {
     for (const auto &entry : updates) {
@@ -361,7 +356,6 @@ inline Outcome run(const Harness &h, const std::string &name, const Pairs &regis
 }
 
 // diff() runs both engines and asserts equivalence; a failure lists the state
-// words that differ, as the Python message does.
 inline Outcome diff(lh::Case &t, const Harness &h, const std::string &name, const Pairs &registers = {},
              const Pairs &memory = {}, uint32_t start = 0, const CaseTable &tables = table()) {
     Outcome a = run(h, name, registers, memory, 0, start, tables);

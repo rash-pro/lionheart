@@ -1,7 +1,5 @@
 # The span model is compared with the original word calendar through an
-# instrumented hw.c, regenerated here so a change to the observation points
-# fails at configure time, like the Python's boundary check. Python keeps this
-# transform in tools/mdec_trace.py, and check_against_python.py checks they agree.
+# instrumented hw.c, regenerated here so changed observation points fail at configure time.
 set(source "${LH_ROOT}/runtime/hw.c")
 set(output "${CMAKE_BINARY_DIR}/generated/test_mdec_calendar/hw.c")
 file(READ "${source}" hw)

@@ -1,11 +1,9 @@
 // Exercise release-command replay and both observer outcomes without game data.
 #pragma once
 #include "player_probe.h"
-#include "equiv.h"
 LH_TEST(pause_probe_replays_the_player_compile_and_link_commands) {
     for(bool arguments:{false,true}) {
-        const char *equiv=std::getenv("LH_EQUIV_DIR");
-        auto build=equiv?lh::fs::path(equiv)/(arguments?"pause-arguments":"pause-command"):t.temp()/(arguments?"arguments host":"command host");lh::fs::create_directories(build/"CMakeFiles/ff8.dir");
+        auto build=t.temp()/(arguments?"arguments host":"command host");lh::fs::create_directories(build/"CMakeFiles/ff8.dir");
         auto include=t.root()/"runtime",host=t.root()/"backends/host";
         lh::write_file(build/"cpu.c","#include \"cpu.h\"\n#include <string.h>\nvoid cpu_init(cpu_t *c){memset(c,0,sizeof(*c));}\nvoid host_gui_frame(unsigned w,unsigned h){(void)w;(void)h;}\n");
         lh::write_file(build/"gui.c","void host_gui_frame(unsigned,unsigned);\nvoid host_gui_open(void){for(int i=0;i<4;++i)host_gui_frame(640,480);}\n");
@@ -30,8 +28,6 @@ LH_TEST(pause_probe_replays_the_player_compile_and_link_commands) {
         auto run=t.ok(t.host(binary.string()));LH_CONTAINS(run.err,"GUI pause proof: opens=3 frames=12 frozen=1");
         run=t.run(t.host(binary.string()).env("FF8_GUI_PAUSE_PROBE_STEP","1"));LH_EQ(run.rc,99);LH_CONTAINS(run.err,"guest changed inside modal loop");
         LH_TEXT_EQ(lh::read_file(build/"must-stay.d"),"unchanged\n");
-        if(equiv) {
-            lh::equiv::record(t,uint64_t(binary.string().size()),binary.string());
-        }
+
     }
 }

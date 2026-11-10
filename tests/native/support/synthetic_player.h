@@ -1,4 +1,3 @@
-// Private builds substitute only configure-time metadata, as the pytest fixture does.
 #pragma once
 #include "synthetic_disc.h"
 #include "generated.h"
@@ -44,7 +43,6 @@ inline lh::fs::path player(lh::Case &t, bool dev = false) {
     LH_CHECK(fd >= 0); LH_EQ(flock(fd, LOCK_EX), 0);
     struct Lock { int fd; ~Lock() { flock(fd, LOCK_UN); close(fd); } } lock{fd};
     auto binary = dir/"host"/(dev?"ff8":"lionheart");
-    if (dev) if (const char *out = std::getenv("LH_EMPTY_CATALOG")) empty_catalog(exe(), out);
     if (!lh::fs::exists(dir/"ready")) {
         auto cmd = t.host("cmake").args({"-S", t.root(), "-B", dir/"host", "-DCMAKE_BUILD_TYPE=Release",
             "-DFF8_RCHEEVOS=OFF", "-DFF8_STATE_BRIDGE=OFF"}).timeout(300);

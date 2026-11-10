@@ -1,4 +1,3 @@
-// Frozen Python emission pins synthetic output independently of the C generator.
 #include "lh_json.h"
 #include "recompiler_fixture.h"
 #include <array>
@@ -87,24 +86,13 @@ uint32_t random_word(lh::PyRandom &rng, uint32_t base, int count) {
     auto val = rng.getrandbits(16);
     return imm(op, rs, rt, val);
 }
-void record(lh::Case &t, const O &spec, const std::string &label);
 lh::fs::path emit(lh::Case &t, const O &spec, const std::string &label) {
     auto path = t.temp() / (label + ".json"), out = t.temp() / (label + "-c");
     lh::write_file(path, J(spec).dump());
-    record(t, spec, label);
     t.ok(t.harness("lionheart-gen-spec").args({path, out}).timeout(120));
     return out;
 }
-void record(lh::Case &t, const O &spec, const std::string &label) {
-    std::string key = t.name() + "/" + label;
-    if (const char *dir = std::getenv("LH_GENERATOR_SPECS")) {
-        lh::fs::create_directories(dir);
-        lh::write_file(lh::fs::path(dir) / (lh::sha256(key) + ".json"),
-                       J(O{{"key", key}, {"spec", spec}, {"temporary", t.temp().string()}}).dump());
-    }
-}
 void compare(lh::Case &t, const O &spec, const std::string &label, const lh::fs::path &out) {
-    record(t, spec, label);
     std::string key = t.name() + "/" + label;
     auto cmd = t.host("cmake").args({"-DKEY=" + key, "-DOUTPUT=" + out.string(),
                                      "-DREFERENCE=" + (t.root() / "tests/native/generator_reference.tsv").string()});
@@ -122,7 +110,6 @@ lh::fs::path parity(lh::Case &t, const O &spec, const std::string &label) {
 void spec_error(lh::Case &t, const O &spec, const std::string &message) {
     auto path = t.temp() / "invalid.json";
     lh::write_file(path, J(spec).dump());
-    record(t, spec, "invalid");
     auto res = t.run(t.harness("lionheart-gen-spec").args({path, t.temp() / "invalid-output"}));
     LH_CHECK(res.rc > 0);
     LH_CONTAINS(res.err, message);
@@ -583,7 +570,6 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
         policy["fuse_forward"] = fused ? A{"f_80010000"} : A{};
         O spec = {{"main", main}, {"timing", "block"}, {"host_mode", "fast"}, {"register_cache", policy}};
         auto outdir = emit(t, spec, "behavior");
-        record(t, spec, "behavior");
         auto binary = t.temp() / "probe.so";
         auto cmd = t.host("cc").args({"-std=c99", "-O2", "-DFF8_COMPACT", "-DFF8_TIMING_INLINE"});
         if (cache)

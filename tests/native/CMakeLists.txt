@@ -20,7 +20,7 @@ set(lh_sanitize_default OFF)
 if(DEFINED ENV{FF8_TEST_SANITIZE} AND NOT "$ENV{FF8_TEST_SANITIZE}" STREQUAL "")
   set(lh_sanitize_default ON)
 endif()
-option(FF8_TEST_SANITIZE "Add each harness SANITIZE_FLAGS list, like the variable of that name does for pytest" ${lh_sanitize_default})
+option(FF8_TEST_SANITIZE "Enable each harness SANITIZE_FLAGS list" ${lh_sanitize_default})
 set(LH_SANITIZE -fsanitize=address,undefined -fno-omit-frame-pointer)
 set(LH_HOST_RUNNER "" CACHE FILEPATH "Prebuilt runner from a native build, required when cross-compiling")
 
@@ -28,7 +28,7 @@ define_property(GLOBAL PROPERTY LH_HARNESSES BRIEF_DOCS "Harness targets" FULL_D
 
 # lh_harness(NAME
 #   SOURCES a.c b.cpp        relative to the repository root
-#   [FLAGS ...]              C compile flags, copied from the Python cc line
+#   [FLAGS ...]              C compile flags
 #   [CXX_FLAGS ...]          the same for C++ sources
 #   [INCLUDES runtime ...]   relative to the repository root
 #   [LINK_FLAGS ...]         only for the link, such as -Wl,--wrap=calloc

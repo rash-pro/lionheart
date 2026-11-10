@@ -27,7 +27,7 @@ https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz (SHA-256 and size are locked in
 [windows-deps.json](tools/windows-deps.json)). The shipped build disables GPL,
 nonfree, version3 and network components. `licences/FFmpeg-configure.txt`
 records its complete configure command; `licences/FFmpeg-source.txt` accompanies
-the DLLs. Rebuild with `python3 tools/build_windows.py`. Users may replace the
+the DLLs. Rebuild with `cmake -P tools/build_windows.cmake`. Users may replace the
 shared libraries with compatible modified versions.
 
 SDL2, zlib and the compiler's exact source/archive URLs, versions and SHA-256

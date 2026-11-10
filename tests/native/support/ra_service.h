@@ -34,9 +34,7 @@ class RaService {
         std::string mode = "ok", award_mode = "ok", token = "test-token";
         bool unknown = false, set_failure = false;
         unsigned delay_ms = 0;
-        // Fixed values are used only by the disposable Python equivalence check.
-        time_t now = 0;
-        std::string origin, server = "LionheartFixture/1";
+
     };
     RaService() : listener_(socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) {
         socket_check(listener_.get() >= 0, "service socket");
@@ -136,7 +134,7 @@ class RaService {
         return i == p.end() ? "" : i->second;
     }
     std::string achievement_set(const Config &c) const {
-        const auto u = c.origin.empty() ? url_ : c.origin;
+        const auto u = url_;
         std::string entries;
         const char *titles[] = {"First signal", "Measured signal", "Saved signal"};
         const char *defs[] = {"0xH000100=7", "M:0xH000100>=10", "0xH000101=42"};
@@ -199,7 +197,7 @@ class RaService {
         if (op == "startsession")
             return {200, "{\"Success\": true, \"Unlocks\": [], \"HardcoreUnlocks\": "
                          "[], \"ServerNow\": " +
-                             std::to_string(c.now ? c.now : std::time(nullptr)) + "}"};
+                             std::to_string(std::time(nullptr)) + "}"};
         if (op == "awardachievement") {
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -305,7 +303,6 @@ class RaService {
                 requests_.push_back({path, params, get(headers, "user-agent")});
             }
             sleep_ms(c.delay_ms);
-            // A delayed Python response reads mutable service flags after sleeping.
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 c = config_;
@@ -316,7 +313,7 @@ class RaService {
             mime = "application/json";
         } else
             throw Failure("unsupported fixture HTTP method: " + method);
-        time_t now = c.now ? c.now : std::time(nullptr);
+        time_t now = std::time(nullptr);
         tm utc{};
         gmtime_r(&now, &utc);
         char date[64];
@@ -325,7 +322,7 @@ class RaService {
                              : status == 400 ? "Bad Request"
                              : status == 403 ? "Forbidden"
                                              : "Service Unavailable";
-        auto bytes = "HTTP/1.0 " + std::to_string(status) + " " + reason + "\r\nServer: " + c.server +
+        auto bytes = "HTTP/1.0 " + std::to_string(status) + " " + reason + "\r\nServer: " + std::string("LionheartFixture/1") +
                      "\r\nDate: " + date + "\r\nContent-Type: " + mime +
                      "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
         size_t at = 0;

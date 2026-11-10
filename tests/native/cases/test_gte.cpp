@@ -1,7 +1,6 @@
 // GTE register/command vectors derived from psx-spx's hardware equations.
 // No emulator implementation supplies expected results; external corpora stay optional.
 #include "lh_test.h"
-#include "equiv.h"
 #include "py_random.h"
 #include "lh_json.h"
 #include <cstdlib>
@@ -113,7 +112,7 @@ LH_TEST_P(test_unr_all_denominators,host) {
     GTE g(t); g.write(27,1,true);
     for(uint32_t z=1;z<65536;++z) {
         const uint32_t h=(z*12345)&65535; auto e=unr(h,z);
-        lh::equiv::record(t,h,z,e.quotient,uint32_t(e.overflow));
+
         g.write(7,z,true); g.write(26,h,true); g.command(1);
         LH_CHECK_MSG(g.read(24)==e.quotient,"UNR h="+std::to_string(h)+" z="+std::to_string(z));
         LH_EQ(bool(g.flag()&(1<<17)),e.overflow);
@@ -156,7 +155,7 @@ LH_TEST_P(test_mvmva_every_selection,selections()) {
     for(int k=0;k<4;++k) g.vector(k,vectors[k]);
     g.write(6,5); g.write(8,7); matrices[3]={{{-80,80,7},{3,3,3},{5,5,5}}};
     auto e=mvmva(matrices[mx],vectors[vs],translations[cv],cv,sf,lm);
-    lh::equiv::record(t,int32_t(mx),int32_t(vs),int32_t(cv),int32_t(sf),int32_t(lm),matrices[mx][0],matrices[mx][1],matrices[mx][2],vectors[vs],translations[cv],e.mac,e.ir,e.flag);
+
     g.command(0x12,sf,lm,mx,vs,cv); g.triple(25,e.mac); g.triple(9,e.ir); LH_EQ(g.flag(),e.flag);
 }
 LH_TEST_P(test_mvmva_far_color_discarded_stage_still_flags,host) {
@@ -214,11 +213,11 @@ LH_TEST_P(test_op_and_square,(params({{0,0},{0,1},{1,0},{1,1}}))) {
     GTE g(t); int sf=p.v[0],lm=p.v[1]; g.matrix(0,{{{2,99,99},{99,3,99},{99,99,4}}});
     g.vector(3,{5,6,7}); g.command(12,sf,lm);
     Triple e=shifted({-3,6,-3},sf), ir=clamped(e,lm);
-    lh::equiv::record(t,int32_t(sf),int32_t(lm),e,ir,flags(lm?((1<<24)|(1<<22)):0));
+
     g.triple(25,e); g.triple(9,ir); LH_EQ(g.flag(),flags(lm?((1<<24)|(1<<22)):0));
     g.vector(3,{-32768,-3,4}); g.command(40,sf,lm);
     e=shifted({1073741824,9,16},sf); ir=clamped(e,lm);
-    lh::equiv::record(t,e,ir,uint32_t(0x81000000));
+
     g.triple(25,e); g.triple(9,ir); LH_EQ(g.flag(),0x81000000u);
 }
 LH_TEST_P(test_color_command_hand_vectors,colors) {
@@ -266,7 +265,7 @@ LH_TEST_P(test_gpf_gpl_signed_input_and_base,gpf_rows()) {
     for(unsigned i=0;i<3;++i) g.write(25+i,old[i]);
     e=gpf_gpl(input,old,cmd,sf,-16); ir=clamped(e,lm);
     const auto rgb=color(e);
-    lh::equiv::record(t,int32_t(cmd),int32_t(sf),int32_t(lm),input,old,int64_t(-16),e,ir,rgb);
+
     g.command(cmd,sf,lm); g.triple(25,e); g.triple(9,ir); LH_EQ(g.read(22),rgb);
 }
 LH_TEST_P(test_gpl_44_bit_overflow,host) {
@@ -282,11 +281,11 @@ LH_TEST_P(test_deterministic_extreme_command_sequences,host) {
     for(int round=0;round<200;++round) {
         for(unsigned reg=0;reg<64;++reg) {
             const uint32_t value=rng.randrange(2)?extremes[rng.randrange(7)]:rng.getrandbits(32);
-            lh::equiv::record(t,uint32_t(reg),value); g.write(reg&31,value,reg>=32);
+             g.write(reg&31,value,reg>=32);
         }
         for(int cmd:commands) {
             const int sf=rng.randrange(2), lm=rng.randrange(2), mx=rng.randrange(4), v=rng.randrange(4), cv=rng.randrange(4);
-            lh::equiv::record(t,int32_t(cmd),int32_t(sf),int32_t(lm),int32_t(mx),int32_t(v),int32_t(cv));
+
             g.command(cmd,sf,lm,mx,v,cv); LH_EQ(g.flag(),flags(g.flag()&0x7ffff000));
             for(unsigned reg=9;reg<12;++reg) { auto n=s32(g.read(reg)); LH_CHECK(n>=-32768&&n<=32767); }
             LH_EQ(g.read(15),g.read(14)); LH_EQ(g.read(28),g.read(29)); LH_CHECK(g.read(29)<=32767);

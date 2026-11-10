@@ -1,7 +1,5 @@
 build/
 dist/
-__pycache__/
-.pytest_cache/
 *.bin
 *.cue
 *.iso
@@ -14,5 +12,3 @@ __pycache__/
 *.gpu
 *.log
 *.png.dump
-.venv/
-*.egg-info/
