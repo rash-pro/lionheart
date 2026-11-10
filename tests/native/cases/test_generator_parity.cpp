@@ -110,7 +110,6 @@ lh::fs::path parity(lh::Case &t, const O &spec, const std::string &label) {
 void spec_error(lh::Case &t, const O &spec, const std::string &message) {
     auto path = t.temp() / "invalid.json";
     lh::write_file(path, J(spec).dump());
-    record(t, spec, "invalid");
     auto res = t.run(t.harness("lionheart-gen-spec").args({path, t.temp() / "invalid-output"}));
     LH_CHECK(res.rc > 0);
     LH_CONTAINS(res.err, message);
@@ -571,7 +570,6 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
         policy["fuse_forward"] = fused ? A{"f_80010000"} : A{};
         O spec = {{"main", main}, {"timing", "block"}, {"host_mode", "fast"}, {"register_cache", policy}};
         auto outdir = emit(t, spec, "behavior");
-        record(t, spec, "behavior");
         auto binary = t.temp() / "probe.so";
         auto cmd = t.host("cc").args({"-std=c99", "-O2", "-DFF8_COMPACT", "-DFF8_TIMING_INLINE"});
         if (cache)
