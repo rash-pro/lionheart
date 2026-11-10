@@ -10,14 +10,14 @@ mkdir -p "$work/bin" "$work/env" "$work/home" "$work/config" "$work/data"
 if [ "$mode" = zig ]; then
   real=$(find "$work/data/lionheart/toolchain" -name zig -type f | head -1)
   test -n "$real"
-  mv "$real" "$real.real"
-  cp "$wrapper" "$real"
-  real=$real.real
+  cp "$wrapper" "$work/bin/zig"
+  driver=$work/bin/zig
   path=/usr/bin:/bin
 else
   real=$(command -v clang || command -v gcc)
   cp "$wrapper" "$work/bin/clang"
   path=$work/bin:/usr/bin:/bin
+  driver=$work/bin/clang
 fi
 : > "$work/empty.ini"
 set -- HOME="$work/home" XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/config" \
@@ -28,11 +28,11 @@ if [ -n "${APPIMAGE_EXTRACT_AND_RUN:-}" ]; then set -- "$@" APPIMAGE_EXTRACT_AND
 printf '%s\n' "$@" | sort > "$work/launch.env"
 status=0
 env -i "$@" timeout -s TERM "${COMPILER_TEST_SECONDS:-600}" "$image" --config "$work/empty.ini" \
-  --headless --native-build-only --native-status --native-workers 6 --disc "$disc" \
+  --headless --native-compiler "$driver" --native-build-only --native-status --native-workers 6 --disc "$disc" \
   > "$work/out.txt" 2> "$work/err.txt" || status=$?
 # A timeout is sufficient only after the real first tier has completed.
 test "$status" = 0 || test "$status" = 124
-grep -Eq 'first tier [1-9][0-9]*[.]' "$work/err.txt"
+grep -Eq 'native: built main |first tier [1-9][0-9]*[.]' "$work/err.txt"
 # The builder intentionally directs compiler temporary files into its private
 # cache; these are the only additions to the user's launch environment.
 sed '/^TMPDIR=/d' "$work/launch.env" > "$work/expected.env"

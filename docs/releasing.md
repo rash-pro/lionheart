@@ -32,7 +32,7 @@ program the player starts, a compiler included, sees the environment the user la
 | libcurl 8.22.0 (`libcurl.so.4`), HTTP and HTTPS only | curl (MIT-style) | `curl.txt` |
 | zlib 1.3.1, linked into the player | zlib | `zlib.txt` |
 | AppImage type2-runtime (944,632-byte launcher) | MIT, BSD-2-Clause, BSD-3-Clause, zlib; libfuse LGPL-2.1-or-later | `AppImage-runtime.txt`, `AppImage-LGPL-2.1.txt`, `AppImage-source.txt` |
-| Lionheart and its vendored code | MIT, ISC, BSD-2-Clause, zlib, OFL-1.1 | as in the Windows folder |
+| Lionheart and its vendored code | MIT, ISC, 0BSD, BSD-2-Clause, zlib, OFL-1.1 | as in the Windows folder |
 
 From the system it needs glibc 2.35 or later, libstdc++ (GLIBCXX 3.4.30, from GCC 12), OpenSSL 3 (`libssl.so.3`,
 `libcrypto.so.3`), D-Bus (`libdbus-1.so.3`), and at run time the display, audio and input libraries SDL2 opens,
@@ -90,7 +90,7 @@ it downloads the official Zig tar.xz from ziglang.org and decodes it with the
 vendored xz decoder. No compiler or game data ships in either package.
 Check the packaged version with `./Lionheart-VERSION-x86_64.AppImage --version`.
 The desktop entries accept `%f` and declare `application/x-cue`, as the installed
-player does; the desktop MIME cache is generated inside the package prefix.
+player does; when available, `update-desktop-database` refreshes the MIME cache inside the prefix.
 
 The no-disc check is `sh packaging/linux/test-appimage.sh PACKAGE`; it also checks
 the untouched launch environment. For actual compiler processes, compile

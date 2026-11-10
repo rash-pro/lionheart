@@ -8,7 +8,7 @@
 
 typedef struct { char *name; uint32_t size, packed, crc, offset, mode; } entry;
 static FILE *out;
-static void fail(const char *why) { fprintf(stderr, "toolchain-zip: %s\n", why); exit(1); }
+static void fail(const char *why) { fprintf(stderr, "package-zip: %s\n", why); exit(1); }
 static void put(uint32_t v, unsigned n) {
     while(n--) { if(fputc(v & 255, out)==EOF) fail("write failed"); v >>= 8; }
 }
