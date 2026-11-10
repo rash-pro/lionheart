@@ -169,7 +169,8 @@ static lhg_overlay_set *append_overlay(lhg_ctx *ctx, lhg_overlay_set **list, siz
 }
 
 /* The legacy baseline: the 24 top-table sets per disc, addressed by loader index. */
-static void extract_disc(lhg_arena *arena, const char *cue, const char *work, const lhg_json *metadata,
+static int extract_disc(lhg_arena *arena, const char *cue, const char *work, const lhg_json *metadata,
+                         const lhg_json *identity,
                          lhg_image **main_out, lhg_overlay_set **overlays, size_t *overlay_count, size_t *overlay_capacity)
 {
     lhg_ctx *ctx = arena->ctx;
@@ -217,9 +218,12 @@ static void extract_disc(lhg_arena *arena, const char *cue, const char *work, co
     uint8_t *exe = lhg_disc_read(&disc, record->record.lba, record->record.size);
     char sha1[41];
     lhg_sha1_hex(exe, record->record.size, sha1);
+    if (identity && (record->record.size != lhg_json_int(ctx, lhg_json_require(ctx, identity, "file_size", "EXE identity"), "file_size") ||
+        strcmp(sha1, lhg_json_str(ctx, lhg_json_require(ctx, identity, "sha1", "EXE identity"), "sha1"))))
+        lhg_fail(ctx, "unsupported disc EXE identity");
     if (strcmp(sha1, lhg_json_str(ctx, lhg_json_require(ctx, metadata, "exe_sha1", "overlays.json"), "exe_sha1")))
         lhg_fail(ctx, "unsupported disc EXE SHA-1");
-    lhg_write_file(ctx, lhg_fmt(arena, "%s/SLUS_008.92", work), exe, record->record.size);
+    lhg_write_if_changed(ctx, lhg_fmt(arena, "%s/SLUS_008.92", work), exe, record->record.size);
     lhg_image *image = parse_exe(arena, exe, record->record.size);
     apply_exe_metadata(arena, image, metadata, exe, record->record.size);
 
@@ -266,19 +270,17 @@ static void extract_disc(lhg_arena *arena, const char *cue, const char *work, co
             lhg_free(ctx, raw);
         char digits[16];
         snprintf(digits, sizeof digits, "%02d", index);
-        lhg_write_file(ctx, lhg_fmt(arena, "%s/%s.bin", destination, digits), data, data_size);
+        lhg_write_if_changed(ctx, lhg_fmt(arena, "%s/%s.bin", destination, digits), data, data_size);
         lhg_image *overlay = lhg_arena_alloc(arena, sizeof *overlay);
         memset(overlay, 0, sizeof *overlay);
         overlay->data = data;
         overlay->size = data_size;
         overlay->base = base;
         overlay->entry = entry_for_top(index, base);
-        size_t seed_count;
-        uint32_t *seeds = lhg_prologue_seeds(arena, data, data_size, base, &seed_count);
         lhg_overlay_set *set = append_overlay(ctx, &sets, &set_count, &set_capacity);
+        memset(set, 0, sizeof *set);
         set->index = (number - 1) * 32 + index;
         set->image = overlay;
-        lhg_discover(arena, overlay, seeds, seed_count, 0, &set->functions);
     }
     lhg_free(ctx, table);
     lhg_disc_close(&disc);
@@ -293,19 +295,25 @@ static void extract_disc(lhg_arena *arena, const char *cue, const char *work, co
     for (size_t index = 0; index < set_count; index++)
         *append_overlay(ctx, overlays, overlay_count, overlay_capacity) = sets[index];
     lhg_free(ctx, sets);
+    return number;
 }
 
 void lhg_load_legacy_discs(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
-                           const char *assets_dir, lhg_program *program)
+                           const char *assets_dir, lhg_program *program, int verify_exe_identity)
 {
     lhg_ctx *ctx = arena->ctx;
     const lhg_json *metadata = load_json(arena, catalog_dir, "overlays.json");
+    const lhg_json *identity = verify_exe_identity ? load_json(arena, catalog_dir, "exe-identity.json") : NULL;
     lhg_make_directories(ctx, assets_dir);
     lhg_image *image = NULL;
     lhg_overlay_set *overlays = NULL;
     size_t overlay_count = 0, overlay_capacity = 0;
+    unsigned disc_mask = 0;
     for (int index = 0; index < cue_count; index++) {
-        extract_disc(arena, cues[index], assets_dir, metadata, &image, &overlays, &overlay_count, &overlay_capacity);
+        int number = extract_disc(arena, cues[index], assets_dir, metadata, identity, &image, &overlays, &overlay_count, &overlay_capacity);
+        if (disc_mask & (1u << number))
+            lhg_fail(ctx, "the same disc was supplied more than once");
+        disc_mask |= 1u << number;
         lhg_progress(ctx, "discs", (unsigned long)(index + 1), (unsigned long)cue_count);
     }
     if (overlay_count)
@@ -314,6 +322,18 @@ void lhg_load_legacy_discs(lhg_arena *arena, const char *catalog_dir, const char
     program->main = image;
     program->overlays = overlays;
     program->overlay_count = overlay_count;
+    program->disc_mask = disc_mask;
+}
+
+void lhg_discover_legacy(lhg_arena *arena, lhg_program *program)
+{
+    for (size_t index = 0; index < program->overlay_count; index++) {
+        lhg_overlay_set *set = &program->overlays[index];
+        const lhg_image *image = set->image;
+        size_t count;
+        uint32_t *seeds = lhg_prologue_seeds(arena, image->data, image->size, (uint32_t)image->base, &count);
+        lhg_discover(arena, image, seeds, count, 0, &set->functions);
+    }
 }
 
 /* ---- full catalog ---- */

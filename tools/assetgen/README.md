@@ -43,12 +43,12 @@ not passed to that project. The helper supports multi-configuration generators
 by building its Release configuration at a fixed output path.
 
 Python scripts remain available as parity oracles until their importing tests
-are migrated. The Windows dependency fetcher, build driver, setup, staging and
+are migrated. The Windows dependency fetcher, build driver, staging and
 release scanner still need their separate ports. The driver relocates cached
 pkg-config prefixes and stages dependency notices after building; its replacement
 must preserve both steps and the pinned dependency identities. The developer
-restoration ABI still hashes `recomp/*.py`; the generator port must replace
-those source-identity inputs. The missing-catalog diagnostic still names setup.
+restoration ABI hashes the native generator fingerprint. The missing-catalog
+diagnostic points to `cmake -P tools/setup.cmake -- --disc1 DISC`.
 
 CI workflows are unchanged. The eventual CI switch removes setup-python and
 pip, builds the native suite, and runs CTest with the existing tier selection.
