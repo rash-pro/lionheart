@@ -33,7 +33,8 @@ jobs:
           key: windows-ucrt-${{ runner.os }}-${{ hashFiles('tools/windows-deps.json', 'tools/*windows*.cmake', 'tools/release_common.cmake', 'tools/stage_player.cmake', 'cmake/toolchains/windows-llvm-mingw.cmake') }}
       - name: Cross-build and stage player
         run: cmake -DJOBS=4 -P tools/build_windows.cmake
-      # The runner and its process helpers require POSIX. Cross-target executable
-      # cases need Wine; DLL cases cannot load into the Linux host runner.
-      - name: Check native cross-build tools
+      # The cross-target test configure requires libcurl and zlib pkg-config
+      # modules absent from the pinned Windows dependencies. Executable cases
+      # also need Wine, and DLL cases cannot load into the Linux host runner.
+      - name: Build release scanner
         run: cmake -S tools/player-check -B build/player-check && cmake --build build/player-check -j4

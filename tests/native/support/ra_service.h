@@ -34,7 +34,7 @@ class RaService {
         std::string mode = "ok", award_mode = "ok", token = "test-token";
         bool unknown = false, set_failure = false;
         unsigned delay_ms = 0;
-        
+
     };
     RaService() : listener_(socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0)) {
         socket_check(listener_.get() >= 0, "service socket");
