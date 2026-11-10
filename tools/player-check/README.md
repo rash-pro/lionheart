@@ -11,7 +11,8 @@ build/player-check/check_player_binary build/linux/lionheart /path/to/owned/SLUS
 
 Repeat `--disc` for all four discs. The tool reads their CUE and raw MODE2/2352 images in place.
 It uses the checked-in USA metadata to verify the EXE, complete legacy overlays, stored catalog images and
-loader-bounded catalog images. It preserves catalog deduplication and set ordering, including effects and
+loader-bounded catalog images. Battle-stage code prefixes from `overlays.json` are scanned as well, each
+variant's code checked against its recorded SHA-1. It preserves catalog deduplication and set ordering, including effects and
 ambiguous effect-address rejection. Function discovery and C emission are unnecessary for a byte scan.
 No extracted disc bytes or window fingerprints are written to disk.
 

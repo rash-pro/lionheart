@@ -37,6 +37,14 @@ void lhg_image_validate(lhg_ctx *ctx, const lhg_image *image)
         lhg_fail(ctx, "image extends past the 32-bit address space");
 }
 
+int lhg_entry_hint_valid(const lhg_image *image, int64_t pc)
+{
+    if (!lhg_image_executable(image, pc))
+        return 0;
+    lhg_insn i = lhg_image_insn(image, pc);
+    return i.word && i.op != LHG_OP_RESERVED && i.op != LHG_OP_COP_UNUSABLE;
+}
+
 static size_t word_index(const lhg_image *image, int64_t pc)
 {
     return (size_t)(pc - (int64_t)(image->base & ~3u)) / 4;
@@ -188,6 +196,10 @@ static size_t jump_table(lhg_ctx *ctx, const lhg_image *image, int64_t pc, uint3
         default:
             break;
         }
+        /* Naming r0 as a destination discards the result; r0 stays zero. */
+        constants[0] = 0;
+        known[0] = 1;
+        has_base[0] = 0;
     }
     return 0;
 }
@@ -200,6 +212,29 @@ static int is_zero_run(const uint8_t *at)
     return 1;
 }
 
+enum { ZERO_FUNCTION_LIMIT = 8192 };
+
+/* The end of a function made of no-ops and one return, a delay its callers
+ * time by, or -1. Only a catalog entry hint is trusted to start one, and the
+ * return must come within ZERO_FUNCTION_LIMIT bytes: zero-filled data never
+ * ends in a return at a hinted address, so it stays untranslated. */
+static int64_t zero_function_end(const lhg_image *image, int64_t entry)
+{
+    int hinted = 0;
+    for (size_t index = 0; index < image->entry_point_count && !hinted; index++)
+        hinted = (int64_t)image->entry_points[index] == entry;
+    if (!hinted)
+        return -1;
+    for (int64_t pc = entry; pc < entry + ZERO_FUNCTION_LIMIT && lhg_image_executable(image, pc + 4); pc += 4) {
+        uint32_t word = lhg_image_word(image, pc);
+        if (word == 0x03E00008u)
+            return pc + 8;
+        if (word)
+            return -1;
+    }
+    return -1;
+}
+
 void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seeds, size_t seed_count, int scan_calls,
                   lhg_functions *functions)
 {
@@ -208,7 +243,10 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
     size_t words = word_index(image, (int64_t)image->base + (int64_t)image->size + 3) + 1;
     uint8_t *is_entry = lhg_zalloc(ctx, words, 1);
     uint8_t *has_function = lhg_zalloc(ctx, words, 1);
+    /* stamp: added to the current function; visited: its successors followed too.
+     * A delay slot is added with its branch but only visited when reached. */
     uint32_t *stamp = lhg_zalloc(ctx, words, sizeof *stamp);
+    uint32_t *visited = lhg_zalloc(ctx, words, sizeof *visited);
 
     pc_stack initial = {0}, pending = {0}, todo = {0};
     /* Candidate calls are validated against the image; traversal, not a fixed
@@ -257,6 +295,7 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
         has_function[word_index(image, entry)] = 1;
         generation++;
         insn_count = table_count = table_word_count = 0;
+        int64_t zero_end = zero_function_end(image, entry);
         todo.count = 0;
         push(ctx, &todo, entry);
         while (todo.count) {
@@ -264,18 +303,23 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
             if (!lhg_image_executable(image, pc))
                 continue;
             size_t at = word_index(image, pc);
-            if (stamp[at] == generation)
+            if (visited[at] == generation)
                 continue;
             if (pc != entry && is_entry[at])
                 continue;
             /* Do not translate zero-filled buffers as hundreds of thousands of
-             * NOPs. A real transfer there remains covered by the interpreter. */
-            if (lhg_image_contains(image, pc + 60) && is_zero_run(image->data + (size_t)(pc - (int64_t)image->base)))
+             * NOPs. A real transfer there remains covered by the interpreter,
+             * except within a hinted function of no-ops and a return. */
+            if (lhg_image_contains(image, pc + 60) && is_zero_run(image->data + (size_t)(pc - (int64_t)image->base)) &&
+                !(pc >= entry && pc < zero_end))
                 continue;
             lhg_insn i = lhg_image_insn(image, pc);
-            insns = lhg_grow(ctx, insns, &insn_capacity, insn_count, sizeof *insns);
-            insns[insn_count++] = i;
-            stamp[at] = generation;
+            if (stamp[at] != generation) {
+                insns = lhg_grow(ctx, insns, &insn_capacity, insn_count, sizeof *insns);
+                insns[insn_count++] = i;
+                stamp[at] = generation;
+            }
+            visited[at] = generation;
             uint16_t flags = lhg_op_flags[i.op];
             if (flags & (LHG_F_CONTROL | LHG_F_COPBRANCH)) {
                 if (lhg_image_executable(image, pc + 4) && stamp[word_index(image, pc + 4)] != generation) {
@@ -352,6 +396,7 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
     lhg_free(ctx, is_entry);
     lhg_free(ctx, has_function);
     lhg_free(ctx, stamp);
+    lhg_free(ctx, visited);
     lhg_free(ctx, initial.items);
     lhg_free(ctx, pending.items);
     lhg_free(ctx, todo.items);
@@ -426,4 +471,23 @@ uint32_t *lhg_prologue_seeds(lhg_arena *arena, const uint8_t *data, size_t size,
     }
     *count = used;
     return seeds;
+}
+
+size_t lhg_code_prefix(lhg_arena *arena, lhg_image *image, size_t limit, lhg_functions *functions)
+{
+    if (image->size > limit)
+        image->size = limit;
+    size_t count;
+    uint32_t *seeds = lhg_prologue_seeds(arena, image->data, image->size, image->base, &count);
+    lhg_discover(arena, image, seeds, count, 0, functions);
+    uint64_t end = image->base;
+    for (size_t row = 0; row < functions->count; row++) {
+        const lhg_function *f = &functions->items[row];
+        if (f->insn_count && (uint64_t)f->insns[f->insn_count - 1].pc + 4 > end)
+            end = (uint64_t)f->insns[f->insn_count - 1].pc + 4;
+        if (f->table_word_count && (uint64_t)f->table_words[f->table_word_count - 1] + 4 > end)
+            end = (uint64_t)f->table_words[f->table_word_count - 1] + 4;
+    }
+    image->size = (size_t)(end - image->base);
+    return image->size;
 }

@@ -43,8 +43,18 @@ static void f_80100000(cpu_t *c) {
     main_function(c);
     cpu_stop(c, "overlay %d", 7);
 }
+/* Two entries at one address are the variants of a code prefix and load; a
+ * table that runs backwards does not. */
+#if defined(MODULE_OVERLAY_SHARED_ADDRESS)
+static const entry_t module_entries[] = {{0x80100000u, f_80100000}, {0x80100000u, f_80100000}};
+static const code_region_t *const module_regions[] = {&code_80100000, &code_80100000};
+#elif defined(MODULE_OVERLAY_OUT_OF_ORDER)
+static const entry_t module_entries[] = {{0x80100004u, f_80100000}, {0x80100000u, f_80100000}};
+static const code_region_t *const module_regions[] = {&code_80100000, &code_80100000};
+#else
 static const entry_t module_entries[] = {{0x80100000u, f_80100000}};
 static const code_region_t *const module_regions[] = {&code_80100000};
+#endif
 /* Never run. It names every runtime entry point a generated body can reach, so
  * a header change that leaves one out of the call table fails this link. */
 LH_MODULE_EXPORT void lh_module_probe(cpu_t *c);
@@ -75,7 +85,7 @@ LH_MODULE_EXPORT const lh_module_descriptor_t lh_module_descriptor = {
     LH_MODULE_MAGIC, LH_MODULE_ABI_VERSION, (uint32_t)sizeof(lh_module_descriptor_t), LH_MODULE_ABI_ID,
     LH_MODULE_TRAITS_INIT, SET_INDEX, SET_BASE, SET_SIZE, {0},
     DESCRIPTOR_EXE_FNV, EXE_BASE, EXE_SIZE,
-    module_entries, 1, module_regions,
+    module_entries, (uint32_t)(sizeof(module_entries) / sizeof(*module_entries)), module_regions,
     IMPORTS, &lh_api
 };
 #else

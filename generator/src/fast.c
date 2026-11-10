@@ -75,7 +75,8 @@ void lhg_analyze(lhg_arena *arena, const lhg_function *f, lhg_analysis *analysis
         const lhg_insn *i = &f->insns[index];
         if (!lhg_insn_flow(i))
             continue;
-        const lhg_insn *target = lhg_function_insn(f, (int64_t)lhg_insn_target(i));
+        /* A register jump has no static target: its low half holds rd, shamt and funct. */
+        const lhg_insn *target = i->op == LHG_OP_JR || i->op == LHG_OP_JALR ? NULL : lhg_function_insn(f, (int64_t)lhg_insn_target(i));
         if (target)
             analysis->is_leader[target - f->insns] = 1;
         const lhg_insn *after = lhg_function_insn(f, (int64_t)i->pc + 8);
@@ -566,8 +567,9 @@ static int instruction(emitter *e, lhg_lines *out, const lhg_insn *i, int pendin
     return defer ? load : 0;
 }
 
-/* pc is the numeric target unless expr supplies a runtime expression; window
- * lookup by expression yields zero, matching a miss in the window table. */
+/* pc is the numeric target unless expr supplies a runtime expression. A runtime
+ * target has no static window; a numeric one has the window of the instruction
+ * there when this function holds it, and none otherwise. */
 static void tick(emitter *e, lhg_lines *out, int64_t pc, const char *expr, int count, int pending, int reset, const char *window)
 {
     if (e->timing != LHG_TIMING_EXACT) {
@@ -650,7 +652,10 @@ static void call(emitter *e, lhg_lines *out, const lhg_insn *i, int pending, int
     int64_t back = (int64_t)i->pc + 8;
     const char *target = i->op == LHG_OP_JALR ? "target" : lhg_fmt(e->arena, "%U", lhg_insn_target(i));
     lhg_lines_addf(out, "c_transfer_stats(c, %U, %s, C_DISPATCH_CALL);", i->pc, target);
-    tick(e, out, 0, target, count, pending, 1, NULL);
+    if (i->op == LHG_OP_JALR)
+        tick(e, out, 0, target, count, pending, 1, NULL);
+    else
+        tick(e, out, (int64_t)lhg_insn_target(i), NULL, count, pending, 1, NULL);
     export_pending(e, out, pending);
     if (e->compact) {
         lhg_lines_add(out, "return;");

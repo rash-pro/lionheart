@@ -44,7 +44,8 @@ const lhg_function *lhg_available_find(const lhg_available *available, uint32_t 
 /* Appends one emitted variant to out; no trailing newline handling beyond the emitter's own. */
 void lhg_emit_fast_variant(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available, int trace,
                            int compact, int poll_forward, int direct_memory, lhg_text *out);
-void lhg_emit_precise(lhg_arena *arena, const lhg_analysis *analysis, lhg_text *out);
+/* suffix tells apart two functions of one module that start at the same address. */
+void lhg_emit_precise(lhg_arena *arena, const lhg_analysis *analysis, const char *suffix, lhg_text *out);
 void lhg_emit_timing(lhg_arena *arena, const lhg_analysis *analysis, const lhg_available *available,
                      lhg_timing timing, int inline_blocks, int fuse_forward, lhg_text *out);
 
@@ -87,8 +88,14 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
 /* The module shape: one self-contained, separately loadable tree per set. */
 void lhg_emit_modules(lhg_arena *arena, const lhg_image *image, const lhg_functions *functions, const char *output,
                       const lhg_overlay_set *overlays, size_t overlay_count, lhg_emit_result *result);
+/* The images one module is generated from: one, or the variants of a code prefix. */
+typedef struct {
+    const lhg_image *image;
+    const lhg_functions *functions;
+} lhg_module_part;
+
 /* One set of that shape, into directory (NULL: nowhere), with its content key; see lhg_session_emit. */
-void lhg_emit_module_set(lhg_arena *arena, const lhg_image *exe, int index, const lhg_image *image, const lhg_functions *functions,
+void lhg_emit_module_set(lhg_arena *arena, const lhg_image *exe, int index, const lhg_module_part *parts, size_t part_count,
                          const char *directory, char key[65]);
 
 #endif

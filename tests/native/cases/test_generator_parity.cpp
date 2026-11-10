@@ -1,38 +1,8 @@
-#include "lh_json.h"
-#include "recompiler_fixture.h"
-#include <array>
+#include "generator_cases.h"
 #include <dlfcn.h>
-#include <iomanip>
 
 namespace {
-using namespace lh::gen;
-using J = lh::Json;
-using O = J::Object;
-using A = J::Array;
-constexpr uint32_t BASE = 0x80010000;
-J num(uint64_t n) { return J(int64_t(n)); }
-std::string hex(const std::string &s) {
-    static const char digits[] = "0123456789abcdef";
-    std::string out;
-    for (unsigned char c : s) {
-        out += digits[c >> 4];
-        out += digits[c & 15];
-    }
-    return out;
-}
-std::string symbol(uint32_t pc, const std::string &prefix = "") {
-    std::ostringstream s;
-    s << prefix << "f_" << std::hex << std::setfill('0') << std::setw(8) << pc;
-    return s.str();
-}
-
-O image(const std::string &data, uint32_t base = BASE) {
-    return {{"data", hex(data)}, {"base", num(base)}, {"entry", num(base)}};
-}
-O image(const Words &w, uint32_t base = BASE) { return image(pack(w), base); }
-O selection(A names, int cap = 8) { return {{"max_registers", cap}, {"functions", names}}; }
-O main_spec(O main) { return {{"main", main}}; }
-void put32(std::string &s, size_t at, uint32_t v) { s.replace(at, 4, pack({v})); }
+using namespace generator_cases;
 std::pair<std::string, A> split(int count, uint32_t base = BASE) {
     Words words;
     A seeds;
@@ -86,40 +56,6 @@ uint32_t random_word(lh::PyRandom &rng, uint32_t base, int count) {
     auto val = rng.getrandbits(16);
     return imm(op, rs, rt, val);
 }
-lh::fs::path emit(lh::Case &t, const O &spec, const std::string &label) {
-    auto path = t.temp() / (label + ".json"), out = t.temp() / (label + "-c");
-    lh::write_file(path, J(spec).dump());
-    t.ok(t.harness("lionheart-gen-spec").args({path, out}).timeout(120));
-    return out;
-}
-void compare(lh::Case &t, const O &spec, const std::string &label, const lh::fs::path &out) {
-    std::string key = t.name() + "/" + label;
-    auto cmd = t.host("cmake").args({"-DKEY=" + key, "-DOUTPUT=" + out.string(),
-                                     "-DREFERENCE=" + (t.root() / "tests/native/generator_reference.tsv").string()});
-    if (const char *dir = std::getenv("LH_REWRITE_GENERATOR_REFERENCE")) {
-        lh::fs::create_directories(dir);
-        cmd.arg("-DREWRITE=" + (lh::fs::path(dir) / (lh::sha256(key) + ".tsv")).string());
-    }
-    t.ok(cmd.args({"-P", t.root() / "tests/native/generator_reference.cmake"}));
-}
-lh::fs::path parity(lh::Case &t, const O &spec, const std::string &label) {
-    auto out = emit(t, spec, label);
-    compare(t, spec, label, out);
-    return out;
-}
-void spec_error(lh::Case &t, const O &spec, const std::string &message) {
-    auto path = t.temp() / "invalid.json";
-    lh::write_file(path, J(spec).dump());
-    auto res = t.run(t.harness("lionheart-gen-spec").args({path, t.temp() / "invalid-output"}));
-    LH_CHECK(res.rc > 0);
-    LH_CONTAINS(res.err, message);
-    LH_NOT_CONTAINS(res.err, "Sanitizer");
-    LH_NOT_CONTAINS(res.err, "runtime error");
-}
-std::string source(const lh::fs::path &out) { return lh::read_file(out / "functions_000.c"); }
-void contains_if(const std::string &s, const std::string &text, bool expected) {
-    LH_EQ(s.find(text) != std::string::npos, expected);
-}
 
 void programs(lh::Case &t, const std::string &fn, const J &p) {
     auto timing = p.contains("timing") ? p["timing"].text() : "exact";
@@ -146,7 +82,8 @@ void programs(lh::Case &t, const std::string &fn, const J &p) {
                 main["seeds"] = seeds;
                 O spec = {
                     {"main", main}, {"overlays", overlays}, {"mode", mode}, {"host_mode", host}, {"timing", timing}};
-                if (p["cache"].boolean()) {
+                // Exact timing has no register-cache lowering and refuses a selection.
+                if (p["cache"].boolean() && timing != "exact") {
                     A names;
                     for (const auto &s : seeds)
                         names.push_back(symbol(s.integer()));
@@ -479,39 +416,6 @@ void programs(lh::Case &t, const std::string &fn, const J &p) {
     LH_FAIL("unhandled program case: " + fn);
 }
 
-std::string valid_exe(const std::string &body = std::string(0x400, '\0')) {
-    std::string s(0x800, '\0');
-    s.replace(0, 8, "PS-X EXE");
-    put32(s, 0x10, BASE);
-    put32(s, 0x18, BASE);
-    put32(s, 0x1c, body.size());
-    return s + body;
-}
-std::string disc() {
-    std::string s(32 * 2352, '\0');
-    size_t d = 16 * 2352 + 24;
-    s[d] = 1;
-    s.replace(d + 1, 5, "CD001");
-    s[d + 156] = 34;
-    put32(s, d + 158, 18);
-    put32(s, d + 166, 2048);
-    s[d + 181] = 2;
-    return s;
-}
-std::string directory_record(std::string name, uint32_t lba, uint32_t size) {
-    std::string s(33 + name.size() + (1 - name.size() % 2), '\0');
-    s[0] = char(s.size());
-    put32(s, 2, lba);
-    put32(s, 10, size);
-    s[32] = char(name.size());
-    s.replace(33, name.size(), name);
-    return s;
-}
-std::string sha1(const std::string &s) {
-    char out[41];
-    lhg_sha1_hex(reinterpret_cast<const uint8_t *>(s.data()), s.size(), out);
-    return out;
-}
 std::string synthetic_disc(lh::Case &t) {
     auto data = disc(), exe = valid_exe();
     auto put = [&](int sector, const std::string &s) {
@@ -545,14 +449,6 @@ lh::fs::path catalog(lh::Case &t, const std::string &hash, A overlays, A locatio
                                                                    {"locations", locations}}}}})
                                                   .dump());
     return dir;
-}
-std::string cli(lh::Case &t, std::initializer_list<lh::Arg> args) {
-    auto res = t.run(t.harness("lionheart-gen").args(args).cwd(t.temp()).timeout(120));
-    LH_CHECK(res.rc > 0);
-    LH_NOT_CONTAINS(res.err, "Sanitizer");
-    LH_NOT_CONTAINS(res.err, "runtime error");
-    LH_CHECK_MSG(res.err.find("lionheart-gen: ") == 0 || res.err.find("usage") != std::string::npos, res.err);
-    return res.err;
 }
 void direct(lh::Case &t, const std::string &fn, const J &p) {
     if (fn == "test_native_forward_region_behavior") {
@@ -610,14 +506,20 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
         main["code_ranges"] = A{A{num(BASE), num(BASE + data.size())}};
         main["timing_entry_points"] = A{num(BASE + 16)};
         auto timing = p["timing"].text();
-        auto out = parity(t,
-                          O{{"timing", timing},
-                            {"main", main},
-                            {"exe_path", ep.string()},
-                            {"catalog_dir", cp.string()},
-                            {"register_cache", selection(A{symbol(BASE + 16)}, 1)}},
-                          "public-api");
-        contains_if(source(out), "#ifdef FF8_PLAY_REG_CACHE", timing != "exact");
+        O spec = {{"timing", timing},
+                  {"main", main},
+                  {"exe_path", ep.string()},
+                  {"catalog_dir", cp.string()},
+                  {"register_cache", selection(A{symbol(BASE + 16)}, 1)}};
+        // Exact code has no register-cache variant, so a selection is refused
+        // rather than dropped, through the public call and the emitter alike.
+        if (timing == "exact") {
+            spec_error(t, spec, "a register-cache selection needs block or loose timing");
+            spec.erase("exe_path");
+            spec_error(t, spec, "a register-cache selection needs block or loose timing");
+            return;
+        }
+        LH_CONTAINS(source(parity(t, spec, "public-api")), "#ifdef FF8_PLAY_REG_CACHE");
         return;
     }
     if (fn == "test_experimental_trace_rejected") {

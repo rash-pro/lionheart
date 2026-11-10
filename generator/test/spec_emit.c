@@ -168,10 +168,13 @@ static int run(lhg_arena *arena, const char *spec_path, const char *output)
     const lhg_json *overlays = lhg_json_find(spec, "overlays");
     size_t overlay_count = overlays ? overlays->as.array.count : 0;
     lhg_overlay_set *sets = lhg_arena_alloc(arena, (overlay_count + 1) * sizeof *sets);
+    memset(sets, 0, (overlay_count + 1) * sizeof *sets);
     for (size_t index = 0; index < overlay_count; index++) {
         const lhg_json *row = overlays->as.array.items[index];
         sets[index].index = (int)lhg_json_int(ctx, lhg_json_require(ctx, row, "index", "overlay"), "index");
         sets[index].image = load_image(arena, row);
+        const lhg_json *shares = lhg_json_find(row, "shares_row");
+        sets[index].shares_row = shares && lhg_json_truth(shares);
         discover_for_spec(arena, sets[index].image, row, 0, &sets[index].functions);
     }
     lhg_emit_result result;

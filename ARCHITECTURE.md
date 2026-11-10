@@ -17,7 +17,11 @@ Linux and Windows.
 `generator/src/disc.c` reads raw 2352-byte CUE/BIN images and ISO9660 directories. `catalog.c` verifies the
 EXE and overlays against `games/ff8-usa`, and `lzs.c` decompresses stored resources. The developer setup uses
 the versioned top-table catalog, including movie overlays, across the supplied discs. The default CLI mode
-also supports the wider loader/effect catalog for diagnostics and legal scanning. All extracted bytes stay
+also supports the wider loader/effect catalog for diagnostics and legal scanning. `overlays.json` adds what the
+imported catalog cannot know: entry hints per set for functions reached only through pointers, and code
+prefixes, assets that start with code and continue with data (battle stages at 0x8013e000). Each distinct
+prefix is an image of its own, discovered within the record's bound; all of a record's images share one
+overlay row and one module, where an address two of them hold differently has an entry for each. All extracted bytes stay
 in the build directory. Metadata contains identities, addresses, boundaries and locations, never payload bytes.
 
 `decode.c` decodes MIPS instructions and `discover.c` follows function entries and control flow. `emit.c`,

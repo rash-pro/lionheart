@@ -65,6 +65,10 @@ int lhg_image_executable(const lhg_image *image, int64_t pc);
 uint32_t lhg_image_word(const lhg_image *image, int64_t pc);
 lhg_insn lhg_image_insn(const lhg_image *image, int64_t pc);
 void lhg_image_validate(lhg_ctx *ctx, const lhg_image *image);
+/* Whether a catalog entry hint names an instruction of the image: inside it,
+ * aligned, nonzero and a defined opcode. Hints come from outside the image, so
+ * a wrong one would otherwise turn data into code without any other check. */
+int lhg_entry_hint_valid(const lhg_image *image, int64_t pc);
 
 /* Functions come back sorted by entry; instructions inside are sorted by pc.
  * Results live in the arena. */
@@ -76,5 +80,12 @@ const lhg_jump_table *lhg_function_table(const lhg_function *function, int64_t p
 
 /* Prologues and entry tables anchor traversal, never calls decoded from image pixels. */
 uint32_t *lhg_prologue_seeds(lhg_arena *arena, const uint8_t *data, size_t size, uint32_t base, size_t *count);
+
+/* Code stored ahead of data in one asset. Discovery starts at the entry and the
+ * prologues within the first `limit` bytes and never leaves them; the image is
+ * then cut to the code it found, which ends with the last instruction or jump
+ * table word, and that length is returned. Data past the code can hold words
+ * shaped like prologues, so the bound is the catalog's, not the asset's. */
+size_t lhg_code_prefix(lhg_arena *arena, lhg_image *image, size_t limit, lhg_functions *functions);
 
 #endif

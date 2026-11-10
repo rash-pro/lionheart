@@ -721,6 +721,1475 @@
     "0x80050940",
     "0x800509b8"
   ],
+  "set_entry_points": [
+    {
+      "name": "battle",
+      "sha1": "fa3b045925c0cc8855b321f5dd22ff196f9d51b0",
+      "entry_points": [
+        "0x80099da8",
+        "0x80099db8",
+        "0x80099dc8",
+        "0x80099dd8",
+        "0x80099f18",
+        "0x80099f58",
+        "0x8009ab98",
+        "0x8009abe4",
+        "0x8009abfc",
+        "0x8009acb4",
+        "0x800b2c80",
+        "0x800b91b4",
+        "0x800c3998",
+        "0x800c39f0",
+        "0x800c52c4",
+        "0x800c5b1c",
+        "0x800c6db4",
+        "0x800c86b4",
+        "0x800cc6f0",
+        "0x800cd594",
+        "0x800ce918",
+        "0x800d6ac8",
+        "0x800d8e88"
+      ]
+    },
+    {
+      "name": "effect_001",
+      "sha1": "d2269dde125f54b3f00c61eb318b58d3ca3c6f40",
+      "entry_points": [
+        "0x801a3d94",
+        "0x801a3e5c",
+        "0x801a4124",
+        "0x801a41c0",
+        "0x801a42a4",
+        "0x801a42b8",
+        "0x801a42cc",
+        "0x801a434c",
+        "0x801a4394",
+        "0x801a43ac",
+        "0x801a43c0",
+        "0x801a43e8",
+        "0x801a43fc",
+        "0x801a4410"
+      ]
+    },
+    {
+      "name": "effect_022",
+      "sha1": "f6f34b460b7ef377ed510d4dc9114daf78b98116",
+      "entry_points": [
+        "0x801a5e30",
+        "0x801a5e4c",
+        "0x801a6234",
+        "0x801a6444",
+        "0x801a64a4",
+        "0x801a660c",
+        "0x801a6794",
+        "0x801a681c",
+        "0x801a6834",
+        "0x801a6860",
+        "0x801a6878",
+        "0x801a68ac",
+        "0x801a68c4",
+        "0x801a6968",
+        "0x801a6980",
+        "0x801a69ac",
+        "0x801a69c4",
+        "0x801a69f8",
+        "0x801a6a10",
+        "0x801a6fcc",
+        "0x801a7098",
+        "0x801a76fc",
+        "0x801a772c",
+        "0x801a7964",
+        "0x801a7cc4",
+        "0x801a7d6c",
+        "0x801a7eac",
+        "0x801a7f54",
+        "0x801a8094",
+        "0x801a813c",
+        "0x801a8368",
+        "0x801a8ac4",
+        "0x801a8c00",
+        "0x801a8c6c",
+        "0x801a8ca4"
+      ]
+    },
+    {
+      "name": "effect_036",
+      "sha1": "1f0689c870a5fbc8cac4b9fda5d2ff6b5351f90f",
+      "entry_points": [
+        "0x801a94b4"
+      ]
+    },
+    {
+      "name": "effect_116",
+      "sha1": "16c79f1be4083d853ae7f4db67869bc6b93211cf",
+      "entry_points": [
+        "0x80196ed4",
+        "0x801977b4"
+      ]
+    },
+    {
+      "name": "effect_143",
+      "sha1": "5902e17f49c878c9b5f8d2695a48743555691dd0",
+      "entry_points": [
+        "0x801a0a58",
+        "0x801a14b4"
+      ]
+    },
+    {
+      "name": "effect_146",
+      "sha1": "786a24e514bc89ef9eddddf6165c9d26741adae0",
+      "entry_points": [
+        "0x801a3944",
+        "0x801a4ea4"
+      ]
+    },
+    {
+      "name": "effect_172",
+      "sha1": "b78db947c6c71ec8d8edfcf69f9d87fc564e525f",
+      "entry_points": [
+        "0x801a21ec"
+      ]
+    },
+    {
+      "name": "effect_190",
+      "sha1": "3ab86c8ade80c735157761af2a8e75573d94278c",
+      "entry_points": [
+        "0x801a0d14",
+        "0x801a152c"
+      ]
+    },
+    {
+      "name": "effect_232",
+      "sha1": "2065d8a3a2655493378e2b414712d8e79743efd6",
+      "entry_points": [
+        "0x801a3438",
+        "0x801a4af4",
+        "0x801a567c",
+        "0x801a585c",
+        "0x801a5a40",
+        "0x801a5c94",
+        "0x801a683c",
+        "0x801a68e8",
+        "0x801a6f4c",
+        "0x801a7214",
+        "0x801a724c",
+        "0x801a72fc",
+        "0x801a73c0",
+        "0x801a74f8",
+        "0x801a7724",
+        "0x801a7dd8",
+        "0x801a8020",
+        "0x801a80dc",
+        "0x801a816c",
+        "0x801a819c",
+        "0x801a8534",
+        "0x801a8918",
+        "0x801a92c8",
+        "0x801a94e0",
+        "0x801a9540",
+        "0x801a95a8",
+        "0x801a996c",
+        "0x801a99a8",
+        "0x801a9ae0",
+        "0x801aa0ac",
+        "0x801aa6ec",
+        "0x801aa82c",
+        "0x801aae0c",
+        "0x801ab498",
+        "0x801ab540",
+        "0x801ab5f4",
+        "0x801ab638",
+        "0x801abd44",
+        "0x801abd74",
+        "0x801abfd4",
+        "0x801ac0b4",
+        "0x801ac118",
+        "0x801ac140",
+        "0x801ac340",
+        "0x801ac3bc",
+        "0x801ac9c0",
+        "0x801aca80",
+        "0x801acb28",
+        "0x801ad380",
+        "0x801ae528",
+        "0x801aea34"
+      ]
+    },
+    {
+      "name": "field",
+      "sha1": "c79b41be2336f6d169f0700639e45abdd9d16dd5",
+      "entry_points": [
+        "0x800ae080",
+        "0x800ae098",
+        "0x800af4c4",
+        "0x800af514",
+        "0x800af5f8",
+        "0x800af610",
+        "0x800b0a08",
+        "0x800b0a68",
+        "0x800b653c",
+        "0x800b6570",
+        "0x800b9c58"
+      ]
+    },
+    {
+      "name": "field",
+      "sha1": "d8268fb6b3a62d1701ffbaede415fc4f369b2290",
+      "entry_points": [
+        "0x800ae080",
+        "0x800ae098",
+        "0x800af4c4",
+        "0x800af514",
+        "0x800af5a8",
+        "0x800af5b8",
+        "0x800af5e0",
+        "0x800af5f8",
+        "0x800af610",
+        "0x800b0a08",
+        "0x800b0a4c",
+        "0x800b0a6c",
+        "0x800b0a7c",
+        "0x800b0b04",
+        "0x800b0b20",
+        "0x800b13ec",
+        "0x800b14c8",
+        "0x800b150c",
+        "0x800b1584",
+        "0x800b64c4",
+        "0x800bbe50"
+      ]
+    },
+    {
+      "name": "field",
+      "sha1": "ed7641ead3eda72ced84058a33b0c0ebef187b16",
+      "entry_points": [
+        "0x800ae080",
+        "0x800ae098",
+        "0x800af4c4",
+        "0x800af514",
+        "0x800af5a8",
+        "0x800af5b8",
+        "0x800b0a08",
+        "0x800b0a6c",
+        "0x800b0a7c",
+        "0x800b0ac0",
+        "0x800b0ae8",
+        "0x800b653c",
+        "0x800b6570",
+        "0x800b9c58"
+      ]
+    },
+    {
+      "name": "field",
+      "sha1": "ff84df55a00419a4a7a2b87ddeaf7cda5213b949",
+      "entry_points": [
+        "0x800adca4",
+        "0x800adcd8",
+        "0x800add0c",
+        "0x800add68",
+        "0x800addd8",
+        "0x800ade10",
+        "0x800ade44",
+        "0x800ade7c",
+        "0x800adee8",
+        "0x800adf20",
+        "0x800adf54",
+        "0x800ae080",
+        "0x800ae098",
+        "0x800ae124",
+        "0x800ae17c",
+        "0x800ae7e4",
+        "0x800ae81c",
+        "0x800aeecc",
+        "0x800aefe8",
+        "0x800af000",
+        "0x800af070",
+        "0x800af114",
+        "0x800af224",
+        "0x800af274",
+        "0x800af2c4",
+        "0x800af4c4",
+        "0x800af5b8",
+        "0x800af610",
+        "0x800afd68",
+        "0x800b0304",
+        "0x800b0c48",
+        "0x800b0c58",
+        "0x800b0cfc",
+        "0x800b0d2c",
+        "0x800b0d58",
+        "0x800b0d6c",
+        "0x800b0d94",
+        "0x800b14c8",
+        "0x800b2fd8",
+        "0x800b301c",
+        "0x800b3080",
+        "0x800b31b4",
+        "0x800b348c",
+        "0x800b3740",
+        "0x800b3788",
+        "0x800b3868",
+        "0x800b388c",
+        "0x800b38e0",
+        "0x800b3f9c",
+        "0x800b44bc",
+        "0x800b46e4",
+        "0x800b48ec",
+        "0x800b49c4",
+        "0x800b49d8",
+        "0x800b4ed8",
+        "0x800b4ff8",
+        "0x800b629c",
+        "0x800b62e8",
+        "0x800b6364",
+        "0x800b6448",
+        "0x800b64b0",
+        "0x800b7490",
+        "0x800b8824",
+        "0x800b8dc8",
+        "0x800b95a0",
+        "0x800b9c58",
+        "0x800b9f58",
+        "0x800bbe50"
+      ]
+    },
+    {
+      "name": "menumain",
+      "sha1": "c5c81139efd5e629cf1b3f80f90e8eb012c4dafa",
+      "entry_points": [
+        "0x801effb8",
+        "0x801f1200",
+        "0x801f1aa4",
+        "0x801f1ce8",
+        "0x801f1d04",
+        "0x801f56e4",
+        "0x801f5730",
+        "0x801f5750",
+        "0x801f6b28",
+        "0x801f7928",
+        "0x801f7bac",
+        "0x801f7be4",
+        "0x801f7c20"
+      ]
+    },
+    {
+      "name": "movie",
+      "sha1": "80ad32679374e6fd7d7360fd50ff8aba066bf0c7",
+      "entry_points": [
+        "0x801e82cc",
+        "0x801e8b58",
+        "0x801e8b84"
+      ]
+    }
+  ],
+  "code_prefixes": [
+    {
+      "name": "battle-stage",
+      "load_address": "0x8013e000",
+      "limit": 8192,
+      "variants": [
+        {
+          "sha1": "dae411b7c21fbe6740ee51606f714a004d8d46b0",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg000.x"
+          ]
+        },
+        {
+          "sha1": "0fd88f17aa545735cb2b0a49a6991fafbe7adeb6",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg001.x"
+          ]
+        },
+        {
+          "sha1": "5586b19f268d8cb4d6689e5a520ac12801abf6cc",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg002.x"
+          ]
+        },
+        {
+          "sha1": "43246bb6455de67caf743da60be9937c7df8d9c9",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg003.x"
+          ]
+        },
+        {
+          "sha1": "15b25720b6cec0815abf5c3540bd1dabbd83cc51",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg004.x"
+          ]
+        },
+        {
+          "sha1": "acc3427c1272ad20e6633dd846a39c8d16dc7d8f",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg005.x"
+          ]
+        },
+        {
+          "sha1": "e449dcd7dfa2b32c17029e2f67333b7655fee16b",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg006.x"
+          ]
+        },
+        {
+          "sha1": "55afcbf64cd9f4e33e578e2e6a924d4257279a70",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg007.x"
+          ]
+        },
+        {
+          "sha1": "f653211ec676e89b280505f21d566b21cf31081a",
+          "size": 1484,
+          "paths": [
+            "data/eng/battle/a0stg008.x"
+          ]
+        },
+        {
+          "sha1": "6e62a646b9399a2a41464e2b82b046d01dba5f7d",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg009.x"
+          ]
+        },
+        {
+          "sha1": "241d6f7b744483c57d1343bed9ce8c5ff16d112b",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg010.x"
+          ]
+        },
+        {
+          "sha1": "afe9316694f1e035b95dbcfc86b88b6c45e110bc",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg011.x"
+          ]
+        },
+        {
+          "sha1": "575cd6b6494c0eb4f27fd518174a2f8e8560b482",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg012.x"
+          ]
+        },
+        {
+          "sha1": "52eb6ba86ef396fede0979b292ec659bec107e5e",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg013.x"
+          ]
+        },
+        {
+          "sha1": "be81cc3ef7b9e494e0b14d234fc25d25cd6e58c3",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg014.x"
+          ]
+        },
+        {
+          "sha1": "9c831b522d20ef27bd2a8b336ef963b46f8349f2",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg015.x"
+          ]
+        },
+        {
+          "sha1": "2d774fdc2d8d1b3cbdcb6374cd861ee0f49d7d23",
+          "size": 1484,
+          "paths": [
+            "data/eng/battle/a0stg016.x"
+          ]
+        },
+        {
+          "sha1": "c9cb121255d3b6be8d6ddc94da2f9003de760157",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg017.x"
+          ]
+        },
+        {
+          "sha1": "dba63118c8ee8f983f948b56ac99e73ab77dd5b4",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg018.x"
+          ]
+        },
+        {
+          "sha1": "da0c3bf07d54a05dfb2c7c69cda328dd9c3ffc0a",
+          "size": 1512,
+          "paths": [
+            "data/eng/battle/a0stg019.x"
+          ]
+        },
+        {
+          "sha1": "407b30112990ee3cd1fff111c49ade740d80c259",
+          "size": 1484,
+          "paths": [
+            "data/eng/battle/a0stg020.x"
+          ]
+        },
+        {
+          "sha1": "82142a57baaf160fb0bfd8d5b9e7535116d160ff",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg021.x",
+            "data/eng/battle/a0stg050.x"
+          ]
+        },
+        {
+          "sha1": "6e1e3e01b4c910f6c7b79e1a44c2bee81fa19a89",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg022.x",
+            "data/eng/battle/a0stg034.x"
+          ]
+        },
+        {
+          "sha1": "b46310a20e96b700fac088bc94b94004a130824a",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg023.x"
+          ]
+        },
+        {
+          "sha1": "314a06cc0a81d506804cdccd93cd768049fa084e",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg024.x"
+          ]
+        },
+        {
+          "sha1": "2c91dd9a79826306e121d3a95760667e66602589",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg025.x"
+          ]
+        },
+        {
+          "sha1": "b61e81a846471aebec5a528834fc607b8e115ca5",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg026.x"
+          ]
+        },
+        {
+          "sha1": "27f92a77ebbed46e44512ea12aa9b08fcabc86d8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg027.x"
+          ]
+        },
+        {
+          "sha1": "40d2426dbf626234f2c8f1a6c53f1d7bf5144cc1",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg028.x"
+          ]
+        },
+        {
+          "sha1": "70c927f0d2117890a9f25a6841724a8a609bdf65",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg029.x"
+          ]
+        },
+        {
+          "sha1": "c548826555d14d3f9620940ad537f59912656f33",
+          "size": 1768,
+          "paths": [
+            "data/eng/battle/a0stg030.x"
+          ]
+        },
+        {
+          "sha1": "865a039e1c8fb7478d61af284faa9d651cda05cd",
+          "size": 1768,
+          "paths": [
+            "data/eng/battle/a0stg031.x"
+          ]
+        },
+        {
+          "sha1": "cfe70fc9b7a6c88331a3559704e10923f833b52c",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg032.x"
+          ]
+        },
+        {
+          "sha1": "408d6af2a96cda4b2fc346e605853e8f1d7f9ff2",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg033.x"
+          ]
+        },
+        {
+          "sha1": "08d608cf64e4cff77b2db1a7accd1705e9d769fe",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg035.x"
+          ]
+        },
+        {
+          "sha1": "b9f17af20683a03f88ee2648b47bb6f131b2e5f3",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg036.x",
+            "data/eng/battle/a0stg085.x"
+          ]
+        },
+        {
+          "sha1": "ff0a259d2d9db173507ae403a9fefd61ad9a378e",
+          "size": 3120,
+          "paths": [
+            "data/eng/battle/a0stg037.x"
+          ]
+        },
+        {
+          "sha1": "4087a7bbe72aeeeef4e5c4810709ec8b66e116e9",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg038.x"
+          ]
+        },
+        {
+          "sha1": "6fb2d0c58736715e2e4096c025386c7f1ff00d55",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg039.x"
+          ]
+        },
+        {
+          "sha1": "d00ce1b260bcb0e7f186f3192871a13437fe6745",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg040.x"
+          ]
+        },
+        {
+          "sha1": "fdde60754172a4bd968b31fb7335b560d8317893",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg041.x"
+          ]
+        },
+        {
+          "sha1": "ec7a17f0c44ec7ccb0a4a9b1a93a00890fe88813",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg042.x"
+          ]
+        },
+        {
+          "sha1": "2286f8c4f9c093c7798064f4faea628a41f8d7a8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg043.x"
+          ]
+        },
+        {
+          "sha1": "feb2bbba6e4e16f287d47f0f49784ae465f0da4d",
+          "size": 1860,
+          "paths": [
+            "data/eng/battle/a0stg044.x"
+          ]
+        },
+        {
+          "sha1": "8522fba1293b45fa4b09c4e9097a7d10eabc1d55",
+          "size": 1860,
+          "paths": [
+            "data/eng/battle/a0stg045.x"
+          ]
+        },
+        {
+          "sha1": "358181a1c5af07af51fba7773870f9afde90deff",
+          "size": 1860,
+          "paths": [
+            "data/eng/battle/a0stg046.x"
+          ]
+        },
+        {
+          "sha1": "e7f3a70663b8a71e15cc13ebed674314da13261e",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg047.x"
+          ]
+        },
+        {
+          "sha1": "80bb60574f4e2a0896fd00e558a3a6eeb24a5795",
+          "size": 1484,
+          "paths": [
+            "data/eng/battle/a0stg048.x"
+          ]
+        },
+        {
+          "sha1": "6cb784d96e18cd052d080f601eab3640f91b04f9",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg049.x"
+          ]
+        },
+        {
+          "sha1": "fd203a4be7fd73f5bcdb00bd623c458886d19728",
+          "size": 1460,
+          "paths": [
+            "data/eng/battle/a0stg051.x"
+          ]
+        },
+        {
+          "sha1": "5fb97956b9021f265dd7b1227b1a3b2f44145927",
+          "size": 1460,
+          "paths": [
+            "data/eng/battle/a0stg052.x"
+          ]
+        },
+        {
+          "sha1": "1b3f18d5f55ee66259ac128c1d4f95219a6c12f4",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg053.x",
+            "data/eng/battle/a0stg097.x"
+          ]
+        },
+        {
+          "sha1": "a287bb6ae18937eb920878feb6b0b3ac61ac2995",
+          "size": 1488,
+          "paths": [
+            "data/eng/battle/a0stg054.x"
+          ]
+        },
+        {
+          "sha1": "c55772a724e894bb75d1f91b3791ebd5ca35b0fa",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg055.x"
+          ]
+        },
+        {
+          "sha1": "81ad0b6a596d2928ba45144b87c7c9e6a5fe91af",
+          "size": 1488,
+          "paths": [
+            "data/eng/battle/a0stg056.x"
+          ]
+        },
+        {
+          "sha1": "a436b140f33ca3daf699b685c4c241ac1631251b",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg057.x"
+          ]
+        },
+        {
+          "sha1": "064b2edc40c6380c8e4cb5ff369fe5b0a0b12d9b",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg058.x"
+          ]
+        },
+        {
+          "sha1": "3dd096a68455faec10689e9dcf4a5b8d4ce70f34",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg059.x"
+          ]
+        },
+        {
+          "sha1": "a97907fdcbb17255889f8ecf607a0b1cf88d622b",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg060.x",
+            "data/eng/battle/a0stg134.x"
+          ]
+        },
+        {
+          "sha1": "f833658f811c3c2e14ed707ba07f597999588bb7",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg061.x"
+          ]
+        },
+        {
+          "sha1": "bb031c449c5f5a95d2627e67615ad5738f997a22",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg062.x"
+          ]
+        },
+        {
+          "sha1": "ea5d722bb61b0b7b74c9d9138cb15aedf2e9b75c",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg063.x"
+          ]
+        },
+        {
+          "sha1": "1624747cd0795ff86d5d9e5da12fc7b9b2138c6a",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg064.x"
+          ]
+        },
+        {
+          "sha1": "4bbae2a48b9cae7f8b736505555faaeaf97c59a6",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg065.x"
+          ]
+        },
+        {
+          "sha1": "fa023727e7d880351b6e77ae68e2f826a8ab6f3a",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg066.x"
+          ]
+        },
+        {
+          "sha1": "998201c307977d27c7d8547b4b3c73dce0d5bf74",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg067.x"
+          ]
+        },
+        {
+          "sha1": "a077862690e2a14bb12b3f6f123f8021c62a3942",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg068.x"
+          ]
+        },
+        {
+          "sha1": "e469dba1587abf870cd553afdddd9cac7e672a11",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg069.x"
+          ]
+        },
+        {
+          "sha1": "ff0b5e7e7c2c2c5bdc73b6513b978b53e0c777bb",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg070.x"
+          ]
+        },
+        {
+          "sha1": "ceadc86b4ca5808bff341eaf7de4d01c18562069",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg071.x"
+          ]
+        },
+        {
+          "sha1": "c047c69761119c6b55a0b48446cfe25592fbc988",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg072.x"
+          ]
+        },
+        {
+          "sha1": "e4cddc536c695b09babbf42041193e88340c39e0",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg073.x"
+          ]
+        },
+        {
+          "sha1": "f67ac980f5c2c102fed24bbcce71311879782285",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg074.x"
+          ]
+        },
+        {
+          "sha1": "7ace35c96f9564a0d36685e8d83507850e361f37",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg075.x"
+          ]
+        },
+        {
+          "sha1": "bc0d1013ec0e2c74114db3f972e4535300a221df",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg076.x"
+          ]
+        },
+        {
+          "sha1": "492d7b537476ac95b70677f8e8509b80c1b428ad",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg077.x"
+          ]
+        },
+        {
+          "sha1": "55f6c58d2fd2aac4c3175f3602d22871d7310842",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg078.x"
+          ]
+        },
+        {
+          "sha1": "300059f0a743847ae0a9c9e7ebe45a4eea130fb6",
+          "size": 1484,
+          "paths": [
+            "data/eng/battle/a0stg079.x"
+          ]
+        },
+        {
+          "sha1": "abd0175a4977f756c1da4d43745694aff1c5a814",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg080.x"
+          ]
+        },
+        {
+          "sha1": "44199f10f5acfde5ca86a40b35ff9f64f592b49f",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg081.x"
+          ]
+        },
+        {
+          "sha1": "b6f8ec8e67aca98f4dd627257a70f5b617e36c19",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg082.x"
+          ]
+        },
+        {
+          "sha1": "4dab17d8b39ba3079407c6b87c31f1450db46519",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg083.x"
+          ]
+        },
+        {
+          "sha1": "ba43fd3f8c01dfb494a22900c7e1acc6c98369b1",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg084.x"
+          ]
+        },
+        {
+          "sha1": "5797d2783a059be2c84eaa0e8da6ce8f4d9fdacb",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg086.x"
+          ]
+        },
+        {
+          "sha1": "47f0d047108bb7f255238e32a6d2485356d114de",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg087.x"
+          ]
+        },
+        {
+          "sha1": "45d444c860f80f057356d30721ebf825fdd16b69",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg088.x",
+            "data/eng/battle/a0stg125.x"
+          ]
+        },
+        {
+          "sha1": "43fbe9046adc73571525705903f13a75f2888b74",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg089.x"
+          ]
+        },
+        {
+          "sha1": "a999eda3d626aa0715d900e2b270284ddb51d695",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg090.x"
+          ]
+        },
+        {
+          "sha1": "f7cdaf71515f0765e72508213b7628b1eda760e2",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg091.x"
+          ]
+        },
+        {
+          "sha1": "03f6916e7b998fb59f10445d0c2150107343ed30",
+          "size": 2016,
+          "paths": [
+            "data/eng/battle/a0stg092.x"
+          ]
+        },
+        {
+          "sha1": "c8fa5984c9ba16539bcd531c28ed524fe731ded6",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg093.x"
+          ]
+        },
+        {
+          "sha1": "9ce29bf26f5af8493f97ad3f84e7c26dca42b8ee",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg094.x"
+          ]
+        },
+        {
+          "sha1": "66ab9b7457cbe2f861a4ea8829ef62a85161f1c3",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg095.x"
+          ]
+        },
+        {
+          "sha1": "cd86535ed27c611a257b68b0a83041fd7d4d0df5",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg096.x"
+          ]
+        },
+        {
+          "sha1": "bf92da4e35e547b9e3ce054c5c92f7e8fcd47970",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg098.x"
+          ]
+        },
+        {
+          "sha1": "0fdc3c3c16e3495c47a688e367ed31b4592ed132",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg099.x"
+          ]
+        },
+        {
+          "sha1": "a5b2876b7e9d74d0e207dbfb7311ed3239ca378b",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg100.x"
+          ]
+        },
+        {
+          "sha1": "34adc779fda8e8116e6e913f279fe2a679daa42e",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg101.x"
+          ]
+        },
+        {
+          "sha1": "230ed01ffa2eda9c9d6837b98ff40cc1b8479b0d",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg102.x"
+          ]
+        },
+        {
+          "sha1": "38945cd1d692183f102da516a9e732060f960bc6",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg103.x"
+          ]
+        },
+        {
+          "sha1": "575b3be8d955ae23fe3c1c8e3b0ae7882c33b4d8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg104.x"
+          ]
+        },
+        {
+          "sha1": "8d64199813a3216abf111f2a70ec313e0c9ee4fc",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg105.x"
+          ]
+        },
+        {
+          "sha1": "b853e2693185d2c146602db2dd3cd95cf6b4e0e8",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg106.x"
+          ]
+        },
+        {
+          "sha1": "494eea049669783243ecad691bf0a3b102438151",
+          "size": 1460,
+          "paths": [
+            "data/eng/battle/a0stg107.x"
+          ]
+        },
+        {
+          "sha1": "0410e56e376edf066ea2f31f83a7a8709de2598c",
+          "size": 1460,
+          "paths": [
+            "data/eng/battle/a0stg108.x"
+          ]
+        },
+        {
+          "sha1": "9c9ca3b77e869f9b27ade7c71beb109ace470927",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg109.x"
+          ]
+        },
+        {
+          "sha1": "be6d17d80cbb4fcd873526864feeefee7e8dec97",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg110.x"
+          ]
+        },
+        {
+          "sha1": "8fe078308d0a953ce5c797020b0090156e323b7f",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg111.x"
+          ]
+        },
+        {
+          "sha1": "5348346ddc246294ad280bb10f3387c022ee9344",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg112.x"
+          ]
+        },
+        {
+          "sha1": "238cddb2ecac8b27cd2e1455277e3415568b53c1",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg113.x"
+          ]
+        },
+        {
+          "sha1": "c13c3e1bc85040211e27534fd95355915b520f18",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg114.x"
+          ]
+        },
+        {
+          "sha1": "3ad10280edd91673e1a99ca8f1e359ab61339cc8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg115.x"
+          ]
+        },
+        {
+          "sha1": "4056358821422aca918ade205d7da6646b1f2123",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg116.x"
+          ]
+        },
+        {
+          "sha1": "3865531848d75c2b4de90ec908ebd4788190a463",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg117.x"
+          ]
+        },
+        {
+          "sha1": "07abd2e72a8f29fc7a8dd0acfbce7380965c1e6f",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg118.x"
+          ]
+        },
+        {
+          "sha1": "ed4d2df80facb9f01de7f1c7bb09e8e7502bc5dc",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg119.x"
+          ]
+        },
+        {
+          "sha1": "189b2a23455db1cb445f8b390eb1bae0e3a538d3",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg120.x"
+          ]
+        },
+        {
+          "sha1": "13d5161095074603dae68997e67fe01f6a00883c",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg121.x"
+          ]
+        },
+        {
+          "sha1": "742134261383cf9c10c20cf6f21cf57f19841c55",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg122.x"
+          ]
+        },
+        {
+          "sha1": "5b4c4709441e8ca5f8c0e5a3c15c8f75f177dc25",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg123.x"
+          ]
+        },
+        {
+          "sha1": "aec03fe1a104c078eb761ad43f1e6e7b27749aba",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg124.x"
+          ]
+        },
+        {
+          "sha1": "2df0fbedde42ef2f5508ff3b6cb8f80bac5b3a90",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg126.x"
+          ]
+        },
+        {
+          "sha1": "17afb1696cb9e5fa71d4b385abe5461cfbe3e8a1",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg127.x"
+          ]
+        },
+        {
+          "sha1": "fc35984ebefbd7781008aca52ae95843395f1cb3",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg128.x"
+          ]
+        },
+        {
+          "sha1": "261117e7cd5332258fc5ab01cf5715ef8be6899f",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg129.x"
+          ]
+        },
+        {
+          "sha1": "6d2964f68428acbb4aa28ce5bab624db12c95743",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg130.x"
+          ]
+        },
+        {
+          "sha1": "865cdc718b432078f16a3791c5c22e38cededbf2",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg131.x"
+          ]
+        },
+        {
+          "sha1": "2c051db203441e091893acfa303a43b096413a19",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg132.x"
+          ]
+        },
+        {
+          "sha1": "3f1242ea5b639f8d3af2c6223a37bbbb7b54ba7f",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg133.x"
+          ]
+        },
+        {
+          "sha1": "3021a0b61ab44b4b1e4afd094f9515baa626aa6a",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg135.x"
+          ]
+        },
+        {
+          "sha1": "ccf254c06a9fe473b5255016a25f58481dd210a3",
+          "size": 1456,
+          "paths": [
+            "data/eng/battle/a0stg136.x"
+          ]
+        },
+        {
+          "sha1": "030d2afd74b0cf14660fab92d4568eeec421be5c",
+          "size": 3588,
+          "paths": [
+            "data/eng/battle/a0stg137.x"
+          ]
+        },
+        {
+          "sha1": "e1bb69758a6a577312559477870cd94029814a3d",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg138.x"
+          ]
+        },
+        {
+          "sha1": "021e0b80e8ff976cec2d4958696c2933c88a9be8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg139.x"
+          ]
+        },
+        {
+          "sha1": "342c5d44bd55f6428634942e107e69c8fc38adb3",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg140.x"
+          ]
+        },
+        {
+          "sha1": "c4178704d7aecaa70313bf3d658b79036dc1077f",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg141.x"
+          ]
+        },
+        {
+          "sha1": "bbb0e33ae660ac5ffd3eb0b8d1466b3749aaa9c1",
+          "size": 3936,
+          "paths": [
+            "data/eng/battle/a0stg142.x"
+          ]
+        },
+        {
+          "sha1": "31b54c890c2add4e357c3bf324792e76961e53ae",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg143.x"
+          ]
+        },
+        {
+          "sha1": "7674cae35b5b88b11eba733c5626a5e652dd8189",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg144.x",
+            "data/eng/battle/a0stg145.x"
+          ]
+        },
+        {
+          "sha1": "5ca1d1aa4b8e5b664a9b43c757d4be075286ebee",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg146.x"
+          ]
+        },
+        {
+          "sha1": "b3df093c84600a80369bd278e663090e1fd44c92",
+          "size": 2480,
+          "paths": [
+            "data/eng/battle/a0stg147.x"
+          ]
+        },
+        {
+          "sha1": "06d41b196233dfd86ac1848684be4ad51c90783f",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg148.x"
+          ]
+        },
+        {
+          "sha1": "d49669e3baa93892a5cff645ce20eef0ff75fa6b",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg149.x"
+          ]
+        },
+        {
+          "sha1": "1ed45cad71421b229baab44ec2573d94c39fa492",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg150.x"
+          ]
+        },
+        {
+          "sha1": "91cfb4ff675a9fc38692e219d637fabe6e3cc556",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg151.x"
+          ]
+        },
+        {
+          "sha1": "744cea47b44b721dfc71c7ae561b132b1b861961",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg152.x"
+          ]
+        },
+        {
+          "sha1": "68eedcc3072e97ddfca092ea1c306c15ef493949",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg153.x"
+          ]
+        },
+        {
+          "sha1": "d7d583cc0485eb95839fdaf6615dd4777ca1aafe",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg154.x"
+          ]
+        },
+        {
+          "sha1": "dddeea1c605641fb8c7f4344a9f6145edcefcbef",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg155.x"
+          ]
+        },
+        {
+          "sha1": "669b1b71a67cae74b270d69637b50743f7796b84",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg156.x"
+          ]
+        },
+        {
+          "sha1": "0a8a2bdd5b8a1939c093eb0e6517a47228078ab6",
+          "size": 1516,
+          "paths": [
+            "data/eng/battle/a0stg157.x"
+          ]
+        },
+        {
+          "sha1": "f717dba7d98ec74a20e113991ac0771980f83f84",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg158.x"
+          ]
+        },
+        {
+          "sha1": "cf982730709793b03fc6a2ed509180cdec381a55",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg159.x"
+          ]
+        },
+        {
+          "sha1": "452cd669682b4a16c0d51cc7624866a8be720f4c",
+          "size": 1416,
+          "paths": [
+            "data/eng/battle/a0stg160.x"
+          ]
+        },
+        {
+          "sha1": "4fc3a2994b9a76674915422ed0f60a78c29a45b8",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg161.x"
+          ]
+        },
+        {
+          "sha1": "79af9e7fcc81f7c5ff41a953192db6d19951b0e5",
+          "size": 1420,
+          "paths": [
+            "data/eng/battle/a0stg162.x"
+          ]
+        }
+      ]
+    }
+  ],
   "discs": {
     "1": {
       "exe": "SLUS_008.92",

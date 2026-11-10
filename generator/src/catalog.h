@@ -11,6 +11,10 @@ typedef struct {
     int index;
     const lhg_image *image;
     lhg_functions functions;
+    /* Nonzero: this set shares the overlay row (and module) of the set before
+     * it. The variants of one code prefix are separate images whose functions
+     * meet in one row, which keeps the number of rows within the runtime's. */
+    int shares_row;
 } lhg_overlay_set;
 
 /* One set the full catalog gives for the present discs, known before any disc is read. */
@@ -18,6 +22,11 @@ typedef struct {
     size_t group;
     const lhg_json *group_json, *location;
     const char *group_name, *loaded_sha1;
+    /* The set's entry hints from overlays.json, or NULL. */
+    const lhg_json *hints;
+    /* A code prefix record of overlays.json: this row stands for all its
+     * variants, numbered from index on. NULL for a catalog group. */
+    const lhg_json *prefix;
     int index, disc, top, has_top;
     /* No inventory entry: the loader fails here once the bytes are verified. */
     int missing;
@@ -50,6 +59,8 @@ void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_m
 void lhg_plan_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65]);
 /* The configured load address, or 0 when the image bytes decide it. */
 uint32_t lhg_plan_base(lhg_ctx *ctx, const lhg_plan_row *row);
+/* The bytes a row's code is generated from; for a code prefix, its longest variant. */
+uint32_t lhg_plan_size(lhg_ctx *ctx, const lhg_plan_row *row);
 /* assets_dir NULL keeps every extracted image in memory. */
 void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
                          const char *assets_dir, lhg_program *program);

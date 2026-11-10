@@ -20,13 +20,13 @@ static const char *branch_condition(lhg_arena *arena, const lhg_insn *i)
     }
 }
 
-void lhg_emit_precise(lhg_arena *arena, const lhg_analysis *analysis, lhg_text *out)
+void lhg_emit_precise(lhg_arena *arena, const lhg_analysis *analysis, const char *suffix, lhg_text *out)
 {
     const lhg_function *f = analysis->function;
     lhg_lines lines;
     lhg_lines_init(&lines, arena);
-    lhg_lines_addf(&lines, "void f_%X(cpu_t *c) {", f->entry);
-    lhg_lines_addf(&lines, "if (!code_valid(c, &code_%X)) return;", f->entry);
+    lhg_lines_addf(&lines, "void f_%X%s(cpu_t *c) {", f->entry, suffix);
+    lhg_lines_addf(&lines, "if (!code_valid(c, &code_%X%s)) return;", f->entry, suffix);
     lhg_lines_add(&lines, "unsigned entered = 0; C_STATS(++c->recomp_functions);");
     lhg_lines_add(&lines, "for (;;) {");
     lhg_lines_add(&lines, "uint32_t next = c->pc + 4, target = 0, back = 0;");
@@ -74,7 +74,7 @@ void lhg_emit_precise(lhg_arena *arena, const lhg_analysis *analysis, lhg_text *
     lhg_lines_add(&lines, "c->branch_pc = c->pc; c->branch_kind = take ? kind : 0; c->branch_return = back; }");
     lhg_lines_add(&lines, "if (delayed) { next = old_target; c->flow = 1; c->flow_kind = old_kind; c->flow_return = old_return; }");
     lhg_lines_add(&lines, "c->pc = next; c->in_delay_slot = 0; c->fault_instructions = 0; c_tick(c, 1);");
-    lhg_lines_addf(&lines, "if (c->halted || (delayed && old_kind) || (epoch != c->code_epoch && !code_valid(c, &code_%X))) return;", f->entry);
+    lhg_lines_addf(&lines, "if (c->halted || (delayed && old_kind) || (epoch != c->code_epoch && !code_valid(c, &code_%X%s))) return;", f->entry, suffix);
     lhg_lines_add(&lines, "}");
     lhg_lines_add(&lines, "}");
     lhg_text_join(out, &lines);
