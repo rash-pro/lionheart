@@ -4,7 +4,7 @@ endif()
 set(parts "${BUILD}/generator-reference-parts")
 file(REMOVE_RECURSE "${parts}")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E env "LH_REWRITE_GENERATOR_REFERENCE=${parts}"
-  "${CMAKE_CTEST_COMMAND}" --test-dir "${BUILD}" -R "^test_generator_parity::" -j4 --output-on-failure
+  "${CMAKE_CTEST_COMMAND}" --test-dir "${BUILD}" -R "^test_generator_(parity|rules)::" -j4 --output-on-failure
   RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
   message(FATAL_ERROR "generator cases failed; reference unchanged")

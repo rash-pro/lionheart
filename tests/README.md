@@ -75,8 +75,9 @@ Builds share a locked content-addressed cache under the native build directory. 
 flags, sources, runtime, generator and compiler identity. `LH_COMPILE_JOBS` defaults to two.
 Delete the cache to force recompilation. Keep program construction in the case so input logic has one owner.
 
-`test_generator_parity` checks complete output trees against `native/generator_reference.tsv`,
-with SHA-256 per identity, subcase and output file. Parameters live in `cases/generator_parity_rows.h`.
+`test_generator_parity` and `test_generator_rules` check complete output trees against
+`native/generator_reference.tsv`, with SHA-256 per identity, subcase and output file. Parameters of the
+former live in `cases/generator_parity_rows.h`; shared helpers in `cases/generator_cases.h`.
 To accept an intentional generator change:
 
 ```sh
