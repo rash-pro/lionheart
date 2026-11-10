@@ -94,6 +94,7 @@ set_source_files_properties(backends/host/native_modules.c
   PROPERTIES COMPILE_DEFINITIONS "LH_MODULE_ABI_ID=\"${LH_MODULE_ABI_ID}\"" COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
 target_link_libraries(ff8 PRIVATE ${CMAKE_DL_LIBS})
 if(FF8_PLAYER)
+  include(cmake/player_identity.cmake)
   target_sources(ff8 PRIVATE backends/host/player_session.c)
   if(WIN32)
     enable_language(RC)

@@ -6,6 +6,7 @@ static lh::Command session(lh::Case &t) {
 }
 static lh::fs::path log_path(lh::Case &t) { return t.temp()/"data/lionheart/logs/lionheart.log"; }
 LH_TEST(test_session_tee_rotation_and_fatal_box) {
+    auto identity=t.ok(session(t).arg("--version")).out;
     auto expected=std::string("fatal startup: supply disc 1\n")+std::string(10000,'x');
     for(int n=0;n<7;++n) {
         auto cmd=lh::dummy(session(t)).env("HOME",t.temp().string()); if(n<6) cmd.arg("--headless");
@@ -14,7 +15,7 @@ LH_TEST(test_session_tee_rotation_and_fatal_box) {
     }
     auto files=lh::files_starting(log_path(t).parent_path(),""); LH_EQ(files.size(),5u);
     std::vector<std::string> names;
-    for(auto &file:files) { names.push_back(file.filename().string()); LH_TEXT_EQ(lh::read_file(file),expected); }
+    for(auto &file:files) { names.push_back(file.filename().string()); LH_TEXT_EQ(lh::read_file(file),identity+expected); }
     LH_CHECK((names==std::vector<std::string>{"lionheart.1.log","lionheart.2.log","lionheart.3.log","lionheart.4.log","lionheart.log"}));
 }
 LH_TEST(test_gui_diagnostic_errors_never_open_native_fatal_dialog) {
@@ -39,9 +40,9 @@ static const Signal signals[]={{"11",SIGSEGV},{"6",SIGABRT},{"8",SIGFPE},{"4",SI
 LH_TEST_P(test_player_session_fatal_signal,signals) {
     auto r=t.run(session(t).args({"--crash",p.number}).timeout(10)); LH_EQ(r.rc,-p.number);
     char expected[80]; std::snprintf(expected,sizeof(expected),"Fatal signal 0x%08x\n",p.number);
-    LH_EQ(lh::read_file(log_path(t)),expected);
+    LH_EQ(lh::read_file(log_path(t)),t.ok(session(t).arg("--version")).out+expected);
 }
 LH_TEST(test_player_session_abnormal_stop_has_no_dialog) {
     auto r=t.run(session(t).arg("--abnormal").timeout(10)); LH_EQ(r.rc,1); LH_EQ(r.out,"");
-    LH_EQ(r.err,"Stop: test fault\nLast PC: 80010000\n"); LH_EQ(lh::read_file(log_path(t)),r.err);
+    LH_EQ(r.err,"Stop: test fault\nLast PC: 80010000\n"); LH_EQ(lh::read_file(log_path(t)),t.ok(session(t).arg("--version")).out+r.err);
 }

@@ -9,6 +9,11 @@ endif()
 set(ENV{SDL_VIDEODRIVER} dummy)
 set(ENV{SDL_AUDIODRIVER} dummy)
 set(ENV{FF8_PLAYER_HOST} "${root}/Lionheart.exe")
+execute_process(COMMAND ${EMULATOR} "${root}/Lionheart.exe" --version
+  WORKING_DIRECTORY "${root}" RESULT_VARIABLE version OUTPUT_VARIABLE identity ERROR_VARIABLE version_error TIMEOUT 30)
+if(NOT version EQUAL 0 OR NOT identity MATCHES "^Lionheart [0-9]+[.][0-9]+[.][0-9]+( [(][0-9a-f]+(-dirty)?[)])?\n$" OR NOT version_error STREQUAL "")
+  message(FATAL_ERROR "Unexpected player version result ${version}: ${identity}${version_error}")
+endif()
 file(WRITE "${root}/smoke.ini" "")
 execute_process(COMMAND ${EMULATOR} "${root}/Lionheart.exe" --headless --config smoke.ini
   WORKING_DIRECTORY "${root}" RESULT_VARIABLE smoke OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
