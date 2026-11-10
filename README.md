@@ -82,6 +82,8 @@ step.
 During the game, **Esc** or the controller's **Guide** button opens the menu. A renderer change made there applies
 at the next launch.
 
+On Linux, an installed Lionheart also appears under **Open With** for cue sheets. Opening one keeps the discs you already set up.
+
 You can also pass discs on the command line. Repeat `--disc` for each disc; Lionheart detects which disc is which:
 
 ```sh
