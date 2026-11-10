@@ -1,4 +1,5 @@
 #include "metadata_io.h"
+#include "catalog.h"
 #include "disc.h"
 #include "sha1.h"
 #include <stdlib.h>
@@ -81,4 +82,40 @@ void *metadata_exe(metadata_image *m, const char *name, size_t *size,
 }
 void metadata_hash(const void *data, size_t size, char hex[41]) {
   lhg_sha1_hex(data, size, hex);
+}
+int metadata_entry_valid(const void *data, size_t size, uint32_t base,
+                         uint32_t pc) {
+  lhg_image image;
+  memset(&image, 0, sizeof image);
+  image.data = data;
+  image.size = size;
+  image.base = base;
+  image.entry = base;
+  return lhg_entry_hint_valid(&image, (int64_t)pc);
+}
+uint32_t metadata_effect_base(const void *data, size_t size, const char *name,
+                              char *error) {
+  // Failure cleanup must outlive setjmp's automatic-variable rules.
+  lhg_ctx *ctx = calloc(1, sizeof *ctx);
+  if (!ctx) {
+    strcpy(error, "out of memory");
+    return 0;
+  }
+  lhg_ctx_init(ctx);
+  lhg_arena *arena = calloc(1, sizeof *arena);
+  if (!arena || setjmp(ctx->bail)) {
+    strcpy(error, arena ? ctx->error : "out of memory");
+    lhg_ctx_release(ctx);
+    free(ctx);
+    free(arena);
+    return 0;
+  }
+  lhg_arena_init(arena, ctx);
+  uint32_t base = lhg_infer_effect_base(arena, data, size, name,
+                                        lhg_json_new_object(arena));
+  lhg_arena_release(arena);
+  lhg_ctx_release(ctx);
+  free(ctx);
+  free(arena);
+  return base;
 }

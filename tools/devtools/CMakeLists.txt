@@ -27,7 +27,9 @@ target_compile_definitions(mdec-trace PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
 enable_language(C)
 add_library(metadata-io STATIC metadata_io.c
   ../../generator/src/base.c ../../generator/src/platform.c
-  ../../generator/src/disc.c ../../generator/src/lzs.c ../../generator/src/sha1.c)
+  ../../generator/src/disc.c ../../generator/src/lzs.c ../../generator/src/sha1.c
+  ../../generator/src/sha256.c ../../generator/src/json.c ../../generator/src/decode.c
+  ../../generator/src/discover.c ../../generator/src/catalog.c)
 target_include_directories(metadata-io PRIVATE ../../generator/src ../../generator/include)
 add_executable(ff8files ff8files.cpp)
 target_compile_features(ff8files PRIVATE cxx_std_17)

@@ -82,6 +82,11 @@ build/devtools/ff8files import --upstream /source/ff8-decomp --commit FULL_SHA \
   --output /scratch/metadata disc1.cue disc2.cue disc3.cue disc4.cue
 ```
 
+`verify` also holds the per-set entry hints in `overlays.json` (`set_entry_points`,
+keyed by a set's catalog SHA-1) to what the generator requires: one catalog set per
+row, ascending addresses spelled `0x` and eight lowercase digits, and an instruction
+of every image the disc loads for that set.
+
 `--metadata DIR` selects an inventory directory for list/get/verify. Extraction
 supports full paths, overlay names and `@table:index` identities; `--raw`,
 `--loaded` and `--decompress` are mutually exclusive. Extraction inside the

@@ -493,12 +493,71 @@ static const lhg_json *path_index_find(const path_index *index, const char *path
     return NULL;
 }
 
+/* Per-set entry hints sit beside the executable's in overlays.json, keyed by a
+ * set's catalog SHA-1: overlays-all.json is imported, while these are found by
+ * replaying the game, and name functions reached only through pointers. Every
+ * list is sorted and unique, so a set's hints have one spelling and one identity. */
+static void check_set_hints(lhg_ctx *ctx, const lhg_json *metadata, const lhg_json *catalog)
+{
+    const lhg_json *rows = lhg_json_find(metadata, "set_entry_points");
+    if (!rows)
+        return;
+    lhg_json_list(ctx, rows, "set_entry_points");
+    for (size_t row = 0; row < rows->as.array.count; row++) {
+        const lhg_json *item = rows->as.array.items[row];
+        const char *name = lhg_json_str(ctx, lhg_json_require(ctx, item, "name", "set_entry_points"), "name");
+        const char *sha1 = lhg_json_str(ctx, lhg_json_require(ctx, item, "sha1", "set_entry_points"), "sha1");
+        const lhg_json *points = lhg_json_list(ctx, lhg_json_require(ctx, item, "entry_points", name), "entry_points");
+        if (!points->as.array.count)
+            lhg_fail(ctx, "set_entry_points: %s %s lists no entry points", name, sha1);
+        uint32_t previous = 0;
+        for (size_t at = 0; at < points->as.array.count; at++) {
+            const char *text = lhg_json_str(ctx, points->as.array.items[at], "entry_points");
+            uint32_t pc = parse_hex32(ctx, text, "entry_points");
+            char spelled[16];
+            snprintf(spelled, sizeof spelled, "0x%08lx", (unsigned long)pc);
+            if (strcmp(text, spelled))
+                lhg_fail(ctx, "set_entry_points: %s is not spelled 0x and eight lowercase digits", text);
+            if (pc & 3 || (at && pc <= previous))
+                lhg_fail(ctx, "set_entry_points: %s %s must list aligned addresses in ascending order", name, sha1);
+            previous = pc;
+        }
+        for (size_t other = 0; other < row; other++)
+            if (!strcmp(sha1, lhg_json_str(ctx, lhg_json_require(ctx, rows->as.array.items[other], "sha1", "set_entry_points"), "sha1")))
+                lhg_fail(ctx, "set_entry_points: %s is listed twice", sha1);
+        size_t matches = 0;
+        for (size_t group = 0; group < catalog->as.array.count; group++) {
+            const lhg_json *candidate = catalog->as.array.items[group];
+            if (strcmp(sha1, lhg_json_str(ctx, lhg_json_require(ctx, candidate, "sha1", "catalog group"), "sha1")))
+                continue;
+            if (strcmp(name, lhg_json_str(ctx, lhg_json_require(ctx, candidate, "name", "catalog group"), "name")))
+                lhg_fail(ctx, "set_entry_points: %s is not named %s in the catalog", sha1, name);
+            matches++;
+        }
+        if (matches != 1)
+            lhg_fail(ctx, "set_entry_points: %s %s does not name one catalog set", name, sha1);
+    }
+}
+
+/* The checked hint list of one catalog group, or NULL. */
+static const lhg_json *set_hints(lhg_ctx *ctx, const lhg_json *metadata, const lhg_json *group, const char *group_name)
+{
+    const lhg_json *rows = lhg_json_find(metadata, "set_entry_points");
+    if (!rows)
+        return NULL;
+    const char *sha1 = lhg_json_str(ctx, lhg_json_require(ctx, group, "sha1", group_name), "sha1");
+    for (size_t row = 0; row < rows->as.array.count; row++)
+        if (!strcmp(sha1, lhg_json_str(ctx, lhg_json_require(ctx, rows->as.array.items[row], "sha1", "set_entry_points"), "sha1")))
+            return lhg_json_require(ctx, rows->as.array.items[row], "entry_points", group_name);
+    return NULL;
+}
+
 /* Which sets the present discs give, and their loader indices, from metadata
  * alone. Within a group, images with the same loaded bytes are one set held by
  * the last location listing them; set numbers below 128 stay the original
  * top-table overlays, and the rest are numbered in catalog order. */
-static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int present[5], const path_index indexes[5],
-                        int strict, lhg_plan_row **out, size_t *out_count)
+static void plan_groups(lhg_arena *arena, const lhg_json *metadata, const lhg_json *catalog, const int present[5],
+                        const path_index indexes[5], int strict, lhg_plan_row **out, size_t *out_count)
 {
     lhg_ctx *ctx = arena->ctx;
     lhg_plan_row *rows = NULL;
@@ -508,6 +567,7 @@ static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int pre
         const lhg_json *group = catalog->as.array.items[group_index];
         const char *group_name = lhg_json_str(ctx, lhg_json_require(ctx, group, "name", "catalog group"), "name");
         const lhg_json *locations = lhg_json_list(ctx, lhg_json_require(ctx, group, "locations", group_name), "locations");
+        const lhg_json *hints = set_hints(ctx, metadata, group, group_name);
         size_t first = count;
         for (size_t row = 0; row < locations->as.array.count; row++) {
             const lhg_json *location = locations->as.array.items[row];
@@ -525,6 +585,7 @@ static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int pre
             rows[slot].group = group_index;
             rows[slot].group_json = group;
             rows[slot].group_name = group_name;
+            rows[slot].hints = hints;
             rows[slot].loaded_sha1 = loaded;
             rows[slot].location = location;
             rows[slot].disc = (int)disc;
@@ -578,6 +639,14 @@ void lhg_plan_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65])
              (long long)lhg_json_int(ctx, lhg_json_require(ctx, row->location, "loaded_size", "location"), "loaded_size"), row->has_top,
              row->top);
     lhg_sha256_add(&hash, number, strlen(number));
+    /* Only a hinted set hashes its hints, so every other identity stays as it was. */
+    if (row->hints)
+        for (size_t at = 0; at < row->hints->as.array.count; at++) {
+            const char *pc = lhg_json_str(ctx, row->hints->as.array.items[at], "entry_points");
+            lhg_sha256_add(&hash, "entry ", 6);
+            lhg_sha256_add(&hash, pc, strlen(pc));
+            lhg_sha256_add(&hash, "\n", 1);
+        }
     lhg_sha256_finish(&hash, hex);
 }
 
@@ -590,6 +659,7 @@ uint32_t lhg_plan_base(lhg_ctx *ctx, const lhg_plan_row *row)
 void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_mask, lhg_plan_row **rows, size_t *count)
 {
     lhg_ctx *ctx = arena->ctx;
+    const lhg_json *metadata = load_json(arena, catalog_dir, "overlays.json");
     const lhg_json *catalog_root = load_json(arena, catalog_dir, "overlays-all.json");
     const lhg_json *catalog = lhg_json_list(ctx, lhg_json_require(ctx, catalog_root, "overlays", "overlays-all.json"), "overlays");
     int present[5] = {0};
@@ -602,7 +672,8 @@ void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_m
         path_index_build(arena, &indexes[number], lhg_json_list(ctx, lhg_json_require(ctx, inventory, "entries", "inventory"), "entries"));
         present[number] = 1;
     }
-    plan_groups(arena, catalog, present, indexes, 1, rows, count);
+    check_set_hints(ctx, metadata, catalog);
+    plan_groups(arena, metadata, catalog, present, indexes, 1, rows, count);
 }
 
 void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
@@ -652,7 +723,8 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
 
     lhg_plan_row *plan;
     size_t plan_count, plan_next = 0;
-    plan_groups(arena, catalog, present, indexes, 0, &plan, &plan_count);
+    check_set_hints(ctx, metadata, catalog);
+    plan_groups(arena, metadata, catalog, present, indexes, 0, &plan, &plan_count);
     lhg_json *evidence = lhg_json_new_object(arena);
     lhg_overlay_set *result = NULL;
     size_t result_count = 0, result_capacity = 0;
@@ -793,6 +865,18 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
             meta->disc = disc;
             meta->poll_forward = has_top && (top == 0 || top == 1);
             image->meta = meta;
+            if (planned->hints) {
+                size_t count = planned->hints->as.array.count;
+                uint32_t *points = lhg_arena_alloc(arena, count * sizeof *points);
+                for (size_t at = 0; at < count; at++) {
+                    points[at] = parse_hex32(ctx, lhg_json_str(ctx, planned->hints->as.array.items[at], "entry_points"), "entry_points");
+                    if (!lhg_entry_hint_valid(image, (int64_t)points[at]))
+                        lhg_fail(ctx, "%s: entry point 0x%08lx is not an instruction of the image loaded from %s", group_name,
+                                 (unsigned long)points[at], lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path"));
+                }
+                image->entry_points = points;
+                image->entry_point_count = count;
+            }
             size_t seed_count;
             uint32_t *seeds = lhg_prologue_seeds(arena, item->loaded, item->loaded_size, base, &seed_count);
             lhg_overlay_set *set = append_overlay(ctx, &result, &result_count, &result_capacity);

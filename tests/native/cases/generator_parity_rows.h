@@ -103,6 +103,7 @@ const ParityRow kParityRows[] = {
     {"test_unaligned_image_base", "{}"},
     {"test_empty_functions_and_code_ranges", "{}"},
     {"test_catalog_metadata_and_poll_policy", "{}"},
+    {"test_set_entry_points", "{}"},
     {"test_malformed_inputs_end_with_a_message", "{}"},
     {"test_catalog_locations_are_bounded[4611686018427387904-16-outside image]", "{\"sector\":4611686018427387904,\"size\":16,\"message\":\"outside image\"}"},
     {"test_catalog_locations_are_bounded[9223372036854775807-16-outside image]", "{\"sector\":9223372036854775807,\"size\":16,\"message\":\"outside image\"}"},

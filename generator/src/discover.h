@@ -65,6 +65,10 @@ int lhg_image_executable(const lhg_image *image, int64_t pc);
 uint32_t lhg_image_word(const lhg_image *image, int64_t pc);
 lhg_insn lhg_image_insn(const lhg_image *image, int64_t pc);
 void lhg_image_validate(lhg_ctx *ctx, const lhg_image *image);
+/* Whether a catalog entry hint names an instruction of the image: inside it,
+ * aligned, nonzero and a defined opcode. Hints come from outside the image, so
+ * a wrong one would otherwise turn data into code without any other check. */
+int lhg_entry_hint_valid(const lhg_image *image, int64_t pc);
 
 /* Functions come back sorted by entry; instructions inside are sorted by pc.
  * Results live in the arena. */

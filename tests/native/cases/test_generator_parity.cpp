@@ -546,6 +546,55 @@ lh::fs::path catalog(lh::Case &t, const std::string &hash, A overlays, A locatio
                                                   .dump());
     return dir;
 }
+// A disc whose IMG holds one uncompressed overlay after its top table, and the
+// full catalog that describes it; overlays.json carries `extra` as well.
+struct OverlayDisc {
+    lh::fs::path cue, catalog;
+    std::string sha1;
+};
+OverlayDisc overlay_disc(lh::Case &t, const std::string &payload, const O &extra) {
+    auto data = disc(), exe = valid_exe();
+    auto put = [&](int sector, const std::string &s) {
+        for (size_t i = 0; i < s.size(); i += 2048)
+            data.replace((sector + i / 2048) * 2352 + 24, std::min<size_t>(2048, s.size() - i), s.substr(i, 2048));
+    };
+    put(18, directory_record("SLUS_008.92;1", 20, exe.size()) + directory_record("FF8DISC1.IMG;1", 24, 4096));
+    put(20, exe);
+    put(24, pack(Words(266, 1)));
+    put(25, payload);
+    OverlayDisc out{t.temp() / "ff8 (Disc 1).cue", t.temp() / "catalog", sha1(payload)};
+    lh::write_file(t.temp() / "ff8.bin", data);
+    lh::write_file(out.cue, "FILE \"ff8.bin\" BINARY\n");
+    lh::fs::create_directories(out.catalog);
+    O metadata = {{"exe_sha1", sha1(exe)}, {"main_code_ranges", A{A{"0x80010000", "0x80010400"}}}};
+    for (const auto &item : extra)
+        metadata[item.first] = item.second;
+    lh::write_file(out.catalog / "overlays.json", J(metadata).dump());
+    auto size = num(payload.size());
+    lh::write_file(out.catalog / "files-disc1.json",
+                   J(O{{"exe", O{{"name", "SLUS_008.92"}}},
+                       {"image", O{{"lba", 24}, {"size", 4096}}},
+                       {"entries", A{O{{"path", "data/x.ovl"}, {"locator", O{{"table", "battle"}, {"index", 0}}}}}}})
+                       .dump());
+    lh::write_file(out.catalog / "overlays-all.json",
+                   J(O{{"overlays", A{O{{"name", "x"},
+                                        {"names", A{"x"}},
+                                        {"paths", A{"data/x.ovl"}},
+                                        {"sha1", out.sha1},
+                                        {"size", size},
+                                        {"locations", A{O{{"disc", 1},
+                                                          {"path", "data/x.ovl"},
+                                                          {"sector", 1},
+                                                          {"size", size},
+                                                          {"read_size", size},
+                                                          {"compressed", false},
+                                                          {"sha1_stored", out.sha1},
+                                                          {"loaded_sha1", out.sha1},
+                                                          {"loaded_size", size},
+                                                          {"load_address", "0x80098000"}}}}}}}})
+                       .dump());
+    return out;
+}
 std::string cli(lh::Case &t, std::initializer_list<lh::Arg> args) {
     auto res = t.run(t.harness("lionheart-gen").args(args).cwd(t.temp()).timeout(120));
     LH_CHECK(res.rc > 0);
@@ -655,6 +704,63 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
                        : cli(t, {"--disc", t.temp() / "ff8.cue", "--legacy-overlays", "--catalog", cp, "-o",
                                  t.temp() / "out"});
         LH_CONTAINS(err, p["message"].text());
+        return;
+    }
+    if (fn == "test_set_entry_points") {
+        // The overlay's entry returns at once; the function at +16 is only
+        // reached through a pointer, so only its hint makes it native.
+        auto payload = pack(RET + Words{0, 0, imm(9, 0, 2, 7)} + RET);
+        auto hinted = [&](A points, std::string sha1 = "") {
+            return O{{"set_entry_points", A{O{{"name", "x"}, {"sha1", sha1}, {"entry_points", points}}}}};
+        };
+        auto generate = [&](const OverlayDisc &d, const char *shape) {
+            auto out = t.temp() / (std::string("out-") + shape);
+            lh::fs::remove_all(out);
+            t.ok(t.harness("lionheart-gen")
+                     .args({"--disc", d.cue, "--catalog", d.catalog, "--shape", shape, "-o", out})
+                     .cwd(t.temp())
+                     .timeout(120));
+            return out;
+        };
+        auto plan = [&](const OverlayDisc &d) {
+            return t.ok(t.harness("lionheart-gen")
+                            .args({"--disc", d.cue, "--catalog", d.catalog, "--shape", "modules", "--plan"})
+                            .cwd(t.temp())
+                            .timeout(120))
+                .out;
+        };
+        auto plain = overlay_disc(t, payload, O{});
+        auto before = plan(plain);
+        LH_NOT_CONTAINS(lh::read_file(generate(plain, "linked") / "overlay_128_000.c"), "f_80098010");
+        auto disc = overlay_disc(t, payload, hinted(A{"0x80098010"}, plain.sha1));
+        LH_CONTAINS(lh::read_file(generate(disc, "linked") / "overlay_128_000.c"), "void ov128_f_80098010(cpu_t *c)");
+        LH_CONTAINS(lh::read_file(generate(disc, "modules") / "modules/set-128/unit_000.c"), "void f_80098010(cpu_t *c)");
+        // Only the hinted set's identity changes; the executable's does not.
+        auto after = plan(disc);
+        LH_TEXT_EQ(before.substr(0, before.find('\n')), after.substr(0, after.find('\n')));
+        LH_CHECK(before != after);
+        // Spelling and order are metadata, checked before any disc is read;
+        // whether a hint is an instruction needs the image.
+        auto refuse = [&](A points, const std::string &sha1, const std::string &message, bool planned = true) {
+            auto d = overlay_disc(t, payload, hinted(points, sha1));
+            LH_CONTAINS(cli(t, {"--disc", d.cue, "--catalog", d.catalog, "-o", t.temp() / "refused"}), message);
+            if (planned)
+                LH_CONTAINS(cli(t, {"--disc", d.cue, "--catalog", d.catalog, "--shape", "modules", "--plan"}), message);
+        };
+        refuse(A{"0x80098008"}, disc.sha1, "entry point 0x80098008 is not an instruction", false);
+        refuse(A{"0x80098020"}, disc.sha1, "entry point 0x80098020 is not an instruction", false);
+        refuse(A{"0x80098010", "0x80098000"}, disc.sha1, "ascending order");
+        refuse(A{"0x80098012"}, disc.sha1, "ascending order");
+        refuse(A{"0x8009801C"}, disc.sha1, "eight lowercase digits");
+        refuse(A{}, disc.sha1, "lists no entry points");
+        refuse(A{"0x80098010"}, std::string(40, '0'), "does not name one catalog set");
+        // Discovery itself takes a set's hints as roots, in either emission mode.
+        auto ov = image(payload, 0x80098000);
+        ov["index"] = 128;
+        ov["entry_points"] = A{num(0x80098010)};
+        ov["scan_calls"] = false;
+        for (auto mode : {"fast", "trace"})
+            parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
     if (fn == "test_malformed_inputs_end_with_a_message") {

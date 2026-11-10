@@ -37,6 +37,14 @@ void lhg_image_validate(lhg_ctx *ctx, const lhg_image *image)
         lhg_fail(ctx, "image extends past the 32-bit address space");
 }
 
+int lhg_entry_hint_valid(const lhg_image *image, int64_t pc)
+{
+    if (!lhg_image_executable(image, pc))
+        return 0;
+    lhg_insn i = lhg_image_insn(image, pc);
+    return i.word && i.op != LHG_OP_RESERVED && i.op != LHG_OP_COP_UNUSABLE;
+}
+
 static size_t word_index(const lhg_image *image, int64_t pc)
 {
     return (size_t)(pc - (int64_t)(image->base & ~3u)) / 4;

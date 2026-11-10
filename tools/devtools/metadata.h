@@ -267,6 +267,72 @@ inline J coverage(Image &im, const J &entries) {
   return out;
 }
 inline std::string image_hash(Image &im) { return hash(im.read(0, im.size)); }
+// The per-set entry hints of overlays.json, held to what the generator
+// requires: one catalog set per row, one spelling per address, and an
+// instruction of every image this disc loads for that set. -1 without the file.
+inline int set_hints(Image &im, const std::map<std::string, J> &entries,
+                     const J &catalog, const fs::path &dir) {
+  if (!fs::exists(dir / "overlays.json"))
+    return -1;
+  auto meta = load(dir / "overlays.json");
+  if (!meta.contains("set_entry_points"))
+    return 0;
+  int count = 0;
+  std::set<std::string> rows;
+  for (auto &row : meta["set_entry_points"]) {
+    auto name = text(row.at("name")), sha1 = text(row.at("sha1"));
+    require(rows.insert(sha1).second, "set entry points listed twice: " + sha1);
+    const J *group = nullptr;
+    for (auto &o : catalog["overlays"])
+      if (o["sha1"] == sha1) {
+        require(!group && o["name"] == name,
+                "set entry points do not name one catalog set: " + sha1);
+        group = &o;
+      }
+    require(group, "set entry points do not name one catalog set: " + sha1);
+    std::vector<uint32_t> points;
+    for (auto &p : row.at("entry_points")) {
+      auto s = text(p);
+      char spelled[16];
+      uint32_t pc = std::stoul(s, nullptr, 16);
+      std::snprintf(spelled, sizeof spelled, "0x%08x", pc);
+      require(s == spelled && (pc & 3) == 0 &&
+                  (points.empty() || pc > points.back()),
+              "set entry points must be aligned, ascending and spelled "
+              "0x%08x: " + s);
+      points.push_back(pc);
+    }
+    require(!points.empty(), "set entry points list nothing: " + sha1);
+    for (auto &l : (*group)["locations"]) {
+      if (l["disc"] != im.number)
+        continue;
+      auto &e = entries.at(text(l["path"]));
+      auto raw = im.read(num(e["sector"]), num(e["size"]));
+      auto image = e["compressed"].get<bool>() ? decode(raw) : raw;
+      auto loaded = e["compressed"].get<bool>() &&
+                            num(e["read_size"]) < (int64_t)raw.size()
+                        ? decode(raw.substr(0, num(e["read_size"])))
+                        : image;
+      uint32_t base;
+      if (l["load_address"].is_null()) {
+        char error[1024] = {};
+        base = metadata_effect_base(image.data(), image.size(),
+                                    name.c_str(), error);
+        require(base, error);
+      } else
+        base = std::stoul(text(l["load_address"]), nullptr, 16);
+      for (size_t i = 0; i < points.size(); ++i) {
+        if (!metadata_entry_valid(loaded.data(), loaded.size(), base,
+                                  points[i]))
+          throw std::runtime_error("set entry point is not an instruction of " +
+                                   text(l["path"]) + ": " +
+                                   text(row["entry_points"][i]));
+        ++count;
+      }
+    }
+  }
+  return count;
+}
 inline void verify(Image &im, const J &inv, const fs::path &dir) {
   int count = 0, overlays = 0;
   std::map<std::string, J> entries;
@@ -312,6 +378,7 @@ inline void verify(Image &im, const J &inv, const fs::path &dir) {
         seen.insert(path);
       }
   require(seen.size() == entries.size(), "overlay catalog coverage mismatch");
+  int hints = set_hints(im, entries, catalog, dir);
   require(coverage(im, inv["entries"]) == inv["padding"],
           "IMG padding coverage mismatch");
   require(image_hash(im) == text(inv["image"]["sha1"]),
@@ -321,6 +388,9 @@ inline void verify(Image &im, const J &inv, const fs::path &dir) {
   std::cout << "disc " << im.number << ": verified " << count
             << " file SHA-1s/table locations and " << overlays
             << " overlay images/catalog records\n";
+  if (hints >= 0)
+    std::cout << "disc " << im.number << ": verified " << hints
+              << " set entry points\n";
 }
 inline void scan(Image &im, const J &inv, const fs::path &cue,
                  const fs::path &dir) {

@@ -18,6 +18,8 @@ typedef struct {
     size_t group;
     const lhg_json *group_json, *location;
     const char *group_name, *loaded_sha1;
+    /* The set's entry hints from overlays.json, or NULL. */
+    const lhg_json *hints;
     int index, disc, top, has_top;
     /* No inventory entry: the loader fails here once the bytes are verified. */
     int missing;
