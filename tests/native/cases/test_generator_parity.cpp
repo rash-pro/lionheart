@@ -775,6 +775,21 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
+    if (fn == "test_branch_into_a_delay_slot") {
+        // The beq lands on the jump's delay slot at +16; from there the code
+        // runs on to +20 and its own return, reached no other way.
+        auto main = image(Words{imm(4, 4, 0, 3), 0, imm(9, 2, 2, 1), j(2, BASE + 0x24), imm(9, 2, 2, 2), imm(9, 2, 2, 3)} + RET +
+                          Words{0} + RET);
+        main["seeds"] = A{num(BASE)};
+        main["scan_calls"] = false;
+        for (auto v : std::vector<std::pair<std::string, std::string>>{{"fast", "precise"}, {"trace", "fast"}}) {
+            auto spec = main_spec(main);
+            spec["mode"] = v.first;
+            spec["host_mode"] = v.second;
+            LH_CONTAINS(source(parity(t, spec, "delay-slot-target-" + v.first)), "case 0x80010014u:");
+        }
+        return;
+    }
     if (fn == "test_jump_table_scan_keeps_r0_zero") {
         // `lui zero` is a no-op; the table base is then moved through r0, so a
         // scanner that let r0 take the constant would look for the table elsewhere.

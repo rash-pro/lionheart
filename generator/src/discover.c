@@ -243,7 +243,10 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
     size_t words = word_index(image, (int64_t)image->base + (int64_t)image->size + 3) + 1;
     uint8_t *is_entry = lhg_zalloc(ctx, words, 1);
     uint8_t *has_function = lhg_zalloc(ctx, words, 1);
+    /* stamp: added to the current function; visited: its successors followed too.
+     * A delay slot is added with its branch but only visited when reached. */
     uint32_t *stamp = lhg_zalloc(ctx, words, sizeof *stamp);
+    uint32_t *visited = lhg_zalloc(ctx, words, sizeof *visited);
 
     pc_stack initial = {0}, pending = {0}, todo = {0};
     /* Candidate calls are validated against the image; traversal, not a fixed
@@ -300,7 +303,7 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
             if (!lhg_image_executable(image, pc))
                 continue;
             size_t at = word_index(image, pc);
-            if (stamp[at] == generation)
+            if (visited[at] == generation)
                 continue;
             if (pc != entry && is_entry[at])
                 continue;
@@ -311,9 +314,12 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
                 !(pc >= entry && pc < zero_end))
                 continue;
             lhg_insn i = lhg_image_insn(image, pc);
-            insns = lhg_grow(ctx, insns, &insn_capacity, insn_count, sizeof *insns);
-            insns[insn_count++] = i;
-            stamp[at] = generation;
+            if (stamp[at] != generation) {
+                insns = lhg_grow(ctx, insns, &insn_capacity, insn_count, sizeof *insns);
+                insns[insn_count++] = i;
+                stamp[at] = generation;
+            }
+            visited[at] = generation;
             uint16_t flags = lhg_op_flags[i.op];
             if (flags & (LHG_F_CONTROL | LHG_F_COPBRANCH)) {
                 if (lhg_image_executable(image, pc + 4) && stamp[word_index(image, pc + 4)] != generation) {
@@ -390,6 +396,7 @@ void lhg_discover(lhg_arena *arena, const lhg_image *image, const uint32_t *seed
     lhg_free(ctx, is_entry);
     lhg_free(ctx, has_function);
     lhg_free(ctx, stamp);
+    lhg_free(ctx, visited);
     lhg_free(ctx, initial.items);
     lhg_free(ctx, pending.items);
     lhg_free(ctx, todo.items);
