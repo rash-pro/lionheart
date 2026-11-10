@@ -128,7 +128,7 @@ struct Program {
 };
 
 RegisterCache read_selection(const fs::path &path);
-// Emit without compiling, for output and manifest assertions. Records the same
+// Emit without compiling, for output and manifest assertions.
 void generate(Case &t, const Program &program, const fs::path &directory);
 
 // The compiled result: a Library plus where the generated files are.

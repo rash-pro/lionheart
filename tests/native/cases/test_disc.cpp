@@ -16,7 +16,7 @@ namespace {
 void put32(std::string &out, size_t at, uint32_t value) {
     for (int i = 0; i < 4; ++i) out[at + i] = static_cast<char>(value >> (8 * i));
 }
-// replaced the parser with a mock, and C has no such seam.
+// A minimal PS-X EXE satisfies the real parser without game bytes.
 std::string minimal_exe() {
     std::string exe(0x800 + 16, '\0');
     std::memcpy(exe.data(), "PS-X EXE", 8);
@@ -64,7 +64,7 @@ std::string directory_record(const std::string &name, uint32_t lba, uint32_t siz
     record.replace(33, name.size(), name);
     return record;
 }
-// so the C reader does its real work, and a wrong LBA finds other bytes.
+// Populate real sectors so an incorrect LBA yields different bytes.
 void build_disc(const lh::fs::path &directory, const std::string &exe, const std::string &payload, bool external, int index) {
     DiscImage image;
     std::string pvd(2048, '\0');
@@ -118,7 +118,7 @@ LH_TEST_P(test_assets_directory_and_overlay_source, kExternal) {
                    "{\"exe_sha1\":\"" + sha1_hex(exe) + "\",\"main_code_ranges\":[[\"0x80010000\",\"0x80010010\"]],"
                    "\"discs\":{\"1\":{\"exe\":\"SLUS_008.92\",\"image\":\"FF8DISC1.IMG\",\"overlays\":[" + row.str() + "]}}}");
 
-    // The shared tree is read-only for the whole extraction, which is what the
+    // Keep the shared tree read-only throughout extraction.
     const auto list = [](const lh::fs::path &root) {
         std::set<std::string> names;
         for (const auto &entry : lh::fs::recursive_directory_iterator(root)) names.insert(entry.path().string());

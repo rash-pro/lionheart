@@ -1,4 +1,4 @@
-// Differential tests of generated code against the interpreter, one shared
+// Differential tests share a synthetic program and compare against the interpreter.
 #include "cases/recompiler_fixture.h"
 
 #include <set>

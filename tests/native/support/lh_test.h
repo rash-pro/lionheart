@@ -240,7 +240,7 @@ inline void check_contains(const char *file, int line, const char *expression, c
 #define LH_TEST(function) LH_DETAIL_TEST(function, lh::Tier::standard)
 #define LH_GAME_TEST(function) LH_DETAIL_TEST(function, lh::Tier::game)
 #define LH_REALTIME_TEST(function) LH_DETAIL_TEST(function, lh::Tier::realtime)
-// also sees `p`, the element. An element's id comes from its `id` member, or
+// Parameterized bodies see `t` and `p`. An element's id comes from its `id` member, or
 // from the element itself when it is a string or an integer. A `tier` member
 // overrides the tier for that element.
 #define LH_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::standard, values)
