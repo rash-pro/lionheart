@@ -323,7 +323,7 @@ if(FF8_VULKAN)
   endif()
   add_library(ff8_vulkan backends/host/vulkan_renderer.cpp)
   # CRT presentation shaders: glslc builds them from source; the committed
-  # prebuilt includes are the fallback and must match (tests/test_host_crt.py).
+  # prebuilt includes are the fallback and must match (tests/native/cases/test_host_crt.cpp).
   set(CRT_SHADERS crt_fullscreen.vert crt_lines.frag crt_beam.frag crt_glow.frag crt_final.frag osd.frag)
   find_program(GLSLC glslc)
   if(GLSLC)

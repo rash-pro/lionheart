@@ -15,7 +15,7 @@ int main(void) {
     host_audio_resume();
     assert(SDL_GetAudioDeviceStatus(host_audio.device)==SDL_AUDIO_PAUSED);
     /* Fill preroll while paused. The full-suite runner also compiles on other
-     * cores, so wall-clock playback bounds belong to verify_pc16.py audio. */
+     * cores, so wall-clock playback bounds need a separate realtime check. */
     for (unsigned i=0;i<4;++i) {
         cycles+=564480; spu_advance(spu,cycles);
         assert(host_audio_pump(spu));

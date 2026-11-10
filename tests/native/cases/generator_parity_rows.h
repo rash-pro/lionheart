@@ -1,4 +1,3 @@
-// Parameter values and identity spelling frozen from pytest collection.
 struct ParityRow { const char *name, *parameters; };
 const ParityRow kParityRows[] = {
     {"test_recompiler_cases[False-exact]", "{\"cache\":false,\"timing\":\"exact\"}"},

@@ -1,7 +1,6 @@
 // CRT presentation presets: options, shaders, and synthetic patterns on Vulkan.
 #include "presentation.h"
 #include "host_fixtures.h"
-#include "equiv.h"
 namespace {
 static const char *shaders[]={"crt_fullscreen.vert","crt_lines.frag","crt_beam.frag","crt_glow.frag","crt_final.frag"};
 LH_TEST_P(test_prebuilt_shader_matches_source_and_validates,shaders) {lh::shader_contract(t,p);}
@@ -49,7 +48,7 @@ static std::vector<Preset> presets() {
 }
 static int profile_cycles(lh::Case &t,const lh::oracle::PngImage &image,lh::Rect rect) {
     auto profile=lh::oracle::row_profile(image,rect);auto cycles=lh::oracle::dominant_cycles(profile);
-    lh::equiv::record(t,int32_t(image.width),int32_t(image.height),rect.x,rect.y,rect.w,rect.h,image.rgb,profile,cycles);return cycles;
+    return cycles;
 }
 LH_TEST_P(test_preset_scanlines_borders_brightness_and_determinism,presets()) {
     auto tool=lh::crt_preview(t);auto view=lh::viewport(t,p.width,p.height);const auto c=view.content;
@@ -60,7 +59,7 @@ LH_TEST_P(test_preset_scanlines_borders_brightness_and_determinism,presets()) {
     LH_CHECK_MSG(std::abs(cycles/(double(inner.h)/c.h)-240)<=1,"scanline cycles="+std::to_string(cycles));
     LH_CHECK(lh::oracle::black_outside(out,view.frame));lh::Rect centre{c.x+c.w/4,c.y+c.h/4,c.w/2,c.h/2};
     const double mean=lh::oracle::mean_linear(out,centre),refmean=lh::oracle::mean_linear(reference,centre),ratio=mean/refmean;
-    lh::equiv::record(t,centre.x,centre.y,centre.w,centre.h,reference.rgb,mean,refmean);
+
     LH_CHECK_MSG(std::abs(ratio-1)<=.08,"linear brightness ratio="+std::to_string(ratio));
 }
 LH_TEST(test_presets_draw_inside_the_scanout_rectangle) {

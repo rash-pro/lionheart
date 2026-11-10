@@ -34,7 +34,6 @@ class RaService {
         std::string mode = "ok", award_mode = "ok", token = "test-token";
         bool unknown = false, set_failure = false;
         unsigned delay_ms = 0;
-        // Fixed values are used only by the disposable Python equivalence check.
         time_t now = 0;
         std::string origin, server = "LionheartFixture/1";
     };
@@ -305,7 +304,6 @@ class RaService {
                 requests_.push_back({path, params, get(headers, "user-agent")});
             }
             sleep_ms(c.delay_ms);
-            // A delayed Python response reads mutable service flags after sleeping.
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 c = config_;

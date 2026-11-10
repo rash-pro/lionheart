@@ -45,8 +45,6 @@ private:
     std::string text_;
     bool path_ = false;
 };
-
-// Exit status follows Python's returncode: negative means killed by that signal.
 struct Result {
     int rc = 0;
     bool timed_out = false;
@@ -172,8 +170,6 @@ fs::path owned_path(const std::string &relative);
 
 // Registration. Use the macros below rather than calling these directly.
 void add_case(const char *file, const std::string &name, Tier tier, std::function<void(Case &)> body);
-// A pytest function of a partly ported file that has no native case yet.
-void add_pending(const char *file, const char *function);
 
 namespace detail {
 template <class T, class = void> struct has_id : std::false_type {};
@@ -198,9 +194,6 @@ struct Registrar {
     }
 };
 
-struct PendingRegistrar {
-    PendingRegistrar(const char *file, const char *function) { add_pending(file, function); }
-};
 
 template <class V> struct ParamRegistrar {
     ParamRegistrar(const char *file, const char *name, Tier tier, const V &values,
@@ -244,25 +237,15 @@ inline void check_contains(const char *file, int line, const char *expression, c
         __FILE__, #function, tier, values, lh_body_##function);                                \
     static void lh_body_##function([[maybe_unused]] lh::Case &t,                               \
                                    const lh::detail::value_t<lh_values_##function> &p)
-
-// One pytest function. The body sees `lh::Case &t`.
 #define LH_TEST(function) LH_DETAIL_TEST(function, lh::Tier::standard)
 #define LH_GAME_TEST(function) LH_DETAIL_TEST(function, lh::Tier::game)
 #define LH_REALTIME_TEST(function) LH_DETAIL_TEST(function, lh::Tier::realtime)
-
-// One parametrized pytest function, one case per element of `values`. The body
 // also sees `p`, the element. An element's id comes from its `id` member, or
 // from the element itself when it is a string or an integer. A `tier` member
 // overrides the tier for that element.
 #define LH_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::standard, values)
 #define LH_GAME_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::game, values)
 #define LH_REALTIME_TEST_P(function, values) LH_DETAIL_TEST_P(function, lh::Tier::realtime, values)
-
-// A pytest function of this file that is still to be ported. Its identities are
-// reported as pending, so a partly ported file stays visible instead of looking
-// complete or looking broken. Delete the line when the case is written.
-#define LH_PENDING(function) \
-    static const lh::detail::PendingRegistrar lh_pending_##function(__FILE__, #function)
 
 #define LH_FAIL(message) lh::fail_at(__FILE__, __LINE__, (message))
 #define LH_CHECK(condition)                                                                    \

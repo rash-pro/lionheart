@@ -1,4 +1,3 @@
-// Frozen Python emission pins synthetic output independently of the C generator.
 #include "lh_json.h"
 #include "recompiler_fixture.h"
 #include <array>

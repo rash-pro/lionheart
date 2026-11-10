@@ -25,8 +25,8 @@ call sites.
 | runtime/dma.c | transfer exceeds RAM; oversized GPU list; cyclic/oversized GPU list; unsupported channel; invalid CD direction | Abnormal |
 | runtime/bios.c | unterminated string; unsupported printf conversion; unimplemented syscall; oversized string copy; oversized memory operation; invalid heap; ReturnFromException outside exception; unimplemented BIOS function | Abnormal |
 | runtime/hw.c | MMIO statistics capacity; hardware/GPU/SPU allocation failure (last three then abort) | Abnormal |
-| recomp/precise.py (emitted code) | branch in delay slot | Abnormal |
-| recomp/fast.py (emitted code) | missing delay slot; branch in delay slot | Abnormal |
+| generator/src/emit.c (emitted code) | branch in delay slot | Abnormal |
+| generator/src/emit.c (emitted code) | missing delay slot; branch in delay slot | Abnormal |
 | tests/overlay_dispatch_harness.c | test stop | Deliberate abnormal fixture; successful self-test returns 0 |
 
 Other endings and control transfers:
@@ -45,7 +45,7 @@ Other endings and control transfers:
 
 `Stop:` is parsed by `build/devtools/compare`, `build/devtools/frame-bench`, and boot,
 player, GUI-pause and PGXP tests. `Last PC:` is retained in exactly the same
-stdout summary format; no existing Python consumer parses that label directly.
+stdout summary format; no existing consumer parses that label directly.
 
 ## Fatal path
 

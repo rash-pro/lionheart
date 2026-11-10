@@ -1,7 +1,6 @@
 // Presentation-only OSD: copy, cells, cached pixels, deterministic clock and composition.
 #include "presentation.h"
 #include "host_fixtures.h"
-#include "equiv.h"
 #include <set>
 namespace {
 struct Panel {const uint8_t *rgba;int x,y,w,h,cw,ch;unsigned revision;uint8_t opacity;};
@@ -43,7 +42,6 @@ static const Cell cells[]={{"size0-16-8",1280,720,16,8},{"size1-24-12",1920,1080
 LH_TEST_P(test_cells_geometry_colors_and_cache,cells) {
     Osd osd(t);osd.reset();osd.post();osd.clock(120);auto a=osd.panel(p.w,p.h,{101,42,900,600});LH_CHECK(a.exists);
     LH_EQ(a.panel.ch,p.ch);LH_EQ(a.panel.cw,p.cw);LH_EQ(a.panel.x,119);LH_EQ(a.panel.y,60);
-    // These preset cell heights make .75*height integral, including Python's ties-to-even rule.
     LH_EQ(a.panel.w,6*p.cw+2*int(std::nearbyint(.75*p.ch)));LH_EQ(a.panel.h,p.ch+2*int(.4*p.ch+.5));
     auto cs=colors(a.pixels);
     LH_CHECK(cs.count({16,16,20,199}));LH_CHECK(cs.count({165,165,175,255}));LH_CHECK(cs.count({242,242,242,255}));
@@ -126,7 +124,7 @@ LH_TEST_P(test_soft_vulkan_composition,compositions) {
         "--size",std::to_string(p.w)+"x"+std::to_string(p.h),"--crt","off","--out",vk,"--filter","nearest","--osd-label",label,"--osd-value",value,"--osd-age",p.age})));
     t.ok(lh::dummy(t.harness("soft").args({p.w,p.h,soft,label,value,p.age})).env("SDL_RENDER_DRIVER","software"));
     const auto a=lh::read_file(vk),b=lh::read_file(soft);const int difference=lh::oracle::max_difference(a,b);
-    lh::equiv::record(t,int32_t(p.w),int32_t(p.h),a,b,difference);
+
     LH_CHECK_MSG(difference<=2,"maximum RGB difference="+std::to_string(difference));
 }
 LH_TEST(test_osd_shader_matches_prebuilt) {lh::shader_contract(t,"osd.frag");}

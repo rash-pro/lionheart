@@ -1,348 +1,86 @@
-# Porting a test file to the native runner
+# Writing and running tests
 
-The test suite now runs through CTest with a small C++ runner, without Python. The pytest files remain as
-migration evidence. A file counts as ported when every test identity it has in pytest exists natively with
-the same tier and the same result.
-
-## Build and run
+The suite uses CTest and a C++17 runner. Build the player separately and pass its path:
 
 ```sh
+cmake -S . -B build/player
+nice -n 10 cmake --build build/player -j4
 cmake -S tests/native -B build/native-tests
-cmake --build build/native-tests -j6 -- -k     # Ninja: -- -k 0. One broken harness must not stop the rest
-ctest --test-dir build/native-tests -j6 --output-on-failure -LE 'game|realtime'
+nice -n 10 cmake --build build/native-tests -j4
+FF8_PLAYER_HOST="$PWD/build/player/lionheart" ctest --test-dir build/native-tests -j4 --output-on-failure -LE 'game|realtime'
 ```
 
-`tests/native` is its own CMake project: configuring it runs no Python, and top-level defines such as `FF8_PLAYER`
-cannot reach a harness. `build/native-tests/lionheart_tests --list` prints every case with its tier. On a shared machine limit the load with
-`nice` and a smaller `-j`; `parity` takes its jobs from `CTEST_PARALLEL_LEVEL`.
+Keep `TMPDIR` outside the checkout; archive extraction tests reject repository outputs.
+Set `SDL_VIDEODRIVER=dummy` and `SDL_AUDIODRIVER=dummy` for headless runs.
+`lionheart_tests --list` lists cases and tiers. CTest labels select `standard`, `game`, `realtime`, or `infra`.
+The `game` tier needs `LIONHEART_DISCS`, a directory containing your disc cues; some routes also need
+`LIONHEART_SAVES` with `disc1-early.mcr` and `disc1-start-maxed.mcr`. Missing inputs skip with a reason.
+The `realtime` tier measures wall-clock pacing; run it separately on an idle machine.
+The `infra` tier checks the runner and helpers and is excluded from baseline comparisons.
 
-Tiers are CTest labels: `-LE 'game|realtime'` is pytest's `-m 'not game and not realtime'`. `-L game` runs the
-owned-game cases; without `LIONHEART_DISCS` they skip with the reason in `ctest -V`. `infra` is this framework's own
-self-tests and never counts toward parity.
+## Layout and case names
 
-## Layout
+`native/cases/test_X.cpp` defines cases; `test_X.cmake` declares their harnesses.
+`tests/*.c` and `tests/*.cpp` hold reusable C/C++ harnesses. `tests/scripts` holds input routes.
+`native/support` contains process, library, generator, network and rendering fixtures.
+`native/oracles` contains independent reference equations and image readers.
+Case files and CMake fragments are discovered automatically on reconfiguration.
 
-| Path | What it holds |
-|---|---|
-| `tests/native/support/` | the framework (`lh_test.h` is all a process-style case includes; `py_random.h`, `values.h`, `equiv.h` add what internals cases need) |
-| `tests/native/oracles/` | independent references (IDCT, ADPCM, XA, PNG reading) |
-| `tests/native/identities.tsv` | every pytest identity with tier and baseline result, frozen at the import commit |
-| `tests/native/cases/test_X.cpp` | the cases of `tests/test_X.py` |
-| `tests/native/cases/test_X.cmake` | harnesses that file needs |
-| `tests/*.c`, `tests/*.cpp` | C/C++ harnesses, shared with pytest until it is deleted |
+Names have the form `test_X::function[parameter]`. Use `LH_TEST(function)` for a standard case,
+`LH_GAME_TEST(function)` for an owned-game case, and `LH_TEST_P(function, rows)` for parameters.
+Rows may be strings or structures with an `id` member; an optional `tier` member selects a tier per row.
+Keep file-local types and helpers in an anonymous namespace to avoid link-time collisions.
 
-Case and fragment files are found by glob, so porting a file edits nothing that another contributor also edits.
-Reconfigure after adding one, or run the build again; `CONFIGURE_DEPENDS` picks it up.
+`identities.tsv` is the frozen coverage inventory: original node names, tiers and baseline outcomes.
+The runner normalizes its historical filename suffix when comparing names.
+Run `lionheart_tests --check-identities test_X` to check existing coverage and tiers.
+Unknown stems are errors. New coverage need not rewrite this historical inventory.
+The `parity` build target runs baseline comparisons; `LH_PARITY_STEMS` restricts it to semicolon-separated stems.
 
-## Identity rule
+## Harnesses and helpers
 
-A native case name is the pytest node id without the leading `tests/` and the `.py` of the file name:
+Declare a harness with `lh_harness(name SOURCES tests/harness.c FLAGS -std=c99 -O1 INCLUDES runtime)`.
+`RUNTIME_ALL` includes runtime sources; `RUNTIME_EXCLUDE` removes named sources.
+`LIBRARY` builds a loadable library. `LIBS`, `LINK_FLAGS`, `CXX_FLAGS` and `SANITIZE_FLAGS` control compilation.
+`FF8_TEST_SANITIZE=ON` enables optional sanitizer flags, including generator instrumentation.
+Assertions remain enabled in every build type.
 
-```
-tests/test_spu_noise_clock.py::test_noise_clock_transitions[exact]
-test_spu_noise_clock::test_noise_clock_transitions[exact]
-```
+Use `t.harness(name)`, `t.player()` or `t.target(path)` for target executables; `t.host(path)` runs host tools.
+Commands support `.arg`, `.cwd`, `.env`, `.unset`, `.input` and `.timeout`.
+`t.ok(command)` requires success; `t.run(command)` returns status and output for explicit checks.
+`t.temp()` supplies a fresh directory, retained on failure. `lh::skip(reason)` reports unavailable prerequisites.
+Use `LH_EQ`, `LH_CHECK_MSG`, `LH_CONTAINS`, `LH_BYTES_EQ`, `LH_TEXT_EQ` and `LH_FILE_EQ` for readable failures.
+Pass paths as `lh::fs::path` so target commands receive Windows paths under Wine.
 
-The `test_X` part comes from the file name (`__FILE__`) and the function part from the macro argument. For
-parametrized tests write pytest's id text exactly, including anything ugly (`[True-1]`, `\n` as two characters).
-Do not add, merge, rename or reorder identities. Collapsing many pytest cases into one native case hides coverage,
-even when the assertions look identical.
+`t.library(name).fn<Signature>(symbol)` loads harness functions. Each case runs in its own process.
+Library cases skip for Windows cross-targets because a Linux runner cannot load Windows DLLs.
+Cross-configure with the Windows toolchain and `-DLH_HOST_RUNNER=<native build>/lionheart_tests`;
+set `CMAKE_CROSSCOMPILING_EMULATOR` to Wine for executable harnesses.
 
-## Port one file
+`lh::PyRandom` reproduces integer-seeded CPython random sequences. Preserve draw order;
+never put multiple draws in arguments whose evaluation order is unspecified.
+`NumpyRandom` supplies SeedSequence/PCG64 byte fills. Independent oracles must not link or copy the code they judge.
+`vulkan.h` builds isolated rendering contracts and honors `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`.
+An unusable default device skips; an explicitly selected unavailable device fails. Synthetic clips need FFmpeg.
+`player_probe.h` relinks an existing player from its compile receipt; owned-game probes need discs and a card.
 
-1. Read the `test_X.py` and its `identities.tsv` rows: `grep -F 'tests/test_X.py::' tests/native/identities.tsv`.
-2. Write `cases/test_X.cmake`: one `lh_harness` per distinct `cc` command.
-3. Write `cases/test_X.cpp`: one `LH_TEST` per test function, keeping pytest's function name.
-4. Build, run, and check. Do not delete or change `test_X.py`.
+## Generated programs and reference output
 
-```cpp
-// Keep the module docstring as a comment; it says why the test exists.
-#include "lh_test.h"
+`support/generated.h` provides MIPS assemblers, `Image`, `Program`, `Discovery` and `Build`.
+Construct a program, then use `Build(t).program(program).runtime_all().library()` to emit and compile it.
+`.probe(file, replacements)` substitutes template text; `.source`, `.flags` and `.header_prefix` customize the build.
+`generate(t, program, directory)` emits without compilation. Generator internals are exposed through `generator_shim.h`.
 
-static const char *const kModes[] = {"ntsc", "pal"};      // ids are the strings themselves
+Builds share a locked content-addressed cache under the native build directory. Its key includes programs,
+flags, sources, runtime, generator and compiler identity. `LH_COMPILE_JOBS` defaults to two.
+Delete the cache to force recompilation. Keep program construction in the case so input logic has one owner.
 
-LH_TEST_P(test_status_parity, kModes) {                   // t is the Case, p the element
-    t.ok(t.harness("status").arg(p).timeout(15));
-}
+`test_generator_parity` checks complete output trees against `native/generator_reference.tsv`,
+with SHA-256 per identity, subcase and output file. Parameters live in `cases/generator_parity_rows.h`.
+To accept an intentional generator change:
 
-struct Row { const char *id; int width; };                // ids from a struct's id member
-static const Row kRows[] = {{"narrow", 320}, {"wide", 640}};
-LH_TEST_P(test_width, kRows) { LH_EQ(p.width % 2, 0); }
-
-LH_GAME_TEST(test_real_disc) { const auto disc = lh::owned_disc(1); /* ... */ }
-```
-
-For stacked `@pytest.mark.parametrize`, build a `std::vector<Row>` in a static function and pass the call to
-`LH_TEST_P`, composing each `id` so the list matches `identities.tsv`. A `tier` member (`lh::Tier::realtime`) on an
-element gives that element its own tier, as `pytest.param(..., marks=...)` does.
-
-| In Python | Natively |
-|---|---|
-| `subprocess.run(..., check=True, timeout=30)` | `t.ok(cmd.timeout(30))` |
-| `subprocess.run(...)` then `returncode` checks | `auto r = t.run(cmd); LH_EQ(r.rc, 2);` |
-| `tmp_path` | `t.temp()` (fresh; removed on success, kept on failure) |
-| `cwd=ROOT` | the default working directory is the repository root |
-| `cwd=tmp_path`, `env={...}` | `.cwd(t.temp())`, `.env("NAME", "value")`, `.unset("NAME")` |
-| `pytest.skip("why")` | `lh::skip("why")` |
-| `assert x == y` | `LH_EQ(x, y)`, or `LH_CHECK_MSG(cond, "why")` |
-| `assert 'x' in out` | `LH_CONTAINS(out, "x")`, `LH_NOT_CONTAINS` |
-| `assert a == b` on bytes, text or files | `LH_BYTES_EQ`, `LH_TEXT_EQ`, `LH_FILE_EQ` |
-| `re.search(...)[1]` | `lh::capture(text, R"(...)")` |
-| `hashlib.sha256(...)` | `lh::sha256(bytes)`, `lh::sha256_file(path)` |
-| `owned_disc(n)`, `owned_path(rel)` | `lh::owned_disc(n)`, `lh::owned_path(rel)` |
-| `real_player` | `t.player()` (takes `FF8_PLAYER_HOST`; it fails instead of building one) |
-| `subprocess.run(input=bytes)` | `t.ok(cmd.input(bytes))` (binary is fine) |
-| `ctypes.CDLL`, `argtypes`, `restype` | `t.library(name).fn<Signature>("symbol")`, below |
-| `emit(image, discover(image), tmp_path)` and its `cc` line | `lh::gen::Build`, under "Generated programs" |
-| `random.Random(n)`, its methods | `lh::PyRandom(n)`, same method names, below |
-| a Python reference inside a test | an independent header under `oracles/`, below |
-
-Pass paths as `lh::fs::path`, not strings: a Windows harness under Wine gets them as `Z:\...` automatically.
-Use `t.harness`, `t.player` or `t.target` for anything built for the target, and `t.host` only for tools that run
-on the build machine; the runner adds the emulator to the former only.
-
-Module-scoped fixtures that only build a binary disappear: declare the harness in the fragment.
-
-## Harnesses
-
-Copy the Python `cc` line into `lh_harness` so that the flags stay reviewable side by side:
-
-```cmake
-lh_harness(status
-  FLAGS -std=c99 -O1 -DFF8_STATS
-  INCLUDES runtime                  # -I, relative to the repository
-  RUNTIME_ALL                       # *map(str, sorted((ROOT / 'runtime').glob('*.c')))
-  LINK_FLAGS -Wl,--wrap=calloc
-  SANITIZE_FLAGS ${LH_SANITIZE} -O1 # what the Python added under FF8_TEST_SANITIZE
-  SOURCES tests/gpu_status_scanline.c)
+```sh
+cmake -DBUILD=build/native-tests -P tests/native/rewrite_generator_reference.cmake
 ```
 
-Sources are relative to the repository. C++ sources take `CXX_FLAGS`. Harness names are private to their file, so a
-parametrized test can use one harness per parameter named after its id. `RUNTIME_ALL` shares compiled objects
-between harnesses with identical flags.
-
-`assert()` is what most harnesses check. The build defines `-UNDEBUG` on every harness whatever the build type, and
-a self-test fails if assertions ever stop working.
-
-C that Python keeps in a string moves to `cases/test_X.c`, copied exactly. Where the Python generates a harness per
-test from parameters, generate the variants with a `foreach` in the fragment.
-
-`-fsanitize=...` in `FLAGS` also reaches the link, so copying a Python line with a mandatory sanitizer needs no
-`LINK_FLAGS` for it. `SANITIZE_FLAGS` remain for flags the Python only added under `FF8_TEST_SANITIZE`.
-
-## Reaching into the runtime (ctypes tests)
-
-A Python `ctypes` test becomes a native case that loads the same code as a library:
-
-```cmake
-lh_harness(model LIBRARY                # -shared -fPIC; loaded by the case, not run
-  FLAGS -std=c99 -O2 -DFF8_STATS
-  INCLUDES runtime
-  RUNTIME_ALL RUNTIME_EXCLUDE hw.c      # every runtime/*.c except a file the fragment replaces
-  LINK_FLAGS -Wl,-Bsymbolic             # each build's calls stay inside it, as the Python's did
-  LIBS z                                # -l libraries, after the objects
-  SOURCES tests/foo_harness.c "${generated}")
-```
-
-```cpp
-auto step = t.library("model").fn<void(void *, uint64_t)>("foo_step");   // argtypes/restype as a C++ signature
-```
-
-Every CTest test is its own process, so a library's globals last one case and a crash or failed `assert()` inside it
-takes down only that case, which still prints `FAIL <name>: ... crashed with SIGSEGV`. Assert with `LH_*` as usual.
-To compare two builds of the runtime, declare two libraries with `-Wl,-Bsymbolic` and load both: `RTLD_LOCAL` keeps
-their identically named symbols apart, and one build's functions can read the other's state (see `test_mdec_calendar`).
-For `static` runtime functions keep what the Python did: a small `cases/test_X.c` that `#include`s the runtime `.c`
-and exports a wrapper. Do not edit the runtime. A Windows target cannot be loaded by the Linux runner, so `t.library`
-skips there with a reason. System libraries such as SDL: `pkg_check_modules` in the fragment, as `cases/test_gpu.cmake`.
-
-### Identical random inputs
-
-`lh::PyRandom` reproduces CPython's `Random` for integer seeds: `random()`, `getrandbits(k)` for `k <= 64`,
-`randbytes(n)`, `randrange(start, stop)`, `randrange(stop)`, `randint(a, b)`. Use the same seed and the same calls in
-the same order. C++ evaluates the arguments of one call in an unspecified order, so never put two draws in one
-call; use separate declarations or a braced list. `randrange` with a step is not implemented.
-`support/numpy_random.h` reproduces integer-seeded NumPy SeedSequence/PCG64 and scalar-bound
-`integers(..., dtype=np.uint8)` fills. Each fill discards its byte reservoir exactly as NumPy does.
-Other NumPy methods and dtypes are not implemented.
-
-### Independent oracles
-
-An oracle under `oracles/` must not include, link or copy the code it judges; that independence is the point. Write
-it from the hardware rule or the Python equation, with `oracles/numeric.h` for Python's floor division and `clip`.
-`oracles/png.h` has its own inflate, so a bug in the zlib the display code links cannot cancel out.
-
-### Proving equality while Python is still here
-
-A port with random inputs or an oracle also proves itself: call `lh::equiv::record(t, ...)` for each vector, and add a
-function to `tests/native/check_against_python.py` that re-runs the real pytest body with the runtime replaced by a
-replay of those records. The replay compares inputs and returns the native oracle's answers, so the pytest assertion
-judges the native oracle; run the script after building (`python tests/native/check_against_python.py`). Delete it,
-`support/equiv.h` and the `lh::equiv::record` lines with Python.
-
-## Generated programs
-
-Files that import the Python generator build small MIPS programs, emit them, compile the result and run it against
-the interpreter. `support/generated.h` is the native form; the Python and the C++ stay readable side by side.
-
-```cpp
-#include "generated.h"
-using namespace lh::gen;
-
-const Words words = {imm(43, 20, 9, 0), r(33, 8, 0, 9), j(3, target), cop(18, 4, 8, 6)};   // same assemblers
-words + Words(64 - words.size(), 0) + RET;                                                // [0] * n, RET
-
-Program program{Image::words(words, 0x80010000)};                                         // Image(data, base, base)
-program.seeds = {0x80010030};          // discover(image, seeds)
-program.host_mode = "precise";         // emit(..., host_mode='precise'); defaults match Python's, not the CLI's
-program.overlays.push_back(Overlay{index, Image(blob, 0x80098000, 0x80098000)});
-
-Compiled lib = Build(t)
-    .program(program)
-    .probe("test_X.c", {{"DATA_SIZE", std::to_string(size)}})     // the Python's .replace() calls, in order
-    .flags({"-std=c99", "-O2", "-DFF8_STATS"})                    // the cc line without -shared -fPIC -I
-    .runtime({"cpu.c", "interp.c"})                               // or .runtime_all()
-    .source("tests/harness.c")                                    // anything that includes generated.h
-    .library();
-auto check = lib.fn<int(const void *, unsigned)>("check");
-LH_EQ(check(words_bytes.data(), 1), 1);
-```
-
-C text that the Python keeps in a string moves to `cases/test_X.c`, copied exactly, placeholders included; that is
-why it is applied with `.probe`'s replacements instead of being preprocessed.
-
-Compile at test time, once. Every `Build` hashes its program, flags, sources, the runtime and generator files
-and the compiler into a directory under `build/native-tests/generated-cache/`, and the first case to need it
-holds a file lock while compiling. The result is shared by every case and every CTest process, so what used to be
-one compile per fixture becomes one compile per distinct program. `cpu.c` and `interp.c` are compiled per flag set
-and shared across programs. `LH_COMPILE_JOBS` (default 2) limits compiler processes per build. The cache needs no
-cleaning: its keys change whenever an input changes, and deleting the directory only costs the next run.
-
-Compilation stays at test time because the programs are computed by the case, often from parameters and random
-inputs: a build rule per program would need the case's logic twice, once to declare outputs and once to run them.
-
-Module- and session-scoped fixtures in Python, like `compiled` in `test_recompiler`, need no special form: the same
-`Build` from each case is one compile. Keep each fixture as a function returning what the Python fixture returned.
-Static helpers and structs of a case file go inside `namespace { }`: many files define a `Row` and they would
-otherwise silently collide at link time.
-
-### Reaching the generator's data
-
-The runner links the generator library, so internals tests call it directly:
-
-| In Python | Natively |
-|---|---|
-| `decode(word, pc).name` | `decoded_name(word, pc)` |
-| `effects(decode(word, pc))` | `effects(word, pc)`: `.lines`, `.dst`, `.value`, `.load`, `.loaded` |
-| `set(discover(image, seeds, scan_calls))` | `Discovery(image, seeds, scan_calls).entries()` |
-| `functions[pc].instructions` | `discovery.instructions(pc)` |
-| `manifest['jump_tables']` from `emit` | `lib.manifest().at("jump_tables")`; `.contains`, `.at`, `.size`, `.str`, `.integer` |
-| `json.loads(path.read_text())` | `Json::file(path)` |
-| `pytest.raises(ValueError, match='x')` around generator calls | `LH_CONTAINS(error_of([&] { ... }), "x")` |
-
-Anything else the library has, such as `lhg_sha1`, is callable through `support/generator_shim.h`, which keeps
-setjmp on C frames. If a test needs an entry point the library hides, add it under `generator/` in its own commit.
-
-### Behaviour with no native twin
-
-| Python-only construct | Mapping |
-|---|---|
-| `pytest.raises(ValueError, match=...)` from a generator call | the C generator's error message, by `error_of` |
-| `monkeypatch` of `Disc` or a module path | build a real input in `t.temp()` that the C code reads; see `test_disc` |
-| a read-log assertion | put different bytes where a wrong read would land, so the existing checksum fails |
-| `Path.write_text` of a C string | `.probe(file, replacements)` |
-| a Python-language fact with no C equivalent | one `LH_TEST` body that says why, and the identity is still present |
-
-### Partly ported files
-
-`LH_PENDING(test_function);` at the end of a case file says a pytest function has no native case yet. Its identities
-show as pending in `--check-identities` and are not expected in the results; a pending function that also has a
-case is an error. Delete the line when the case is written. When a file has no `LH_PENDING` lines it is fully ported.
-
-### Checking your port
-
-`python tests/native/check_generator_inputs.py` runs the ported files under pytest and natively, and fails unless
-every program handed to the generators is byte-identical, per identity where a fixture emits for that test. Add a
-new file to its `FILES` and `PROBES` lists. Delete this script and the `lh::equiv::record` line in
-`support/generated.cpp` with Python.
-
-## Done means
-
-- [ ] One native case for every row of the file in `identities.tsv`, and none extra. `--check-identities` passes,
-      and so does `ctest -L infra`:
-      `build/native-tests/lionheart_tests --check-identities test_X`
-- [ ] `ctest --test-dir build/native-tests -R '^test_X::' -LE realtime` matches pytest's result for the file.
-      `cmake --build build/native-tests --target parity` compares the whole ported set with the baseline. Set `LH_PARITY_STEMS=test_X` (semicolon-separated for several files)
-      to run and compare only those files.
-- [ ] The same case fails readably after a deliberately broken expectation or harness (then undo the break).
-- [ ] `python -m pytest tests/test_X.py` still passes, and the Python file is unchanged.
-- [ ] No game bytes, generated code or private paths in the files you added.
-- [ ] Inputs and oracles, if the file has them, pass `tests/native/check_against_python.py`.
-
-Add new pytest tests to `identities.tsv` with the same commit that adds them. Rows are not regenerated: the file
-records what the suite had to match before Python was removed.
-
-## Rendering fixtures
-
-`support/vulkan.h` builds the isolated replay and CRT projects with pytest's original feature flags.
-A file lock protects each Makefiles build during parallel CTest. Every use checks build dependencies.
-The probe inherits device selection, including `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`.
-An unavailable explicitly selected driver fails with pytest's diagnostic. Without an explicit selection,
-an unusable device skips with `No usable Vulkan device: ` followed by the probe's stderr.
-The fixture also exposes `movie_contract`, `screenshot_capture` and `osd_input`. Synthetic clips require FFmpeg.
-
-`oracles/image.h` supplies independent RGB differences, crops, linear-light means, row profiles and a direct DFT.
-The PNG reader remains strict by default; screenshot callers opt into filter Up. The synthetic PNG writer
-uses stored DEFLATE blocks without the renderer's zlib. The Python equivalence check compares complete
-NumPy movie arrays, tile reports, numeric image answers, synthetic generator output and pause binaries.
-
-`support/player_probe.h` replays the selected player's `main.c` compile receipt and link command.
-It removes dependency-file flags, changes the source and output operands, and adds the original three wrappers.
-Its synthetic infra case exercises both `arguments` and quoted `command` receipts and catches an injected
-guest instruction. The two game cases need owned discs, a card and `FF8_PLAYER_HOST`.
-The synthetic observer check does not establish an owned-game run.
-
-## Not covered yet
-
-Cases that need other top-level CMake targets take them from a separate top-level build. Native tests
-run on Linux hosts; a Windows target is built by a cross configure that passes `-DLH_HOST_RUNNER=<native build>/lionheart_tests`.
-
-## What can be ported next
-
-Every pytest file has a complete native case file and inventory rows; no files remain to port.
-
-`test_generator_parity` compares complete output trees with `tests/native/generator_reference.tsv`:
-SHA-256 per identity, subcase and output file, initially recorded from Python emission.
-The native cases construct their descriptions at run time; parameter spelling and values live in
-`cases/generator_parity_rows.h`. `FF8_TEST_SANITIZE=ON` also instruments both generator tools.
-
-To accept intentional generator changes, run `cmake -DBUILD=build/native-tests -P tests/native/rewrite_generator_reference.cmake`.
-This rewrites the manifest from C output and accepts whatever the generator emits; review the diff.
-The default test run only reads the frozen manifest.
-
-Python remains necessary for `tests/test_*.py`, `tests/conftest.py`, the `recomp/*.py` oracle,
-and these retained entry points under `tools/`: `build_windows.py`, `check_player_binary.py`,
-`ci_deps.py`, `compare.py`, `disc_identity_header.py`, `embed_gui_assets.py`, `fetch_windows_deps.py`,
-`ff8files.py`, `ff8img.py`, `frame_bench.py`, `frame_probe.py`, `gte_trace.py`, `iro_extract.py`,
-`map_movies.py`, `mdec_trace.py`, `movie_map_header.py`, `perf_report.py`, `psxdisc.py`,
-`render_quality.py`, `setup.py`, `spleen_header.py`, `spu_audio_compare.py`, `stage_player.py`
-and `verify_host_pad.py`. `.github/workflows/ci.yml` still invokes pytest.
-Native configuration, builds and tests require no Python. Optional migration checks remain in
-`tests/native/check_against_python.py`, `check_generator_inputs.py`, `check_empty_catalog.py`,
-`support/check_ra_fixture.py` and `freeze_generator_reference.py`.
-The last script runs the unchanged pytest bodies and records Python output and descriptions:
-`python tests/native/freeze_generator_reference.py <receipt-directory> --native <native-description-directory>`.
-Populate the native directory by running the generator cases with `LH_GENERATOR_SPECS=<directory>`;
-the check compares canonical JSON bytes, normalizing only each case's temporary directory to `$TMP`.
-
-Before adding a helper under `support/`, look for one that already does the job.
-
-For experimental timing, set `program.timing = "block"` or `"loose"` and optionally
-`program.register_cache = RegisterCache{8, {"f_80010000"}, std::nullopt}`. The last member is the optional
-`fuse_forward` list; an omitted selection uses the same catalog policy as Python. These options enter the
-compile-cache key and the generator-input comparison. `image.timing_entry_points` carries timing-only metadata;
-pass those points as seeds explicitly when porting `main_functions(image, timing)`.
-`generate(t, program, directory)` emits without compiling for manifest and source assertions.
-`program.discover_functions = false` represents `emit(image, {}, ...)`.
-`Build::header_prefix(text)` reproduces fixtures that prepend feature defines to `generated.h`, without changing
-the compiler flags of runtime sources.
+This accepts current output. Review the entire manifest diff before committing it.

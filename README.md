@@ -61,7 +61,7 @@ cmake -P tools/build_windows.cmake
 together. It has not yet been tested on a physical Windows machine.
 
 Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` or `-DJOBS=4` before `-P` to override the defaults.
-The driver needs no Python. `-DOFFLINE=ON` requires verified cached inputs and disables downloads.
+`-DOFFLINE=ON` requires verified cached inputs and disables downloads.
 An installed dependency prefix has a receipt tied to the dependency lock, build recipe and installed file bytes.
 If an older cache has no receipt, remove its `install-ucrt` folder and rebuild from its verified cached sources.
 

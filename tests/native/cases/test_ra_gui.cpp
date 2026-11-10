@@ -8,7 +8,6 @@
 
 namespace {
 std::string click(int x, int y, double scale = 1) {
-    // Match Python round when scaling half-pixel coordinates.
     return "mouse " + std::to_string(int(std::nearbyint(x * scale))) + " " +
            std::to_string(int(std::nearbyint(y * scale))) + "\nmouse-down\nmouse-up\nwait 2\n";
 }

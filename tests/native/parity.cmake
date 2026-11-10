@@ -1,7 +1,6 @@
 # Runs the suite and compares the outcome with tests/native/identities.tsv.
 #   cmake --build build/native-tests --target parity
 # Set STEMS to compare only some files, as a CMake list. Realtime tests are left
-# out for the same reason pytest's CI selection leaves them out. The job count is
 # CTEST_PARALLEL_LEVEL from the environment, defaulting to the machine's core count.
 if(DEFINED ENV{CTEST_PARALLEL_LEVEL} AND NOT "$ENV{CTEST_PARALLEL_LEVEL}" STREQUAL "")
   set(jobs "$ENV{CTEST_PARALLEL_LEVEL}")

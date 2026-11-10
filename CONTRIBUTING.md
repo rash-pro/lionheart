@@ -7,10 +7,10 @@ the interpreter.
 ## Set up from your discs
 
 You need the Linux build requirements from the [README](README.md). Setup uses CMake and a C99 host compiler.
-It does not need Python:
+Run setup from the repository root:
 
 ```sh
-nice -n 10 cmake -P tools/setup.cmake -- --disc1 /path/to/disc1.cue --disc2 /path/to/disc2.cue --disc3 /path/to/disc3.cue --disc4 /path/to/disc4.cue --jobs 6
+nice -n 10 cmake -P tools/setup.cmake -- --disc1 /path/to/disc1.cue --disc2 /path/to/disc2.cue --disc3 /path/to/disc3.cue --disc4 /path/to/disc4.cue --jobs 4
 ```
 
 Only disc 1 is required. Give all four discs to generate the complete catalog. Setup does the following:
@@ -22,7 +22,7 @@ Only disc 1 is required. Give all four discs to generate the complete catalog. S
 Everything extracted or generated stays in `build/`.
 
 Setup first builds the standalone `lionheart-gen` host tool in `build/generator/`. `--jobs` accepts 1 through 8
-and defaults to 8. Use `--jobs 6` on a shared machine. The generator library owns the cache, so an embedding host
+and defaults to 8. Use `--jobs 4` on a shared machine. The generator library owns the cache, so an embedding host
 uses the same policy.
 
 The cache fingerprints the native generator sources, catalog bytes, generation options and verified disc inputs.
@@ -35,14 +35,14 @@ The native generator also cross-builds with llvm-mingw without the host's SDL or
 
 ```sh
 cmake -S generator -B build/generator-windows -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_C_COMPILER=/path/to/llvm-mingw/bin/x86_64-w64-mingw32-clang
-cmake --build build/generator-windows --target lionheart-gen -j6
+cmake --build build/generator-windows --target lionheart-gen -j4
 ```
 
 On Windows, run `lionheart-gen.exe --disc disc1.cue --legacy-overlays --cache -o build/generated` from the
 repository root. Repeat `--disc` for the other discs. Generation uses UTF-8 paths and binary writes on both systems.
 The full setup command above builds the Linux developer host.
 
-Native generator fingerprints also replace Python sources in the save-state build identity.
+Generator fingerprints identify the save-state build.
 Existing save states from the previous build are rejected. In-game memory card saves remain compatible.
 
 To cross-build the Windows player on Linux, run `cmake -P tools/build_windows.cmake`.
@@ -60,10 +60,10 @@ The native suite needs C++17 and the build dependencies listed in the README:
 
 ```sh
 cmake -S tests/native -B build/native-tests
-nice -n 10 cmake --build build/native-tests -j6
+nice -n 10 cmake --build build/native-tests -j4
 cmake -S . -B build/player
-nice -n 10 cmake --build build/player --target ff8 -j6
-FF8_PLAYER_HOST="$PWD/build/player/lionheart" ctest --test-dir build/native-tests -j6 --output-on-failure -LE 'game|realtime'
+nice -n 10 cmake --build build/player --target ff8 -j4
+FF8_PLAYER_HOST="$PWD/build/player/lionheart" ctest --test-dir build/native-tests -j4 --output-on-failure -LE 'game|realtime'
 ```
 
 For the tier-2 boot checks after setup, set the input folders described below and run
@@ -71,14 +71,10 @@ For the tier-2 boot checks after setup, set the input folders described below an
 The archive extraction tests need a temporary directory outside the checkout. Leave `TMPDIR` unset or point
 it at an external scratch folder when running CTest.
 
-The transitional pytest suite still needs Python 3.13+ and the test dependencies. Install them in a virtual
-environment with `python3 -m venv .venv`, activate it, then run `python -m pip install -e '.[test]'`.
-The old setup and `recomp/` remain only until those checks are retired.
-
 The generator's standalone checks cover cache identity, output integrity and setup arguments:
 
 ```sh
-nice -n 10 cmake --build build/generator -j6
+nice -n 10 cmake --build build/generator -j4
 ctest --test-dir build/generator --output-on-failure
 ```
 
@@ -90,7 +86,7 @@ changes, source fingerprints, corruption, old receipts and a killed generation. 
 emission, compilation and execution, and compares the results against the interpreter. CI runs this tier.
 
 ```sh
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m 'not game'
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest --test-dir build/native-tests --output-on-failure -LE 'game|realtime'
 ```
 
 **Tier 2** uses your discs and the catalog from setup. Point `LIONHEART_DISCS` at the folder that holds your
@@ -101,10 +97,10 @@ Some route tests also need two of your own memory cards, named `disc1-early.mcr`
 copies of the cards.
 
 ```sh
-LIONHEART_DISCS=/path/to/discs LIONHEART_SAVES=/path/to/cards SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m game
+LIONHEART_DISCS=/path/to/discs LIONHEART_SAVES=/path/to/cards SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest --test-dir build/native-tests --output-on-failure -L game
 ```
 
-Tests marked `realtime` measure wall-clock pacing. CI skips them (`-m 'not game and not realtime'`). If one fails on a
+Tests marked `realtime` measure wall-clock pacing. CI skips them (`-LE 'game|realtime'`). If one fails on a
 busy machine, run it again on its own.
 
 Tier-1 Vulkan presentation tests use the Vulkan loader's device selection. They honor
@@ -112,8 +108,8 @@ Tier-1 Vulkan presentation tests use the Vulkan loader's device selection. They 
 Select one ICD for each run; manifest filenames vary by distribution:
 
 ```sh
-VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m 'not game and not realtime'
-VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q -m 'not game and not realtime'
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest --test-dir build/native-tests --output-on-failure -LE 'game|realtime'
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest --test-dir build/native-tests --output-on-failure -LE 'game|realtime'
 ```
 
 Unset both variables to exercise the loader default. The host ranks compatible

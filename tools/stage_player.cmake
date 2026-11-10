@@ -40,7 +40,7 @@ function(player_licences dist)
     file(WRITE "${dest}/FFmpeg-source.txt"
       "FFmpeg 7.1.1, unmodified source: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz\n"
       "LGPL shared libraries; no GPL, nonfree or version3 enabled.\n"
-      "Rebuild with tools/build_windows.py; exact configure line is adjacent.\n"
+      "Rebuild with tools/build_windows.cmake; exact configure line is adjacent.\n"
       "You may replace the DLLs with compatible modified versions. No static FFmpeg linkage.\n"
       "Distributors must preserve LGPL notices and make corresponding source available;\n"
       "this source URL and the checked-in pinned fetch/build recipe accompany this distribution.\n")

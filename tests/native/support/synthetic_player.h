@@ -1,4 +1,3 @@
-// Private builds substitute only configure-time metadata, as the pytest fixture does.
 #pragma once
 #include "synthetic_disc.h"
 #include "generated.h"

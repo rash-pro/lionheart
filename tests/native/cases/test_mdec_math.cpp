@@ -1,5 +1,4 @@
 // Compare the complete integer transform with an independent wide oracle.
-#include "equiv.h"
 #include "lh_test.h"
 #include "oracles/media.h"
 #include "py_random.h"
@@ -34,7 +33,6 @@ LH_TEST(test_idct_rounding_and_full_int16_bounds) {
         for (const int16_t s : extremes) vectors.emplace_back(filled(b), filled(s));
     }
     for (int i = 0; i < 256; ++i) {
-        // Each element draws in Python's evaluation order: block, then scale.
         Block block = random_block(rng), scale = random_block(rng);
         vectors.emplace_back(block, scale);
     }
@@ -49,7 +47,7 @@ LH_TEST(test_idct_rounding_and_full_int16_bounds) {
         Block values = block;
         transform(values.data(), scale.data());
         const Block expected = lh::oracle::idct_reference(block, scale);
-        lh::equiv::record(t, block, scale, expected);
+
         LH_SEQ_EQ(values, expected, "");
     }
 }

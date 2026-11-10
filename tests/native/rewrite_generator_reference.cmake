@@ -1,4 +1,3 @@
-# Opt-in acceptance of the generator's current output, with no Python oracle.
 if(NOT DEFINED BUILD)
   message(FATAL_ERROR "Pass -DBUILD=<native test build>")
 endif()

@@ -16,8 +16,6 @@ namespace {
 void put32(std::string &out, size_t at, uint32_t value) {
     for (int i = 0; i < 4; ++i) out[at + i] = static_cast<char>(value >> (8 * i));
 }
-
-// A PS-X EXE whose only job is to satisfy the header checks; Python's test
 // replaced the parser with a mock, and C has no such seam.
 std::string minimal_exe() {
     std::string exe(0x800 + 16, '\0');
@@ -66,8 +64,6 @@ std::string directory_record(const std::string &name, uint32_t lba, uint32_t siz
     record.replace(33, name.size(), name);
     return record;
 }
-
-// Python's fake Disc handed back these sectors; here they live in a real image
 // so the C reader does its real work, and a wrong LBA finds other bytes.
 void build_disc(const lh::fs::path &directory, const std::string &exe, const std::string &payload, bool external, int index) {
     DiscImage image;
@@ -89,7 +85,6 @@ void build_disc(const lh::fs::path &directory, const std::string &exe, const std
     for (size_t offset = 0; offset < exe.size(); offset += 2048) {
         image.set(30 + static_cast<uint32_t>(offset / 2048), exe.substr(offset, 2048));
     }
-    // reads[-1] in Python named the sector used; only one of these two sectors
     // has the payload, so reading the other fails the catalog's SHA-1 check.
     const std::string other(payload.size(), '\xff');
     image.set(77, external ? other : payload);
@@ -124,7 +119,6 @@ LH_TEST_P(test_assets_directory_and_overlay_source, kExternal) {
                    "\"discs\":{\"1\":{\"exe\":\"SLUS_008.92\",\"image\":\"FF8DISC1.IMG\",\"overlays\":[" + row.str() + "]}}}");
 
     // The shared tree is read-only for the whole extraction, which is what the
-    // test name promises; Python showed the same by rerouting ROOT.
     const auto list = [](const lh::fs::path &root) {
         std::set<std::string> names;
         for (const auto &entry : lh::fs::recursive_directory_iterator(root)) names.insert(entry.path().string());

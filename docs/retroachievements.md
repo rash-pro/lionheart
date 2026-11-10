@@ -31,8 +31,8 @@ They are not a persistent offline queue across shutdown or sign-out.
 ## Local verification
 
 Never use real credentials or contact the service during automated testing.
-`tests/ra_mock.py` serves synthetic achievements and badges on loopback, and
-`tests/test_ra_client.py` covers authentication, refusal, timeouts, disc changes,
+`tests/native/support/ra_service.h` serves synthetic achievements and badges on loopback, and
+`tests/native/cases/test_ra_client.cpp` covers authentication, refusal, timeouts, disc changes,
 unlock retries, token permissions and badge caching.
 
 `LIONHEART_RA_TEST_HOST=http://127.0.0.1:PORT` redirects **all** API and image
@@ -43,7 +43,7 @@ valid diagnostic host.
 
 ```sh
 cmake --build build --target ff8 ra_gui_contract -j4
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy python -m pytest -q tests/test_ra_client.py tests/test_ra_gui.py
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest --test-dir build/native-tests -R 'test_ra_(client|gui)::' --output-on-failure
 ```
 
 `FF8_PLAYER_HOST` and `LIONHEART_RA_GUI_HOST` can select existing build binaries.
