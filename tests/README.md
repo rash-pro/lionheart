@@ -84,3 +84,7 @@ cmake -DBUILD=build/native-tests -P tests/native/rewrite_generator_reference.cma
 ```
 
 This accepts current output. Review the entire manifest diff before committing it.
+
+`test_metadata_tool` covers native disc metadata commands with synthetic ISO
+sectors and checks the supported upstream YAML subset. No interpreter is needed
+for the developer tools or this suite.

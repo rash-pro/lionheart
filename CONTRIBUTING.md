@@ -159,3 +159,12 @@ Open an issue before starting a large change. Keep each branch focused. Describe
 include your test results. For runtime or recompiler changes, attach the exactness result and say which discs you
 used, without attaching any game data. [docs/debugging.md](docs/debugging.md) explains how to track down a
 divergence.
+
+## Maintaining disc metadata
+
+Build the standalone [developer tools](tools/devtools/README.md) and use
+`build/devtools/ff8files import` with a pinned upstream checkout and all four
+owned discs. Generate into an external scratch directory, verify with
+`ff8files verify`, then review the metadata diff before copying JSON into
+`games/ff8-usa`. Keep extracted bytes outside tracked source directories.
+The metadata tool and its synthetic tests need no interpreter.
