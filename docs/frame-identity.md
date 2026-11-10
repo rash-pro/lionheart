@@ -55,7 +55,9 @@ frame publishes no pairs and no links, but keeps what the mechanism matched in `
 | `projections[]` | `input`, `sz`, `sxy`, `view`, `run`, `previous` (index in the previous frame or held), `match` |
 | `polygons[]` | `opcode`, `corners`, packet `xy`, per corner `state`, `age` (0 this frame, 1 the previous) and `projection` |
 
-A consumer keeps the previous frame it was given: a corner of age 1 indexes it, and `previous` always does. To
+A consumer keeps the previous frame it was given: a corner of age 1 indexes it, and `previous` always does.
+Polygon serials count every polygon packet the GPU executes, in its order, from the start; a recorded GPU stream
+replayed from the same point lines up with them by counting its own polygon packets. To
 interpolate a linked corner, take its projection's view-space position in its frame and that of the projection's
 `previous` in the frame before. Corners in polygons with any held corner, and vertices shared with such polygons,
 should stay at the current frame; that rule belongs to the presenter.
@@ -70,8 +72,10 @@ lionheart ... --frame-identity-dump frames.bin      # and the whole stream
 The summary prints, for all frames and per scene (FF8's mode word: field, world, battle, menu, other), frames,
 resets, exclusions, projections paired, polygon corners, corners of 3D polygons (polygons with at least one
 corner at a projection), linked corners, corners in polygons whose every corner is linked, and the held corners
-by reason; then `Frame identity digest`, an FNV-1a over the stream. Native and interpreted runs of one route must
-print the same digest.
+by reason, and `jumps`: frames whose paired vertices moved, at the median, 32 pixels or more on screen, which
+are camera cuts in practice (right as identity, wrong to blend; history is not reset for them yet). Then
+`Frame identity digest`, an FNV-1a over the stream. Native and interpreted runs of one route must print the same
+digest.
 
 The stream starts with the eight bytes `LHFRAME1`, then one record per frame, all little-endian 32-bit words
 unless noted: `FRAM`; number, vblank, first projection, first polygon (64-bit each); display start, tag, flags;
@@ -109,3 +113,24 @@ equivalent, undecided, corners, linked, link correct, link equivalent, link wron
 corners the oracle knows to be 3D), `W` lines describing the first wrong pairs and links of each scene, and `T`
 totals per scene. `LOST` means the oracle lost track (native code ran, or its counts disagree with the
 service's), and the run fails.
+
+## Routes and checks
+
+`tests/native/cases/test_frame_identity.cpp` covers the mechanism without game data. With the owner's discs and
+cards, `test_frame_identity_routes` runs each route with the default player, service off and on, and with the
+oracle host (`build/frame-oracle/lionheart`, or `LIONHEART_FRAME_ORACLE`), and holds battle and field 3D to the
+bars: at least 90% of the corners of drawn 3D polygons linked, wrong pairs at most 0.01% of the pairs the oracle
+decides, wrong links at most 0.1% of the links it decides; the oracle must decide at least 30% of the pairs, the
+final state must not change, both builds must print one digest, and the world map must publish no pairs.
+
+| Route | Card | What it exercises |
+|---|---|---|
+| `battle-magic.txt` | disc1-early | world map, battle, magic effects |
+| `battle-summon.txt` | disc1-early | world map, battle, a summon |
+| `play-disc2-prison.txt` | disc2-start | menus, a walk across the prison field, a battle against a robot and two soldiers, Diablos |
+| `fps60-identical-enemies.txt` | disc2-start | the same battle with no commands, two identical soldiers acting to the end |
+| `fps60-camera-cuts.txt` | disc1-early | an attack every 80 VBlanks, each cutting the camera to the attacker and back |
+
+`test_native_modules_give_the_interpreters_stream` compares the digest of a developer host running modules
+(`docs/native-modules.md`) with the interpreted player's.
+
