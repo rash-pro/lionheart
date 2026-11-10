@@ -85,7 +85,8 @@ int lhgt_load_legacy_disc(lhgt_session *session, const char *catalog_dir, const 
     if (setjmp(session->ctx.bail))
         return 1;
     const char *cues[1] = {cue};
-    lhg_load_legacy_discs(&session->arena, catalog_dir, cues, 1, assets_dir, program);
+    /* Synthetic catalogs have no owned-release EXE identity. */
+    lhg_load_legacy_discs(&session->arena, catalog_dir, cues, 1, assets_dir, program, 0);
     return 0;
 }
 
