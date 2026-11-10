@@ -165,6 +165,10 @@ void dispatch_invalidate(cpu_t *c);
 /* Runs once at the next dispatch boundary, the only point where the registry
  * may change. Publishers store it; the callback clears it. */
 extern void (*dispatch_safe_point)(cpu_t *c);
+/* Runs when the guest enters code that has no native body, once per entry
+ * into interpreted code. A host building modules learns from it which pending
+ * code the game needs; most hosts leave it NULL. */
+extern void (*dispatch_miss)(cpu_t *c, uint32_t pc);
 void cpu_log(cpu_t *c, const char *format, ...);
 #ifndef FF8_NATIVE_MODULE
 void cpu_stop(cpu_t *c, const char *format, ...);

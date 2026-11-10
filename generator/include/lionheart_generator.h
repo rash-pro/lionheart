@@ -98,6 +98,8 @@ typedef struct {
     int effect;
     /* Load range; base is 0 when only the image bytes can establish it. */
     unsigned long base, size;
+    /* Discovered instructions, a measure of compile cost; 0 until a session has read the discs. */
+    unsigned long instructions;
     /* The catalog group, for display. */
     char name[32];
     /* SHA-256 of the catalog facts this set's code is generated from. Two sets

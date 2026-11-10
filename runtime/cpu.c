@@ -18,6 +18,7 @@ __attribute__((weak)) recompiled_fn native_overlay_acquire(cpu_t *c, uint32_t pc
 __attribute__((weak)) void native_overlay_release(recompiled_fn fn) { (void)fn; }
 
 void (*dispatch_safe_point)(cpu_t *c);
+void (*dispatch_miss)(cpu_t *c, uint32_t pc);
 
 extern const unsigned generated_host_precise __attribute__((weak));
 static int precise_host(void) {
@@ -748,6 +749,7 @@ static void dispatch_loop(cpu_t *c, uint32_t ret) {
                               p >= 0x10000 && p < 0x98000 ? 0 : 3;
             ++c->dispatch_misses; ++c->dispatch_regions[region];
             missing = 1; cpu_log(c, "MISS pc=%08x", c->pc);
+            if (dispatch_miss) dispatch_miss(c, c->pc);
         }
         interp_step(c);
 retired:

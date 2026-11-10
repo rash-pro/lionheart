@@ -64,6 +64,14 @@ static void row_info(lhg_ctx *ctx, const lhg_plan_row *row, lhg_set_info *info)
     lhg_plan_identity(ctx, row, info->identity);
 }
 
+static unsigned long instructions(const lhg_functions *functions)
+{
+    unsigned long total = 0;
+    for (size_t row = 0; row < functions->count; row++)
+        total += functions->items[row].insn_count;
+    return total;
+}
+
 static int compare_info(const void *a, const void *b)
 {
     int x = ((const lhg_set_info *)a)->index, y = ((const lhg_set_info *)b)->index;
@@ -146,6 +154,7 @@ lhg_status lhg_session_open(const lhg_options *options, lhg_session **result, ch
     for (size_t row = 0; row < program->plan_count; row++)
         discs |= program->plan[row].discs;
     main_info(&session->sets[0], discs);
+    session->sets[0].instructions = instructions(&session->main_functions);
     for (size_t set = 0; set < program->overlay_count; set++) {
         const lhg_overlay_set *overlay = &program->overlays[set];
         const lhg_plan_row *row = NULL;
@@ -157,6 +166,7 @@ lhg_status lhg_session_open(const lhg_options *options, lhg_session **result, ch
         row_info(ctx, row, &session->sets[set + 1]);
         /* Now that the bytes are known, an inferred load address is too. */
         session->sets[set + 1].base = overlay->image->base;
+        session->sets[set + 1].instructions = instructions(&overlay->functions);
         session->overlays[set + 1] = overlay;
     }
     *result = session;

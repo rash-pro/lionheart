@@ -106,6 +106,22 @@ if(FF8_PLAYER)
   endif()
   set_source_files_properties(backends/host/player_paths.c backends/host/player_catalog.c
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  # The player builds its own native code from the player's discs: it carries
+  # the generator, the catalog it reads and the headers modules compile against.
+  include(cmake/native_embedded.cmake)
+  set(native_embedded "${CMAKE_CURRENT_BINARY_DIR}/native_embedded.c")
+  lh_native_embedded("${native_embedded}" "${CMAKE_SOURCE_DIR}" "${WIN32}")
+  file(GLOB native_embedded_inputs "${CMAKE_SOURCE_DIR}/games/ff8-usa/*.json")
+  list(APPEND native_embedded_inputs "${CMAKE_SOURCE_DIR}/runtime/cpu.h" "${CMAKE_SOURCE_DIR}/runtime/perf_stats.h"
+    "${CMAKE_SOURCE_DIR}/runtime/gte.h" "${CMAKE_SOURCE_DIR}/runtime/native_module.h" "${CMAKE_SOURCE_DIR}/runtime/native_module_api.h")
+  set_source_files_properties("${native_embedded}" PROPERTIES OBJECT_DEPENDS "${native_embedded_inputs}")
+  target_sources(ff8 PRIVATE backends/host/native_build.c backends/host/native_player.c "${native_embedded}")
+  set_source_files_properties(backends/host/native_build.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  set_source_files_properties(backends/host/native_player.c PROPERTIES
+    COMPILE_DEFINITIONS "LH_MODULE_ABI_ID=\"${LH_MODULE_ABI_ID}\"" COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic"
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/generator/src")
+  find_package(Threads REQUIRED)
+  target_link_libraries(ff8 PRIVATE lionheart_generator Threads::Threads)
 endif()
 set_source_files_properties(backends/host/disc_iso.c backends/host/disc_id.c
   PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
