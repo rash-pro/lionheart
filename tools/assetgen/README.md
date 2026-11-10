@@ -23,34 +23,17 @@ build/assetgen/assetgen spleen . build/osd_font.h
 
 The first argument selects the conversion; the second is a source root with the
 same asset layout as this repository. Fixture roots can supply synthetic fonts,
-PNG images or BDF cells. The output directory must exist. Files retain the host newline convention of the legacy tools. The legacy
-generator names in output comments preserve byte compatibility. The committed OSD font remains an input to the runtime; the build
+PNG images or BDF cells. The output directory must exist. Files use the host newline convention and identify the assetgen command in output comments. The committed OSD font remains an input to the runtime; the build
 does not regenerate it.
 
 Native test projects can add this directory with `add_subdirectory` and run
 `$<TARGET_FILE:assetgen>`, or use the standalone build above. Metadata fixtures
 can invoke the scripts with their own `INPUT` directory or JSON file.
 `test_disc_validation` and the identity-header fixtures in `test_host_player`
-can use the metadata interface. `test_host_gui` can use the GUI interface.
-`test_startup` and the synthetic-player fixtures still need the separate native
-catalog generator; these replacements remove only their header dependency.
-No tests are ported here.
+can use the metadata interface. `test_host_gui` uses the GUI interface.
 
 For a cross-build, `host.cmake` configures a separate native CMake project and
 uses its executable. `LH_HOST_C_COMPILER` selects a host compiler if automatic
 host lookup is unsuitable. The target toolchain and target compile flags are
 not passed to that project. The helper supports multi-configuration generators
 by building its Release configuration at a fixed output path.
-
-Python scripts remain available as parity oracles until their importing tests
-are migrated. The Windows dependency fetcher, build driver, staging and
-release scanner still need their separate ports. The driver relocates cached
-pkg-config prefixes and stages dependency notices after building; its replacement
-must preserve both steps and the pinned dependency identities. The developer
-restoration ABI hashes the native generator fingerprint. The missing-catalog
-diagnostic points to `cmake -P tools/setup.cmake -- --disc1 DISC`.
-
-CI workflows are unchanged. The eventual CI switch removes setup-python and
-pip, builds the native suite, and runs CTest with the existing tier selection.
-Windows CI must call the replacement dependency/build/staging driver and retain
-the pinned caches. That switch depends on the remaining ports.

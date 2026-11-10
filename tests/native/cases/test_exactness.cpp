@@ -37,7 +37,7 @@ Receipt run(lh::Case &t, const lh::fs::path &native, const lh::fs::path &exe,
 LH_GAME_TEST(test_native_matches_interpreter) {
     auto exe=lh::owned_path("SLUS_008.92"), disc=lh::owned_disc(1);
     auto native=t.root()/"build/dev/ff8";
-    LH_CHECK_MSG(lh::fs::is_regular_file(native),"run python tools/setup.py --disc1 DISC first");
+    LH_CHECK_MSG(lh::fs::is_regular_file(native),"run cmake -P tools/setup.cmake -- --disc1 DISC first");
     auto before=run(t,native,exe,disc,t.temp()/"interpreter",true);
     auto after=run(t,native,exe,disc,t.temp()/"native",false);
     LH_EQ(before.state,after.state); LH_EQ(before.card,after.card); LH_EQ(before.cycles,after.cycles);

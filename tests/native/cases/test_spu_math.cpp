@@ -1,5 +1,4 @@
 // Mixer coefficient bounds and negative fixed-point rounding stay exact.
-#include "equiv.h"
 #include "lh_test.h"
 #include "oracles/spu.h"
 #include "py_random.h"
@@ -28,7 +27,7 @@ LH_TEST(test_adpcm_matches_integer_reference) {
                 decode(data.data(), history.data(), out.data());
                 const auto expected = lh::oracle::adpcm_block(data[0], data.data() + 2, initial[0], initial[1]);
                 const std::array<int16_t, 2> expected_history = {expected.history0, expected.history1};
-                lh::equiv::record(t, data, initial, expected.samples, expected_history);
+
                 LH_SEQ_EQ(out, expected.samples, lh::str("header=", header, " initial=", initial[0], ",", initial[1]));
                 LH_SEQ_EQ(history, expected_history, lh::str("header=", header));
             }
@@ -61,7 +60,7 @@ LH_TEST(test_pcm_multiply_matches_wide_reference) {
     }
     for (const auto &[a, b] : pairs) {
         const int32_t expected = lh::oracle::fixed_multiply(a, b);
-        lh::equiv::record(t, a, b, expected);
+
         LH_CHECK_MSG(coefficient(a, b) == expected, lh::str("a=", a, " b=", b, " actual=", coefficient(a, b), " expected=", expected));
     }
     // Voice multiplication can produce +32768; pitch modulation can reach
@@ -85,7 +84,7 @@ LH_TEST(test_pcm_multiply_matches_wide_reference) {
     }
     for (const auto &[a, b] : voice) {
         const int32_t expected = lh::oracle::fixed_multiply(a, b);
-        lh::equiv::record(t, a, b, expected);
+
         LH_CHECK_MSG(pcm(a, b) == expected, lh::str("a=", a, " b=", b, " actual=", pcm(a, b), " expected=", expected));
     }
 }

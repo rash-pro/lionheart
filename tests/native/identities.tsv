@@ -3781,3 +3781,190 @@ tests/test_host_windows.py::test_player_session_fatal_signal[7]	standard	pass
 tests/test_host_windows.py::test_player_session_abnormal_stop_has_no_dialog	standard	pass	
 tests/test_host_player.py::test_player_stop_log_and_status[fault]	standard	pass	
 tests/test_host_player.py::test_player_stop_log_and_status[limit]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-1]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-2654435769]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[entry-3735928559]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-1]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-2654435769]	standard	pass	
+tests/test_dispatch_index.py::test_dispatch_index_matches_linear_catalog[precise-3735928559]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[False-exact]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[False-block]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[False-loose]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[True-exact]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[True-block]	standard	pass	
+tests/test_generator_parity.py::test_recompiler_cases[True-loose]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-0]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-1]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-2]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-3]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-4]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-5]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-6]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-7]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-8]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-9]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-10]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-11]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-12]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-13]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-14]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-15]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-16]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-17]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-18]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-19]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-20]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-21]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-22]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[exact-23]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-0]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-1]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-2]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-3]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-4]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-5]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-6]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-7]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-8]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-9]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-10]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-11]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-12]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-13]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-14]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-15]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-16]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-17]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-18]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-19]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-20]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-21]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-22]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[block-23]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-0]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-1]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-2]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-3]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-4]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-5]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-6]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-7]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-8]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-9]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-10]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-11]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-12]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-13]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-14]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-15]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-16]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-17]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-18]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-19]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-20]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-21]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-22]	standard	pass	
+tests/test_generator_parity.py::test_random_programs[loose-23]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[1]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[23]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[24]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[25]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[47]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[48]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[49]	standard	pass	
+tests/test_generator_parity.py::test_unit_split_boundaries[73]	standard	pass	
+tests/test_generator_parity.py::test_duplicate_owners_across_sets	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[2-False]	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[3-False]	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[256-False]	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[257-False]	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[1-False]	standard	pass	
+tests/test_generator_parity.py::test_jump_tables[4-True]	standard	pass	
+tests/test_generator_parity.py::test_poll_sites[ram]	standard	pass	
+tests/test_generator_parity.py::test_poll_sites[cross]	standard	pass	
+tests/test_generator_parity.py::test_poll_sites[scratch]	standard	pass	
+tests/test_generator_parity.py::test_poll_sites[mmio]	standard	pass	
+tests/test_generator_parity.py::test_poll_sites[side_effect]	standard	pass	
+tests/test_generator_parity.py::test_idle_site	standard	pass	
+tests/test_generator_parity.py::test_integer_edges	standard	pass	
+tests/test_generator_parity.py::test_unaligned_image_base	standard	pass	
+tests/test_generator_parity.py::test_empty_functions_and_code_ranges	standard	pass	
+tests/test_generator_parity.py::test_catalog_metadata_and_poll_policy	standard	pass	
+tests/test_generator_parity.py::test_malformed_inputs_end_with_a_message	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[4611686018427387904-16-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[9223372036854775807-16-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[-1-16-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[0-4611686018427387904-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[0-9223372036854775807-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[1-9223372036854775807-outside image]	standard	pass	
+tests/test_generator_parity.py::test_catalog_locations_are_bounded[0-16-catalog bytes disagree]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row0-overlay index]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row1-overlay index]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row2-outside the disc]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row3-outside the disc]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row4-truncated]	standard	pass	
+tests/test_generator_parity.py::test_legacy_rows_are_bounded[row5-negative]	standard	pass	
+tests/test_generator_parity.py::test_rerun_keeps_timestamps_and_removes_stale_units	standard	pass	
+tests/test_generator_parity.py::test_timing_regions_and_owners[False-block]	standard	pass	
+tests/test_generator_parity.py::test_timing_regions_and_owners[False-loose]	standard	pass	
+tests/test_generator_parity.py::test_timing_regions_and_owners[True-block]	standard	pass	
+tests/test_generator_parity.py::test_timing_regions_and_owners[True-loose]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[block-31]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[block-32]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[block-33]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[block-512]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[block-513]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[loose-31]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[loose-32]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[loose-33]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[loose-512]	standard	pass	
+tests/test_generator_parity.py::test_timing_inline_and_region_bounds[loose-513]	standard	pass	
+tests/test_generator_parity.py::test_timing_entries_and_public_cache_option[exact]	standard	pass	
+tests/test_generator_parity.py::test_timing_entries_and_public_cache_option[block]	standard	pass	
+tests/test_generator_parity.py::test_timing_entries_and_public_cache_option[loose]	standard	pass	
+tests/test_generator_parity.py::test_cache_qualification[block]	standard	pass	
+tests/test_generator_parity.py::test_cache_qualification[loose]	standard	pass	
+tests/test_generator_parity.py::test_wait_hint_and_memory_variants[block]	standard	pass	
+tests/test_generator_parity.py::test_wait_hint_and_memory_variants[loose]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[1]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[2]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[3]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[4]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[5]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[6]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[7]	standard	pass	
+tests/test_generator_parity.py::test_lowering_register_limit_and_helper_order[8]	standard	pass	
+tests/test_generator_parity.py::test_lowering_rejects_unclassified_or_unclosed_calls[void f(cpu_t *c) { c->r[1]++; unknown(c); }-unclassified register-cache helper: unknown]	standard	pass	
+tests/test_generator_parity.py::test_lowering_rejects_unclassified_or_unclosed_calls[void f(cpu_t *c) { c->r[1]++; c_tick(c, 0; }-unclosed generated helper call]	standard	pass	
+tests/test_generator_parity.py::test_lowering_textual_matches[]	standard	pass	
+tests/test_generator_parity.py::test_lowering_textual_matches[void f(cpu_t *c) { c->r[0]++; unknown(c); return; }]	standard	pass	
+tests/test_generator_parity.py::test_lowering_textual_matches[void f(cpu_t *c) { c->r[08]++; c_tick(c, 0); return; }]	standard	pass	
+tests/test_generator_parity.py::test_lowering_textual_matches[void f(cpu_t *c) { c->r[1]++; cpu_stop(c, "return;"); return; }]	standard	pass	
+tests/test_generator_parity.py::test_lowering_textual_matches[void f(cpu_t *c) { c->r[1]++; xcode_valid(c, 0); }]	standard	pass	
+tests/test_generator_parity.py::test_native_forward_region_behavior[False-False]	standard	pass	
+tests/test_generator_parity.py::test_native_forward_region_behavior[False-True]	standard	pass	
+tests/test_generator_parity.py::test_native_forward_region_behavior[True-False]	standard	pass	
+tests/test_generator_parity.py::test_native_forward_region_behavior[True-True]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection0-register selection needs]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection1-register selection needs]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection2-register selection needs]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection3-register selection needs]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection4-max_registers]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection5-max_registers]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection6-max_registers]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection7-max_registers]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection8-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection9-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection10-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection11-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection12-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection13-functions must]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection14-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection15-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection16-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection17-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection18-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection19-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_invalid_cache_selections[selection20-fuse_forward]	standard	pass	
+tests/test_generator_parity.py::test_experimental_trace_rejected[block]	standard	pass	
+tests/test_generator_parity.py::test_experimental_trace_rejected[loose]	standard	pass	

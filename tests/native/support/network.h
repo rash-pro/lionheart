@@ -52,7 +52,6 @@ class Socket {
             at += size_t(n);
         }
     }
-    // Like the pytest helper: drain available bytes, stopping at an SSE boundary.
     std::string receive(int timeout_ms = 0) const {
         std::string out;
         pollfd p{fd_, POLLIN, 0};

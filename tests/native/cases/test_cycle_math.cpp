@@ -1,5 +1,4 @@
 // Exact timing reciprocals, including the high-word carry and correction cases.
-#include "equiv.h"
 #include "lh_test.h"
 #include "py_random.h"
 #include "values.h"
@@ -27,13 +26,13 @@ LH_TEST(test_cycle_reciprocals) {
         }
         for (int n = 0; n < 10000; ++n) values.push_back(rng.getrandbits(64));
         for (const uint64_t n : values) {
-            lh::equiv::record(t, n, i, n / d);
+
             LH_CHECK_MSG(ratio(n, i) == n / d, lh::str("n=", n, " d=", d, " actual=", ratio(n, i), " expected=", n / d));
         }
     }
     for (int n = 0; n < 10000; ++n) {
         const uint64_t a = rng.getrandbits(64), b = rng.getrandbits(64);
-        lh::equiv::record(t, a, b, a * b);
+
         LH_CHECK_MSG(product(a, b) == a * b, lh::str("a=", a, " b=", b, " actual=", product(a, b), " expected=", a * b));
     }
 }

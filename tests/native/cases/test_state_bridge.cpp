@@ -391,7 +391,6 @@ LH_TEST_P(test_local_host_headers_are_accepted, good_hosts) {
     LH_CONTAINS(c.local.receive(), "200 OK");
 }
 LH_TEST(test_socket_disconnect_preserves_sigpipe_disposition) {
-    // CTest already isolates this case, as the Python subprocess did.
     std::signal(SIGPIPE, SIG_DFL);
     Bridge c(t);
     c.inherited();

@@ -20,7 +20,7 @@ set(lh_sanitize_default OFF)
 if(DEFINED ENV{FF8_TEST_SANITIZE} AND NOT "$ENV{FF8_TEST_SANITIZE}" STREQUAL "")
   set(lh_sanitize_default ON)
 endif()
-option(FF8_TEST_SANITIZE "Add each harness SANITIZE_FLAGS list, like the variable of that name does for pytest" ${lh_sanitize_default})
+option(FF8_TEST_SANITIZE "Enable each harness SANITIZE_FLAGS list" ${lh_sanitize_default})
 set(LH_SANITIZE -fsanitize=address,undefined -fno-omit-frame-pointer)
 set(LH_HOST_RUNNER "" CACHE FILEPATH "Prebuilt runner from a native build, required when cross-compiling")
 
@@ -28,7 +28,7 @@ define_property(GLOBAL PROPERTY LH_HARNESSES BRIEF_DOCS "Harness targets" FULL_D
 
 # lh_harness(NAME
 #   SOURCES a.c b.cpp        relative to the repository root
-#   [FLAGS ...]              C compile flags, copied from the Python cc line
+#   [FLAGS ...]              C compile flags
 #   [CXX_FLAGS ...]          the same for C++ sources
 #   [INCLUDES runtime ...]   relative to the repository root
 #   [LINK_FLAGS ...]         only for the link, such as -Wl,--wrap=calloc
@@ -134,13 +134,12 @@ if(NOT CMAKE_CROSSCOMPILING)
   # The generator links into the runner so a case can reach its data structures;
   # add_subdirectory would let its Release default change this project's flags.
   file(GLOB lh_generator_sources CONFIGURE_DEPENDS "${LH_ROOT}/generator/src/*.c")
-  add_library(lh_generator_support STATIC ${lh_generator_sources} support/generator_shim.c)
-  target_include_directories(lh_generator_support PUBLIC "${LH_ROOT}/generator/include" "${LH_ROOT}/generator/src")
-  # The cache key includes the generator's own identity, which its build writes to a header.
   include("${LH_ROOT}/generator/fingerprint.cmake")
-  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/generator-build/generator_build.h" CONTENT
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generator_build.h" CONTENT
     "#define LHG_FINGERPRINT \"${LIONHEART_GENERATOR_FINGERPRINT}\"\n")
-  target_include_directories(lh_generator_support PRIVATE "${CMAKE_BINARY_DIR}/generator-build")
+  add_library(lh_generator_support STATIC ${lh_generator_sources} support/generator_shim.c)
+  target_include_directories(lh_generator_support PUBLIC "${LH_ROOT}/generator/include" "${LH_ROOT}/generator/src"
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
   set_target_properties(lh_generator_support PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
     POSITION_INDEPENDENT_CODE ON)
   target_compile_options(lh_generator_support PRIVATE -O2 -UNDEBUG)
