@@ -1,8 +1,8 @@
 // Fresh-session, bounded versioned states; synthetic data only.
 #include "host_fixtures.h"
-static std::string sha(lh::Case &t,const std::string &bytes,bool hex=false) {
-    auto file=t.temp()/"hash-input"; lh::write_file(file,bytes);
-    auto digest=t.ok(t.host("sha1sum").arg(file)).out.substr(0,40);
+#include "oracles/sha1.h"
+static std::string sha(lh::Case &,const std::string &bytes,bool hex=false) {
+    auto digest=lh::oracle::sha1(bytes);
     if(hex) return digest;
     std::string out; for(size_t i=0;i<40;i+=2) out+=char(std::stoul(digest.substr(i,2),nullptr,16)); return out;
 }

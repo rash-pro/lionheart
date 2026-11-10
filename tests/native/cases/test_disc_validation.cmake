@@ -10,5 +10,7 @@ foreach(name identify runtime-identify)
     -ffunction-sections -fdata-sections INCLUDES runtime backends/host
     SOURCES tests/disc_id_harness.c backends/host/disc_id.c backends/host/disc_iso.c runtime/cpu.c ${runtime}
     LINK_FLAGS -Wl,--gc-sections ${wrap})
-  target_include_directories(test_disc_validation.${name} PRIVATE "${LH_SYNTHETIC_DIR}")
+  if(TARGET test_disc_validation.${name})
+    target_include_directories(test_disc_validation.${name} PRIVATE "${LH_SYNTHETIC_DIR}")
+  endif()
 endforeach()

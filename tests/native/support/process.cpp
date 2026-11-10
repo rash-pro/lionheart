@@ -26,7 +26,17 @@ std::vector<std::string> argv_for(const Command &command) {
     const BuildInfo &build = build_info();
     std::vector<std::string> argv;
     if (command.target()) argv.insert(argv.end(), build.emulator.begin(), build.emulator.end());
-    argv.push_back(command.program());
+    const bool launch = command.target() && build.windows_paths && !build.launcher.empty();
+    if (launch) {
+        argv.push_back(build.launcher);
+        for (const auto &entry : command.environment()) {
+            argv.insert(argv.end(), {"--set", entry.first, entry.second.is_path()
+                ? to_windows_path(entry.second.text()) : entry.second.text()});
+        }
+        for (const auto &name : command.unset_names()) argv.insert(argv.end(), {"--unset", name});
+        argv.push_back("--");
+    }
+    argv.push_back(launch ? to_windows_path(command.program()) : command.program());
     for (const Arg &arg : command.arguments()) {
         argv.push_back(arg.is_path() && command.target() && build.windows_paths ? to_windows_path(arg.text()) : arg.text());
     }
@@ -70,8 +80,14 @@ std::string quoted(const std::vector<std::string> &argv) {
         (void)!write(status, &code, sizeof(code));
         _exit(127);
     }
-    for (const std::string &name : command.unset_names()) unsetenv(name.c_str());
-    for (const auto &entry : command.environment()) setenv(entry.first.c_str(), entry.second.c_str(), 1);
+    if (!(command.target() && build_info().windows_paths && !build_info().launcher.empty())) {
+        for (const std::string &name : command.unset_names()) unsetenv(name.c_str());
+        for (const auto &entry : command.environment()) {
+            const auto value = entry.second.is_path() && command.target() && build_info().windows_paths
+                ? to_windows_path(entry.second.text()) : entry.second.text();
+            setenv(entry.first.c_str(), value.c_str(), 1);
+        }
+    }
     std::vector<char *> raw;
     for (const std::string &arg : argv) raw.push_back(const_cast<char *>(arg.c_str()));
     raw.push_back(nullptr);

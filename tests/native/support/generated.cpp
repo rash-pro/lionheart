@@ -461,6 +461,8 @@ Build &Build::probe(const std::string &name, std::vector<std::pair<std::string, 
 }
 
 Compiled Build::library() {
+    if (build_info().windows_paths)
+        skip("generated libraries require a native compiler and loader");
     if (!program_) LH_FAIL("Build::library() needs a program");
     if (build_info().windows_paths || !build_info().emulator.empty()) {
         skip("generated programs are compiled for and loaded into the native runner");

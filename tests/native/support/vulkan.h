@@ -1,5 +1,6 @@
 // Isolate host contract builds so FF8_PLAYER never reaches a test harness.
 #pragma once
+#include "lh_internal.h"
 #include "lh_test.h"
 #include <cstdlib>
 #include <fcntl.h>
@@ -27,6 +28,8 @@ private:
 };
 inline fs::path host_contract(Case &t, const std::string &target, bool replay = true,
                               fs::path folder = {}) {
+    if (internal::build_info().windows_paths)
+        skip("display/GPU fixture requires an on-demand native build");
     if (!executable_on_path("cmake"))
         skip(replay ? "CMake is required for the optional Vulkan gate" : "CMake is required for the CRT presentation gate");
     if (folder.empty()) folder = fs::read_symlink("/proc/self/exe").parent_path() / "fixtures" / (replay ? "vulkan" : "crt");

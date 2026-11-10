@@ -110,7 +110,7 @@ inline Json check_compile_commands(const fs::path &input,const std::vector<fs::p
     }
     auto inspect=[&](const std::string &v,const fs::path &directory,const std::string &kind) {
         auto path=input_path(v,directory); bool bad=false;
-        for(auto &part:path.parent_path()) if(lower(part.string()).find("generated")!=std::string::npos) bad=true;
+        for(const auto &part:path.parent_path()) if(lower(part.string()).find("generated")!=std::string::npos) bad=true;
         if(kind=="include" && lower(path.filename().string()).find("generated")!=std::string::npos) bad=true;
         for(auto &root:roots) { auto p=path; for(;;) { if(p==root) bad=true; auto parent=p.parent_path(); if(parent==p) break; p=parent; } }
         if(kind=="source" && std::regex_search(path.filename().string(),std::regex("^(functions_|overlay_|dispatch_table|interpreter_table)"))) bad=true;

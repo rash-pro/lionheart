@@ -1,3 +1,7 @@
+if(WIN32)
+  # The sampler inspects Linux x86-64 processes.
+  return()
+endif()
 foreach(mode False True)
   set(flags -std=c99 -O2 -ffunction-sections)
   if(mode STREQUAL True)

@@ -121,7 +121,7 @@ static void spleen(FILE *out, const char *root)
 int main(int argc, char **argv)
 {
     if (argc != 4 || (strcmp(argv[1], "gui") && strcmp(argv[1], "spleen"))) fail("usage: assetgen gui|spleen SOURCE_ROOT OUTPUT");
-    FILE *out = fopen(argv[3], "w"); if (!out) fail("cannot open output");
+    FILE *out = fopen(argv[3], "wb"); if (!out) fail("cannot open output");
     if (!strcmp(argv[1], "gui")) gui(out, argv[2]); else spleen(out, argv[2]);
     if (ferror(out) || fclose(out)) fail("cannot write output");
     return 0;

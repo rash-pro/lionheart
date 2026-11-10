@@ -88,3 +88,46 @@ This accepts current output. Review the entire manifest diff before committing i
 `test_metadata_tool` covers native disc metadata commands with synthetic ISO
 sectors and checks the supported upstream YAML subset. No interpreter is needed
 for the developer tools or this suite.
+
+## Run the Windows target on Linux
+
+Set `TMPDIR` to a directory outside the checkout. Install Wine and the host build dependencies,
+then build the player, the Linux runner, and the Windows tests:
+
+```sh
+cmake -DPLATFORM=windows -P tools/ci_deps.cmake
+nice -n 10 cmake -DJOBS=4 -P tools/build_windows.cmake
+cmake -S tests/native -B build/native-tests
+nice -n 10 cmake --build build/native-tests --target lionheart_tests -j4
+nice -n 10 cmake -DJOBS=4 -P tools/build_windows_tests.cmake
+export WINEDEBUG=-all DISPLAY= SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+export WINEPATH="$PWD/build/windows/dist-windows"
+export FF8_PLAYER_HOST="$PWD/build/windows/Lionheart.exe"
+wine cmd /c exit 0
+nice -n 10 ctest --test-dir build/windows-tests -j4 --output-on-failure -LE 'game|realtime'
+```
+
+Windows tests use the pinned SDL2 and zlib dependencies. The HTTP backend uses WinHTTP.
+The Linux runner skips DLL calls. Cases that need ELF linker features, POSIX helpers,
+or an interactive display report their missing prerequisite. File size limit failures
+skip at the point that requires `setrlimit`; other memory card cases still run.
+Use `fs::path` values for path arguments and path environment variables.
+Harness streams use binary mode to preserve input bytes and line endings.
+
+## Run the relocated bundle
+
+Build the Windows tests first, then create and extract the bundle in another directory:
+
+```sh
+cmake -P tools/bundle_windows_tests.cmake
+cmake -E make_directory build/relocated-windows-tests
+cmake -E chdir build/relocated-windows-tests cmake -E tar xf ../windows-test-bundle.zip
+nice -n 10 cmake -DEMULATOR=wine -P build/relocated-windows-tests/run_windows_bundle.cmake
+```
+
+On Windows, extract the same archive and run `cmake -P run_windows_bundle.cmake` from its directory.
+The script checks the player's headless no-disc diagnostic, then runs the Windows runner with `--suite`.
+Each executable case runs in a separate process with a deadline. The suite excludes `game` and `realtime`.
+The Windows runner retains the Linux inventory. Cases whose host fixtures need POSIX or an on-demand
+compiler remain registered with a skip reason. Portable cases use the original case bodies and load Windows DLLs.
+The workflow marks the hosted Windows job as pending verification until it has run there.

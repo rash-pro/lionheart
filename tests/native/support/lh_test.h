@@ -61,7 +61,7 @@ public:
     const fs::path &input_file() const { return stdin_; }
     Command &timeout(double seconds) { timeout_ = seconds; return *this; }
     Command &cwd(fs::path directory) { cwd_ = std::move(directory); return *this; }
-    Command &env(std::string name, std::string value) { env_[std::move(name)] = std::move(value); return *this; }
+    Command &env(std::string name, Arg value) { env_.insert_or_assign(std::move(name), std::move(value)); return *this; }
     Command &unset(std::string name) { env_.erase(name); unset_.push_back(std::move(name)); return *this; }
     // Standard input for the program, as bytes. Without it the program reads /dev/null.
     Command &input(std::string bytes) { input_ = std::move(bytes); has_input_ = true; return *this; }
@@ -71,7 +71,7 @@ public:
     const std::vector<Arg> &arguments() const { return args_; }
     double timeout() const { return timeout_; }
     const fs::path &working_directory() const { return cwd_; }
-    const std::map<std::string, std::string> &environment() const { return env_; }
+    const std::map<std::string, Arg> &environment() const { return env_; }
     const std::vector<std::string> &unset_names() const { return unset_; }
     bool has_input() const { return has_input_; }
     const std::string &input_bytes() const { return input_; }
@@ -82,7 +82,7 @@ private:
     std::vector<Arg> args_;
     double timeout_ = 300;
     fs::path cwd_, stdin_;
-    std::map<std::string, std::string> env_;
+    std::map<std::string, Arg> env_;
     std::vector<std::string> unset_;
     std::string input_;
     bool has_input_ = false;
@@ -125,6 +125,7 @@ public:
     Command harness(const std::string &name) const;
     // The player selected with FF8_PLAYER_HOST.
     Command player() const;
+    std::string target_path(const fs::path &path) const;
     // An already built game binary, such as build/dev/ff8.
     Command target(const fs::path &binary) const { return Command(binary.string(), true); }
     // A shared library declared in this file's fragment with lh_harness(NAME LIBRARY ...).
@@ -144,6 +145,11 @@ private:
 
 // Files and bytes.
 std::string read_file(const fs::path &path);
+inline std::string read_text_file(const fs::path &path) {
+    auto text = read_file(path);
+    for (size_t at = 0; (at = text.find("\r\n", at)) != std::string::npos;) text.erase(at, 1);
+    return text;
+}
 // Fixture emitters also write files before the runner is linked.
 inline void write_file(const fs::path &path, const std::string &contents) {
     std::ofstream stream(path, std::ios::binary);
@@ -170,6 +176,7 @@ fs::path owned_path(const std::string &relative);
 
 // Registration. Use the macros below rather than calling these directly.
 void add_case(const char *file, const std::string &name, Tier tier, std::function<void(Case &)> body);
+void add_unavailable_case(const char *file, const std::string &name, Tier tier, const std::string &reason);
 
 namespace detail {
 template <class T, class = void> struct has_id : std::false_type {};

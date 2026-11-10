@@ -1,0 +1,22 @@
+# The same entry point is rehearsed through Wine and used by the hosted runner.
+set(root "${CMAKE_CURRENT_LIST_DIR}")
+if(EMULATOR)
+  set(ENV{DISPLAY} "")
+  set(ENV{WINEPATH} "${root}")
+else()
+  set(ENV{PATH} "${root};$ENV{PATH}")
+endif()
+set(ENV{SDL_VIDEODRIVER} dummy)
+set(ENV{SDL_AUDIODRIVER} dummy)
+set(ENV{FF8_PLAYER_HOST} "${root}/Lionheart.exe")
+file(WRITE "${root}/smoke.ini" "")
+execute_process(COMMAND ${EMULATOR} "${root}/Lionheart.exe" --headless --config smoke.ini
+  WORKING_DIRECTORY "${root}" RESULT_VARIABLE smoke OUTPUT_VARIABLE out ERROR_VARIABLE err TIMEOUT 30)
+if(NOT smoke EQUAL 2 OR NOT "${out}${err}" MATCHES "[Dd]isc")
+  message(FATAL_ERROR "Unexpected player smoke result ${smoke}: ${out}${err}")
+endif()
+execute_process(COMMAND ${EMULATOR} "${root}/lionheart_tests.exe" --suite
+  WORKING_DIRECTORY "${root}" RESULT_VARIABLE tests)
+if(NOT tests EQUAL 0)
+  message(FATAL_ERROR "Windows suite failed: ${tests}")
+endif()

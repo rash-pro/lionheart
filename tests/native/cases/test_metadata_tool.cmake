@@ -1,3 +1,7 @@
+if(WIN32)
+  # The metadata utility starts POSIX processes; it is a build-host tool.
+  return()
+endif()
 lh_harness(ff8files SOURCES tools/devtools/ff8files.cpp tools/devtools/metadata_io.c
   generator/src/base.c generator/src/platform.c generator/src/disc.c
   generator/src/lzs.c generator/src/sha1.c
