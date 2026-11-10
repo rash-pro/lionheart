@@ -1,8 +1,8 @@
 # Porting a test file to the native runner
 
-The test suite is moving from pytest to CTest with a small C++ runner, so that the repository needs no Python. Until
-every file is ported, pytest stays green and authoritative and the native tests grow beside it. A file counts as
-ported when every test identity it has in pytest exists natively with the same tier and the same result.
+The test suite now runs through CTest with a small C++ runner, without Python. The pytest files remain as
+migration evidence. A file counts as ported when every test identity it has in pytest exists natively with
+the same tier and the same result.
 
 ## Build and run
 
@@ -272,7 +272,8 @@ new file to its `FILES` and `PROBES` lists. Delete this script and the `lh::equi
       and so does `ctest -L infra`:
       `build/native-tests/lionheart_tests --check-identities test_X`
 - [ ] `ctest --test-dir build/native-tests -R '^test_X::' -LE realtime` matches pytest's result for the file.
-      `cmake --build build/native-tests --target parity` compares the whole ported set with the baseline.
+      `cmake --build build/native-tests --target parity` compares the whole ported set with the baseline. Set `LH_PARITY_STEMS=test_X` (semicolon-separated for several files)
+      to run and compare only those files.
 - [ ] The same case fails readably after a deliberately broken expectation or harness (then undo the break).
 - [ ] `python -m pytest tests/test_X.py` still passes, and the Python file is unchanged.
 - [ ] No game bytes, generated code or private paths in the files you added.
@@ -308,11 +309,31 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 
 ## What can be ported next
 
-Every file represented in `identities.tsv` has a complete native case file.
-`tests/test_dispatch_index.py` still needs a native port and inventory rows.
-`test_generator_parity.py` is also outside the inventory and has no native case
-file: it compares the native generator with the Python implementation and stays
-until Python is removed.
+Every pytest file has a complete native case file and inventory rows; no files remain to port.
+
+`test_generator_parity` compares complete output trees with `tests/native/generator_reference.tsv`:
+SHA-256 per identity, subcase and output file, initially recorded from Python emission.
+The native cases construct their descriptions at run time; parameter spelling and values live in
+`cases/generator_parity_rows.h`. `FF8_TEST_SANITIZE=ON` also instruments both generator tools.
+
+To accept intentional generator changes, run `cmake -DBUILD=build/native-tests -P tests/native/rewrite_generator_reference.cmake`.
+This rewrites the manifest from C output and accepts whatever the generator emits; review the diff.
+The default test run only reads the frozen manifest.
+
+Python remains necessary for `tests/test_*.py`, `tests/conftest.py`, the `recomp/*.py` oracle,
+and these retained entry points under `tools/`: `build_windows.py`, `check_player_binary.py`,
+`ci_deps.py`, `compare.py`, `disc_identity_header.py`, `embed_gui_assets.py`, `fetch_windows_deps.py`,
+`ff8files.py`, `ff8img.py`, `frame_bench.py`, `frame_probe.py`, `gte_trace.py`, `iro_extract.py`,
+`map_movies.py`, `mdec_trace.py`, `movie_map_header.py`, `perf_report.py`, `psxdisc.py`,
+`render_quality.py`, `setup.py`, `spleen_header.py`, `spu_audio_compare.py`, `stage_player.py`
+and `verify_host_pad.py`. `.github/workflows/ci.yml` still invokes pytest.
+Native configuration, builds and tests require no Python. Optional migration checks remain in
+`tests/native/check_against_python.py`, `check_generator_inputs.py`, `check_empty_catalog.py`,
+`support/check_ra_fixture.py` and `freeze_generator_reference.py`.
+The last script runs the unchanged pytest bodies and records Python output and descriptions:
+`python tests/native/freeze_generator_reference.py <receipt-directory> --native <native-description-directory>`.
+Populate the native directory by running the generator cases with `LH_GENERATOR_SPECS=<directory>`;
+the check compares canonical JSON bytes, normalizing only each case's temporary directory to `$TMP`.
 
 Before adding a helper under `support/`, look for one that already does the job.
 

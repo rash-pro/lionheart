@@ -2,7 +2,10 @@
 #include "lh_test.h"
 
 namespace {
-struct Row { std::string id, mode; uint32_t seed; };
+struct Row {
+    std::string id, mode;
+    uint32_t seed;
+};
 std::vector<Row> rows() {
     std::vector<Row> out;
     for (const char *mode : {"entry", "precise"})
@@ -13,4 +16,4 @@ std::vector<Row> rows() {
 LH_TEST_P(test_dispatch_index_matches_linear_catalog, rows()) {
     t.ok(t.harness(p.mode).args({10000, p.seed}).timeout(60));
 }
-}
+} // namespace
