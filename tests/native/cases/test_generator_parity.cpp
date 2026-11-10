@@ -775,6 +775,19 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
+    if (fn == "test_call_ticks_see_the_callee_window") {
+        // A function that calls itself: the call's tick knows the window at
+        // its target, the entry, as a jump to it would.
+        auto main = image(Words{imm(4, 4, 0, 4), imm(9, 2, 2, 1), imm(9, 4, 4, -1), j(3, BASE), 0} + RET);
+        main["seeds"] = A{num(BASE)};
+        main["scan_calls"] = false;
+        auto spec = main_spec(main);
+        spec["host_mode"] = "fast";
+        LH_CONTAINS(source(parity(t, spec, "self-call")),
+                    "c->pc = 0x80010000u;\nc_count_recompiled(c, 0x80010000u, 2 - ticked);\nc_recomp_budget(c, 2 - ticked);\n"
+                    "if (!c_tick_window(c, 2 - ticked, 2)) return;");
+        return;
+    }
     if (fn == "test_register_jumps_make_no_leaders") {
         // The return at +8 reads as an offset of 8 words to +44, which is in the
         // function; only real branch targets and fall-through points resume.
