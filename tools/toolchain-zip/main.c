@@ -1,11 +1,13 @@
-/* Stored entries make archive bytes independent of compression-library versions. */
+/* Writes the release archive of the trimmed compiler. Everything that does not
+ * depend on the compressor is fixed (order, dates, modes), so two builds with the
+ * same zlib give the same bytes; a third of the download is worth that condition. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 
-typedef struct { char *name; uint32_t size, crc, offset, mode; } entry;
+typedef struct { char *name; uint32_t size, packed, crc, offset, mode; } entry;
 static FILE *out;
 static void fail(const char *why) { fprintf(stderr, "toolchain-zip: %s\n", why); exit(1); }
 static void put(uint32_t v, unsigned n) {
@@ -26,33 +28,39 @@ int main(int argc, char **argv) {
     list=fopen(argv[2],"rb"); out=fopen(argv[1],"wb");
     if(!list || !out) fail("cannot open output or list");
     while(fgets(line,sizeof(line),list)) {
-        unsigned char buffer[65536]; size_t n; FILE *in; entry *e;
+        unsigned char *data, *packed; long length; FILE *in; entry *e; z_stream z;
         line[strcspn(line,"\r\n")]=0;
         if(!line[0] || count==1024 || strlen(line)>UINT16_MAX) fail("invalid list");
         e=&entries[count++]; e->name=malloc(strlen(line)+1);
         if(!e->name) fail("allocation failed");
-        strcpy(e->name,line); e->size=0; e->crc=crc32(0,0,0);
+        strcpy(e->name,line);
         e->mode=strcmp(line,argv[3])==0?0100755:0100644;
         in=fopen(line,"rb"); if(!in) fail(line);
-        while((n=fread(buffer,1,sizeof(buffer),in))) {
-            if(n>UINT32_MAX-e->size) fail("file too large");
-            e->size+=(uint32_t)n; e->crc=crc32(e->crc,buffer,(uInt)n);
-        }
-        if(ferror(in) || fseek(in,0,SEEK_SET)) fail("read failed");
+        if(fseek(in,0,SEEK_END) || (length=ftell(in))<0 || fseek(in,0,SEEK_SET)) fail("read failed");
+        if((unsigned long)length>UINT32_MAX/2) fail("file too large");
+        e->size=(uint32_t)length; data=malloc(e->size?e->size:1);
+        if(!data || fread(data,1,e->size,in)!=e->size || fclose(in)) fail("read failed");
+        e->crc=crc32(crc32(0,0,0),data,e->size);
+        memset(&z,0,sizeof(z));
+        if(deflateInit2(&z,9,Z_DEFLATED,-MAX_WBITS,9,Z_DEFAULT_STRATEGY)!=Z_OK) fail("deflate failed");
+        uLong bound=deflateBound(&z,e->size); packed=malloc(bound?bound:1);
+        if(!packed || bound>UINT32_MAX) fail("allocation failed");
+        z.next_in=data; z.avail_in=e->size; z.next_out=packed; z.avail_out=(uInt)bound;
+        if(deflate(&z,Z_FINISH)!=Z_STREAM_END) fail("deflate failed");
+        e->packed=(uint32_t)z.total_out; deflateEnd(&z);
         e->offset=position();
-        put(0x04034b50,4); put(20,2); put(0,2); put(0,2);
-        put(0,2); put(33,2); put(e->crc,4); put(e->size,4); put(e->size,4);
+        put(0x04034b50,4); put(20,2); put(0,2); put(8,2);
+        put(0,2); put(33,2); put(e->crc,4); put(e->packed,4); put(e->size,4);
         put((uint32_t)strlen(line),2); put(0,2); name(e);
-        while((n=fread(buffer,1,sizeof(buffer),in)))
-            if(fwrite(buffer,1,n,out)!=n) fail("write failed");
-        if(ferror(in) || fclose(in)) fail("read failed");
+        if(fwrite(packed,1,e->packed,out)!=e->packed) fail("write failed");
+        free(packed); free(data);
     }
     if(ferror(list) || fclose(list)) fail("list read failed");
     uint32_t start=position();
     for(unsigned i=0;i<count;++i) {
         entry *e=&entries[i];
-        put(0x02014b50,4); put(0x0314,2); put(20,2); put(0,2); put(0,2);
-        put(0,2); put(33,2); put(e->crc,4); put(e->size,4); put(e->size,4);
+        put(0x02014b50,4); put(0x0314,2); put(20,2); put(0,2); put(8,2);
+        put(0,2); put(33,2); put(e->crc,4); put(e->packed,4); put(e->size,4);
         put((uint32_t)strlen(e->name),2); put(0,2); put(0,2); put(0,2); put(0,2);
         put(e->mode<<16,4); put(e->offset,4); name(e); free(e->name);
     }

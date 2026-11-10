@@ -56,8 +56,8 @@
       ],
       "format": "zip",
       "prefix": "zig-cc-slim/",
-      "sha256": "80ab3a245182d4cbd32e1be6222d700692ac7cd3f1316e312a8e05382a3d7da3",
-      "size": 185840045,
+      "sha256": "0dc39d72e7ee14a11e6dfe6883024c5a357e2e1d7d7ff832a10d05d542ab137d",
+      "size": 59429418,
       "urls": [
         "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-linux-cc.zip"
       ],
@@ -119,8 +119,8 @@
       ],
       "format": "zip",
       "prefix": "zig-cc-slim/",
-      "sha256": "b8b9a8406d876fce30c5d26b3460a4878c66244f6f86057fa93c8f2667eca436",
-      "size": 190397158,
+      "sha256": "e11e483f1b20870800a07db7ae5e5fc83de6b3d4bcad5ebcfe39b397ade585f8",
+      "size": 60288156,
       "urls": [
         "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-windows-cc.zip"
       ],

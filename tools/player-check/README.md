@@ -53,13 +53,16 @@ script verifies input SHA-256 before extracting only the selected files. It chec
 the output size and hash against the player manifest; use `-DVERIFY=OFF` only
 while preparing new pins, then repeat with verification enabled.
 
-`tools/toolchain-zip` writes ZIP32 stored entries (compression method 0), in sorted
+`tools/toolchain-zip` writes ZIP32 entries compressed with zlib at level 9, in sorted
 path order, with a fixed DOS date of 1980-01-01, no extra fields or comments, and
 Unix regular-file permissions 0644 (0755 for the compiler). No source metadata,
-locale, timezone or compressor-version decisions enter the bytes. Stored entries
-trade download size for reproducibility across library versions. Input bytes are
-copied unmodified. `LICENSE`, the LLVM text at `lib/libcxx/LICENSE.TXT`, and the
-added provenance `NOTICE.txt` are included and installed beside the compiler.
+locale or timezone enters the bytes, so two builds with the same zlib are identical.
+The compressed bytes can differ between zlib versions and implementations; the
+pinned archives were written with zlib 1.3.2. With another zlib, check a published
+asset by content instead: extract it and the archive you built and compare the
+trees. Input bytes are copied unmodified. `LICENSE`, the LLVM text at
+`lib/libcxx/LICENSE.TXT`, and the added provenance `NOTICE.txt` are included and
+installed beside the compiler.
 
 Upload `zig-0.17.1-x86_64-linux-cc.zip` and
 `zig-0.17.1-x86_64-windows-cc.zip` as assets of this repository's
