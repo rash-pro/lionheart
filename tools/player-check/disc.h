@@ -209,6 +209,28 @@ inline std::vector<Image> catalog_images(const std::vector<fs::path> &cues,const
             result.push_back({index,std::move(v.data)});
         }
     }
+    // Code prefixes (battle stages) are compiled too: each variant's code, from
+    // the first present disc holding its first asset, numbered as the generator does.
+    if(auto *records=metadata.find("code_prefixes")) for(auto &record:records->values()) {
+        size_t first=extra; bool any=false;
+        for(auto &variant:record.at("variants").values()) {
+            auto path=variant.at("paths").values().at(0).str(); size_t size=variant.at("size").integer();
+            for(auto &media:discs) {
+                const Json *entry=nullptr;
+                for(auto &e:media.second.inventory.at("entries").values()) if(e.at("path").str()==path) { entry=&e; break; }
+                if(!entry) continue;
+                size_t sector=entry->at("sector").integer(),stored=entry->at("size").integer();
+                require(sector<=media.second.image.size/2048 && stored<=media.second.image.size-sector*2048,"IMG read outside image");
+                auto raw=media.second.disc->read(media.second.image.lba+sector,stored);
+                require(sha1(raw)==entry->at("sha1").str(),"catalog bytes disagree: "+path);
+                auto data=lzs(raw); require(size<=data.size()&&sha1(data.substr(0,size))==variant.at("sha1").str(),"code prefix disagrees: "+path);
+                result.push_back({extra,data.substr(0,size)}); any=true;
+                break;
+            }
+            ++extra;
+        }
+        if(!any) extra=first;
+    }
     std::sort(result.begin(),result.end(),[](const Image &a,const Image &b){return a.index<b.index;});
     for(size_t i=1;i<result.size();++i) require(result[i-1].index!=result[i].index,"catalog set index collision");
     return result;
