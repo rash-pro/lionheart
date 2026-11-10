@@ -292,6 +292,7 @@ test_generator_parity::test_jump_tables[4-True]/jump-4-True-trace-fast	generated
 test_generator_parity::test_jump_tables[4-True]/jump-4-True-trace-fast	manifest.json	0e63cb0f7aab6ac7de48263c0d9cccf92721dca6a00a2b5d32f00cb7572ebe6f
 test_generator_parity::test_jump_tables[4-True]/jump-4-True-trace-fast	profile-catalog.txt	01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b
 test_generator_parity::test_jump_tables[4-True]/jump-4-True-trace-fast	sources.cmake	ad3db3ec48a1a2c6e6580fa6277aebaaf3f80b2205aaa692ca2785d24244fbd2
+test_generator_parity::test_lowering_leaves_strings_alone/strings	lowered.c	e902beb6af9e1a54534b4304abcb42ac4e87f0fe3757ff916689f4bd609e3d53
 test_generator_parity::test_lowering_register_limit_and_helper_order[1]/lower	lowered.c	6bff835618a251edae934c6c9b8aa19a45953506e048561336f875c0e7c590bf
 test_generator_parity::test_lowering_register_limit_and_helper_order[2]/lower	lowered.c	da26944ae3fa1ef236adf43a32ab77e0bb397120a0712a1884964bad6527a312
 test_generator_parity::test_lowering_register_limit_and_helper_order[3]/lower	lowered.c	15ec123e0a960c61f22d89195c6c0f6ee9b474baed98fada77399118a69f3ca0
@@ -303,7 +304,7 @@ test_generator_parity::test_lowering_register_limit_and_helper_order[8]/lower	lo
 test_generator_parity::test_lowering_textual_matches[]/lower	lowered.c	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 test_generator_parity::test_lowering_textual_matches[void f(cpu_t *c) { c->r[08]++; c_tick(c, 0); return; }]/lower	lowered.c	0a84bc9e1d2edac9ef6e761af6a89eb1bbfed626a439a62a43730da523b73ad4
 test_generator_parity::test_lowering_textual_matches[void f(cpu_t *c) { c->r[0]++; unknown(c); return; }]/lower	lowered.c	bf8068794e1d32a93cad4d0f0ed9985bb322cd3597d6eb86d1d4d9f647d94e08
-test_generator_parity::test_lowering_textual_matches[void f(cpu_t *c) { c->r[1]++; cpu_stop(c, "return;"); return; }]/lower	lowered.c	61cf72ddb3619ed55b768f1d51a1f71146d706eb2deaf794f1436737a1b7258d
+test_generator_parity::test_lowering_textual_matches[void f(cpu_t *c) { c->r[1]++; cpu_stop(c, "return;"); return; }]/lower	lowered.c	7498209e41ffa7e22cdcf61b49efea93addde9bf6d3ddd4a0dc55a33db0edc61
 test_generator_parity::test_poll_sites[cross]/poll-cross-fast	dispatch_table.c	c556f36f48d702fb606a7792dca4a25da3a777db3eb991fdf06ab997bee9b039
 test_generator_parity::test_poll_sites[cross]/poll-cross-fast	functions_000.c	2e8a94a0ff32130871ad62e341d2fb8d44e12252a7fbb6d04fe66b0e15c7307d
 test_generator_parity::test_poll_sites[cross]/poll-cross-fast	generated.h	08f74f5f2371df41780e5bb68f7657eb49f3156951ce76373255bfa7cd289556

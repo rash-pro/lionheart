@@ -332,12 +332,23 @@ void lhg_cache_lower(lhg_arena *arena, const lhg_text *source, int cap, lhg_text
             lhg_text_addf(out, arena, "%sregs_result_%D", index ? ", " : "", (int64_t)index);
         lhg_text_adds(out, ";");
     }
-    /* Return replacement follows helper rewriting and also visits quoted text. */
-    const char *pos = opening + 1, *hit;
-    while ((hit = strstr(pos, "return;"))) {
-        lhg_text_add(out, pos, (size_t)(hit - pos));
-        lhg_text_addf(out, arena, "{ %s; return; }", lower.spill);
-        pos = hit + 7;
+    /* Return replacement follows helper rewriting. A string literal, such as a
+     * stop reason, is text for the guest log and keeps its words. */
+    const char *pos = opening + 1, *scan = pos, *stop = body + strlen(body);
+    while (scan < stop) {
+        if (*scan == '"') {
+            for (scan++; scan < stop && *scan != '"'; scan++)
+                if (*scan == '\\' && scan + 1 < stop)
+                    scan++;
+            if (scan < stop)
+                scan++;
+        } else if (!strncmp(scan, "return;", 7)) {
+            lhg_text_add(out, pos, (size_t)(scan - pos));
+            lhg_text_addf(out, arena, "{ %s; return; }", lower.spill);
+            pos = scan += 7;
+        } else {
+            scan++;
+        }
     }
     lhg_text_adds(out, pos);
     lhg_text_free(&rewritten);

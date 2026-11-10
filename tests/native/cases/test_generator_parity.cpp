@@ -1,5 +1,6 @@
 #include "lh_json.h"
 #include "recompiler_fixture.h"
+#include <algorithm>
 #include <array>
 #include <dlfcn.h>
 #include <iomanip>
@@ -445,6 +446,17 @@ void programs(lh::Case &t, const std::string &fn, const J &p) {
                     "\"quote: \\\" ( )\");\nreturn;\n}\n";
         }
         parity(t, O{{"lower_source", text}, {"max_registers", cap}}, "lower");
+        return;
+    }
+    if (fn == "test_lowering_leaves_strings_alone") {
+        // Every return spills the cached registers first; a return spelled
+        // inside a stop reason is text and must reach the log as written.
+        std::string text = "void f_80010000(cpu_t *c) {\nc->r[1]++;\ncpu_stop(c, \"stop; return; \\\" return;\");\nreturn;\n}\n";
+        auto out = parity(t, O{{"lower_source", text}, {"max_registers", 1}}, "strings");
+        auto lowered = lh::read_file(out / "lowered.c");
+        LH_CONTAINS(lowered, "cpu_stop(c, \"stop; return; \\\" return;\")");
+        LH_CONTAINS(lowered, "\n{ c->r[1] = reg_1; return; }\n}");
+        LH_EQ(std::count(lowered.begin(), lowered.end(), '{'), 2);
         return;
     }
     if (fn == "test_lowering_rejects_unclassified_or_unclosed_calls") {
