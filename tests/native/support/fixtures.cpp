@@ -10,7 +10,7 @@
 #include <iomanip>
 #include <regex>
 #include <set>
-#include <dlfcn.h>
+#include "loader.h"
 #include <unistd.h>
 
 namespace lh {
@@ -18,7 +18,7 @@ namespace lh {
 using internal::build_info;
 
 void fail_at(const char *file, int line, const std::string &message) {
-    throw Failure(std::string(fs::path(file).filename()) + ":" + std::to_string(line) + ": " + message);
+    throw Failure(fs::path(file).filename().string() + ":" + std::to_string(line) + ": " + message);
 }
 
 void skip(const std::string &reason) { throw Skip(reason); }
@@ -47,6 +47,8 @@ fs::path Case::root() const { return build_info().root; }
 
 Command Case::harness(const std::string &name) const {
     const std::string key = stem_ + "." + name;
+    const auto unavailable = build_info().unavailable.find(key);
+    if (unavailable != build_info().unavailable.end()) skip(unavailable->second + ": " + key);
     const auto found = build_info().harnesses.find(key);
     if (found == build_info().harnesses.end()) {
         std::string declared;
@@ -63,7 +65,11 @@ Command Case::harness(const std::string &name) const {
 // has no way to load a Windows library into a Linux process, so a case asking for
 // one there records why and skips instead of pretending to have run it.
 Library Case::library(const std::string &name) const {
+    if (build_info().windows_paths && !build_info().emulator.empty())
+        skip("Windows DLL requires a Windows runner");
     const std::string key = stem_ + "." + name;
+    const auto unavailable = build_info().unavailable.find(key);
+    if (unavailable != build_info().unavailable.end()) skip(unavailable->second + ": " + key);
     const auto found = build_info().harnesses.find(key);
     if (found == build_info().harnesses.end()) {
         if (build_info().windows_paths || !build_info().emulator.empty()) {
@@ -92,9 +98,14 @@ Command Case::player() const {
     if (!path || !*path) LH_FAIL("set FF8_PLAYER_HOST to the player binary");
     return Command(path, true);
 }
+std::string Case::target_path(const fs::path &path) const {
+    return build_info().windows_paths ? internal::to_windows_path(path.string()) : path.string();
+}
 
 Result Case::run(const Command &command) {
     Result result = internal::run_process(command);
+    if (result.rc == 77 && result.out.rfind("SKIP: ", 0) == 0)
+        skip(result.out.substr(6));
     if (result.timed_out) {
         throw Failure("command timed out after " + std::to_string(result.timeout) + " s\n  command: " + result.command +
                 "\n--- stdout ---\n" + excerpt(result.out) + "\n--- stderr ---\n" + excerpt(result.err));
@@ -124,7 +135,15 @@ std::string read_file(const fs::path &path) {
 fs::path mkdtemp_under(const fs::path &parent, const std::string &prefix) {
     fs::create_directories(parent);
     std::string pattern = (parent / (prefix + "XXXXXX")).string();
+#ifdef _WIN32
+    for (unsigned i = 0; i < 10000; ++i) {
+        auto candidate = parent / (prefix + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(i));
+        if (fs::create_directory(candidate)) return candidate;
+    }
+    LH_FAIL("cannot create a unique temporary directory");
+#else
     if (!mkdtemp(pattern.data())) LH_FAIL("cannot create a directory under " + parent.string());
+#endif
     return pattern;
 }
 

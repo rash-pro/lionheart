@@ -1,4 +1,8 @@
 include(${CMAKE_CURRENT_LIST_DIR}/../support/synthetic_disc.cmake)
+if(WIN32)
+  # This fixture links partial ELF objects and drives a visible SDL window.
+  return()
+endif()
 include(${CMAKE_CURRENT_LIST_DIR}/../support/sdl.cmake)
 lh_harness(gui FLAGS -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror -DFF8_PLAYER -DFF8_GUI
   -ffunction-sections -fdata-sections ${LH_SDL_FLAGS} INCLUDES runtime backends/host

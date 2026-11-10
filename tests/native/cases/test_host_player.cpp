@@ -22,7 +22,7 @@ LH_TEST(test_cue_offset_and_order) {
     for(int n:{4,2,1}) { Disc d; d.number=n; d.offset=150; auto path=disc(t.temp()/("disc"+std::to_string(n)+".bin"),d); auto cue=path; cue.replace_extension(".cue");
         lh::write_file(cue,"FILE \""+path.filename().string()+"\" BINARY\n TRACK 01 MODE2/2352\n INDEX 01 00:02:00\n"); cues.push_back(cue); }
     auto r=identify(t,cues[0],"assign",{cues[1],cues[2]}); LH_EQ(r.rc,0);
-    LH_EQ(r.out,"1="+cues[2].string()+"\n2="+cues[1].string()+"\n3=\n4="+cues[0].string()+"\n");
+    LH_EQ(r.out,"1="+t.target_path(cues[2])+"\n2="+t.target_path(cues[1])+"\n3=\n4="+t.target_path(cues[0])+"\n");
     r=identify(t,cues[0],"assign",{cues[0]}); LH_EQ(r.rc,2); LH_EQ(r.err,"Two images for FF8 USA disc 4\n");
 }
 namespace {
@@ -115,7 +115,7 @@ LH_TEST(test_player_compiles_no_generated_catalog) {
     for(size_t i=0;i<units.size();++i) {auto file=lh::fs::path(units.at(i).at("file").str());auto name=file.filename().string();catalog|=name=="player_catalog.c";
         auto parent=file.parent_path().string();std::transform(parent.begin(),parent.end(),parent.begin(),[](unsigned char c){return std::tolower(c);});LH_NOT_CONTAINS(parent,"generated");
         LH_CHECK(!std::regex_search(name,std::regex("^(functions_|overlay_|dispatch_table|interpreter_table)")));LH_CHECK(name!="gpu_record.c"&&name!="spu_trace.c");}
-    LH_CHECK(catalog);auto cache=lh::read_file(build/"CMakeCache.txt");for(auto option:{"FF8_PLAYER","FF8_VULKAN","FF8_PGXP","FF8_SAVESTATES","FF8_MOVIES","FF8_RCHEEVOS","FF8_STATE_BRIDGE"}) LH_CONTAINS(cache,std::string(option)+":BOOL=ON");LH_CONTAINS(cache,"FF8_STATS:BOOL=OFF");
+    LH_CHECK(catalog);auto cache=lh::read_file(build/"CMakeCache.txt");for(auto option:{"FF8_PLAYER","FF8_VULKAN","FF8_PGXP","FF8_SAVESTATES","FF8_MOVIES","FF8_RCHEEVOS"}) LH_CONTAINS(cache,std::string(option)+":BOOL=ON");LH_CONTAINS(cache,"FF8_STATS:BOOL=OFF"); LH_CONTAINS(cache,lh::fs::path(t.player().program()).extension()==".exe" ? "FF8_STATE_BRIDGE:BOOL=OFF" : "FF8_STATE_BRIDGE:BOOL=ON");
 }
 LH_GAME_TEST(test_exe_identity_equals_recompiler) {
     auto file=lh::owned_path("SLUS_008.92");if(!lh::fs::is_regular_file(file)) lh::skip("owned game EXE is absent");auto bytes=lh::read_file(file);empty_catalog(bytes,t.temp());

@@ -2,11 +2,14 @@
 #include "host_fixtures.h"
 static lh::Command command(lh::Case &t, std::initializer_list<lh::Arg> args={}, bool automatic=false) {
     // The parser resolves adjacent settings from its executable, not its cwd.
-    auto binary=t.temp()/"options";
+    auto binary=t.temp()/("options" + lh::fs::path(t.harness("options").program()).extension().string());
     lh::fs::copy_file(t.harness("options").program(),binary,lh::fs::copy_options::overwrite_existing);
-    auto cmd=t.target(binary).arg("unused.exe").args(args).env("HOME",t.temp().string()).env("XDG_CONFIG_HOME",(t.temp()/"xdg").string());
+    auto cmd=t.target(binary).arg("unused.exe").args(args).env("HOME",t.temp()).env("XDG_CONFIG_HOME",t.temp()/"xdg");
     bool config=false; for (const auto &a:args) if(a.text()=="--config") config=true;
-    if(!automatic && !config) cmd.args({"--config","/dev/null"});
+    if(!automatic && !config) {
+        auto empty=t.temp()/"empty.ini"; lh::write_file(empty, "");
+        cmd.args({"--config",empty});
+    }
     return cmd;
 }
 static void prefix(const lh::Result &r,const std::string &text) { LH_EQ(r.out.rfind(text,0),0u); }
@@ -70,7 +73,10 @@ static const Args integrated_invalid_settings[] = {
 };
 static lh::Result run_args(lh::Case &t,const Args &p) {
     auto cmd=command(t,{},true); for(auto &a:p.args) cmd.arg(a);
-    if(std::find(p.args.begin(),p.args.end(),"--config")==p.args.end()) cmd.args({"--config","/dev/null"});
+    if(std::find(p.args.begin(),p.args.end(),"--config")==p.args.end()) {
+        auto empty=t.temp()/"empty.ini"; lh::write_file(empty, "");
+        cmd.args({"--config",empty});
+    }
     return t.run(cmd);
 }
 LH_TEST_P(test_invalid_config,invalid_config) {
@@ -82,7 +88,8 @@ LH_TEST_P(test_fullscreen_cli_values,fullscreen_cli_values) {
 }
 LH_TEST_P(test_integrated_invalid_settings,integrated_invalid_settings) { LH_EQ(run_args(t,p).rc,2); }
 LH_TEST(test_explicit_empty_config_ignores_adjacent_file) {
-    lh::write_file(t.temp()/"ff8.ini","pad=invalid-from-stray-config\n"); auto r=t.run(command(t,{"--config","/dev/null"})); LH_EQ(r.rc,0); prefix(r,"0 1 0 0 0\n");
+    auto empty=t.temp()/"empty.ini"; lh::write_file(empty, "");
+    lh::write_file(t.temp()/"ff8.ini","pad=invalid-from-stray-config\n"); auto r=t.run(command(t,{"--config",empty})); LH_EQ(r.rc,0); prefix(r,"0 1 0 0 0\n");
 }
 LH_TEST(test_integrated_config_and_cli_precedence) {
     auto path=t.temp()/"pc.ini";

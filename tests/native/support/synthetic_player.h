@@ -1,6 +1,7 @@
 #pragma once
 #include "synthetic_disc.h"
 #include "generated.h"
+#include "lh_internal.h"
 #include <algorithm>
 #include <sys/file.h>
 #include <fcntl.h>
@@ -28,6 +29,8 @@ inline void empty_catalog(const std::string &executable, const lh::fs::path &out
     LH_CHECK_MSG(rc == 0, error);
 }
 inline lh::fs::path player(lh::Case &t, bool dev = false) {
+    if (lh::internal::build_info().windows_paths)
+        lh::skip("synthetic player fixture requires an on-demand native build");
     std::string inputs = t.root().string();
     for (auto folder : {"runtime", "backends/host", "generator", "games/ff8-usa"}) {
         std::vector<lh::fs::path> files;

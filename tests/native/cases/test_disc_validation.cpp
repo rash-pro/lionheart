@@ -60,7 +60,7 @@ LH_TEST(test_missing_bin_names_bin_instead_of_cue) {
     auto cue = t.temp()/"game.cue";
     lh::write_file(cue, "FILE \"lost.bin\" BINARY\n TRACK 01 MODE2/2352\n INDEX 01 00:00:00\n");
     auto r = identify(t, cue); LH_EQ(r.rc, 2);
-    LH_CHECK(r.err.rfind((t.temp()/"lost.bin").string()+": No such file", 0) == 0);
+    LH_CONTAINS(r.err, "lost.bin: No such file");
     LH_NOT_CONTAINS(r.err, cue.string());
 }
 LH_TEST(test_missing_exe_reports_missing) {

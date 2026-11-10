@@ -10,6 +10,13 @@
 #include <iostream>
 #include <set>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#define setenv(k,v,o) _putenv_s(k,v)
+#ifndef SIGBUS
+#define SIGBUS 7
+#endif
+#endif
 
 namespace lh {
 
@@ -30,6 +37,7 @@ struct Registered {
     std::string name;
     Tier tier;
     std::function<void(Case &)> body;
+    std::string unavailable;
 };
 
 std::vector<Registered> &registry() {
@@ -45,7 +53,16 @@ const char *tier_name(Tier tier) {
     }
 }
 
-fs::path executable_path() { return fs::read_symlink("/proc/self/exe"); }
+fs::path executable_path() {
+#ifdef _WIN32
+    wchar_t path[32768];
+    DWORD size = GetModuleFileNameW(nullptr, path, 32768);
+    if (!size || size == 32768) throw Failure("cannot locate test runner");
+    return fs::path(std::wstring(path, size));
+#else
+    return fs::read_symlink("/proc/self/exe");
+#endif
+}
 
 void read_build_info(const fs::path &path) {
     std::ifstream stream(path);
@@ -59,14 +76,17 @@ void read_build_info(const fs::path &path) {
         const size_t split = line.find('=');
         if (split == std::string::npos) continue;
         const std::string key = line.substr(0, split), value = line.substr(split + 1);
-        if (key == "root") info.root = value;
+        if (key == "root") info.root = fs::absolute(path.parent_path() / fs::path(value));
         else if (key == "windows_paths") info.windows_paths = value == "1";
+        else if (key == "launcher") info.launcher = value;
         else if (key == "emulator") {
             std::istringstream parts(value);
             std::string part;
             while (std::getline(parts, part, ';')) if (!part.empty()) info.emulator.push_back(part);
+        } else if (key.rfind("unavailable.", 0) == 0) {
+            info.unavailable[key.substr(12)] = value;
         } else if (key.rfind("harness.", 0) == 0) {
-            info.harnesses[key.substr(8)] = value;
+            info.harnesses[key.substr(8)] = fs::absolute(path.parent_path() / fs::path(value)).string();
         }
     }
 }
@@ -109,6 +129,18 @@ int run_case(const std::string &name) {
     Case test(name);
     announce_crashes_for(name);
     try {
+        if (build_info().windows_paths) {
+            const auto stem = stem_of(name);
+            if (stem == "module_loader") skip("native module fixtures require ELF freestanding libraries");
+            if (stem == "test_frame_probe") skip("sampler requires Linux x86-64 processes");
+            if (stem == "test_generator_parity") skip("generator parity programs are built for the host");
+            if (stem == "test_frame_bench") skip("benchmark fixture requires POSIX process and script conventions");
+            if (stem == "test_state_bridge") skip("state bridge fixture requires POSIX sockets and syscalls");
+            if (stem == "test_metadata_tool") skip("metadata utility requires POSIX process support");
+            if (stem == "test_ra_gui" || stem == "test_host_gui" || stem == "test_host_gui_vulkan" ||
+                stem == "test_host_crt" || stem == "test_host_hotkeys" || stem == "test_vulkan")
+                skip("display/GPU fixture requires a native interactive session");
+        }
         if (entry->tier == Tier::game) {
             const char *discs = std::getenv("LIONHEART_DISCS");
             if (!discs || !*discs) skip("set LIONHEART_DISCS to run owned-game tests");
@@ -288,13 +320,20 @@ bool check_identities(const std::vector<std::string> &requested) {
 } // namespace internal
 
 void add_case(const char *file, const std::string &name, Tier tier, std::function<void(Case &)> body) {
-    internal::registry().push_back({fs::path(file).stem().string() + "::" + name, tier, std::move(body)});
+    internal::registry().push_back({fs::path(file).stem().string() + "::" + name, tier, std::move(body), {}});
+}
+void add_unavailable_case(const char *file, const std::string &name, Tier tier, const std::string &reason) {
+    add_case(file, name, tier, [reason](Case &) { skip(reason); });
+    internal::registry().back().unavailable = reason;
 }
 
 
 } // namespace lh
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
     using namespace lh;
     using namespace lh::internal;
     if (duplicates_found()) return 2;
@@ -313,6 +352,28 @@ int main(int argc, char **argv) {
     if (mode == "--emit-ctest" && rest.size() == 1) return emit_ctest(rest[0], info_path);
     read_build_info(info_path);
     try {
+        if (mode == "--suite") {
+            unsigned passed = 0, skipped = 0, failed = 0;
+            std::map<std::string, unsigned> reasons;
+            for (const auto &entry : registry()) {
+                if (entry.tier == Tier::game || entry.tier == Tier::realtime) continue;
+                if (!entry.unavailable.empty()) {
+                    ++skipped; ++reasons["SKIP: " + entry.unavailable + "\n"];
+                    std::cout << "SKIP " << entry.name << ": " << entry.unavailable << "\n";
+                    continue;
+                }
+                auto result = run_process(Command(executable_path().string(), false)
+                    .args({"--build-info", info_path, "--run", entry.name}).timeout(300));
+                if (result.rc == 77) std::cout << "SKIP " << entry.name << "\n";
+                std::cout << result.out << result.err;
+                if (result.rc == 77) { ++skipped; ++reasons[result.out]; }
+                else if (result.rc == 0 && !result.timed_out) ++passed;
+                else ++failed;
+            }
+            std::cout << "RESULT passed=" << passed << " skipped=" << skipped << " failed=" << failed << "\n";
+            for (const auto &reason : reasons) std::cout << reason.second << " " << reason.first;
+            return failed ? 1 : 0;
+        }
         if (mode == "--run" && rest.size() == 1) return run_case(rest[0]);
         if (mode == "--check-identities") return check_identities(rest) ? 0 : 1;
         if (mode == "--compare-results" && !rest.empty()) {

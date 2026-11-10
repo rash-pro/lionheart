@@ -1,3 +1,7 @@
+if(WIN32)
+  # The optional state bridge uses POSIX sockets and syscall interposition.
+  return()
+endif()
 set(vendor third_party/rcheevos)
 file(GLOB sources CONFIGURE_DEPENDS "${LH_ROOT}/${vendor}/src/runtime/*.c")
 list(SORT sources)

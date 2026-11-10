@@ -8,8 +8,10 @@ namespace lh::internal {
 struct BuildInfo {
     fs::path root;
     std::vector<std::string> emulator;
+    std::string launcher;
     bool windows_paths = false;
     std::map<std::string, std::string> harnesses;
+    std::map<std::string, std::string> unavailable;
 };
 
 BuildInfo &build_info();

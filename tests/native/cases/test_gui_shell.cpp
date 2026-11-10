@@ -39,6 +39,7 @@ LH_GAME_TEST(test_rescan_relocates_missing_disc_without_replacing_verified_media
 LH_TEST(test_shell_missing_bin_row_names_the_bin) {
     auto cue=t.temp()/"selected.cue"; lh::write_file(cue,"FILE \"absent.bin\" BINARY\nTRACK 01 MODE2/2352\nINDEX 01 00:00:00\n");
     lh::write_file(t.temp()/"lionheart.ini","disc1="+cue.string()+"\n");
-    auto r=shell(t,"wait 10\nassert-text disc.1.status \"File not found: "+(t.temp()/"absent.bin").string()+"\"\nquit\n");
+    auto missing=(t.temp()/"absent.bin").generic_string();
+    auto r=shell(t,"wait 10\nassert-text disc.1.status \"File not found: "+missing+"\"\nquit\n");
     LH_CONTAINS(r.err,"GUI test complete:"); LH_NOT_CONTAINS(r.out,"Hardware:");
 }

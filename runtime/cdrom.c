@@ -185,9 +185,17 @@ static int open_image(hw_cd_t *d, const char *path, char *error, size_t error_si
             unsigned track, m, s, f;
             if (sscanf(line, " FILE \"%3071[^\"]\" %31s", name, mode) == 2) {
                 const char *slash = strrchr(path, '/');
+#ifdef _WIN32
+                const char *backslash = strrchr(path, '\\');
+                if (backslash && (!slash || backslash > slash)) slash = backslash;
+#endif
                 size_t prefix = slash ? (size_t)(slash - path + 1) : 0;
                 if (++files != 1 || strcmp(mode, "BINARY") || prefix + strlen(name) >= sizeof(binary)) { fclose(file); goto invalid; }
-                if (name[0] == '/') strcpy(binary, name);
+                if (name[0] == '/'
+#ifdef _WIN32
+                    || name[0] == '\\' || (name[0] && name[1] == ':')
+#endif
+                ) strcpy(binary, name);
                 else { memcpy(binary, path, prefix); strcpy(binary + prefix, name); }
             } else if (sscanf(line, " TRACK %u %31s", &track, mode) == 2) {
                 if (++tracks != 1 || track != 1 || (strcmp(mode, "MODE2/2352") && strcmp(mode, "MODE1/2352"))) { fclose(file); goto invalid; }

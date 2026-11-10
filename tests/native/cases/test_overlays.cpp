@@ -30,8 +30,8 @@ LH_TEST(test_overlay_profile_counts_uncompiled_catalog_sets) {
     lh::write_file(catalog, "511 80098000 8 1 80098000 03e00008\n");
     // The dispatch harness returns normally, so use an instruction-budget stop
     // in a separate tiny executable to exercise the normal report flush as well.
-    t.ok(t.harness("profile").env("FF8_OVERLAY_CATALOG", catalog.string()).env("FF8_OVERLAY_PROFILE", output.string()));
-    LH_TEXT_EQ(lh::read_file(output), "index,interpreter,recompiled\n511,2,3\n");
+    t.ok(t.harness("profile").env("FF8_OVERLAY_CATALOG", catalog).env("FF8_OVERLAY_PROFILE", output));
+    LH_TEXT_EQ(lh::read_text_file(output), "index,interpreter,recompiled\n511,2,3\n");
 }
 
 } // namespace
