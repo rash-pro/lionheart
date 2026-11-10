@@ -29,6 +29,9 @@ typedef struct {
     lhg_open_file *files;
     lhg_progress_fn progress;
     void *progress_user;
+    /* A host that embeds the catalog supplies it here instead of a directory. */
+    const lhg_catalog_file *catalog_files;
+    size_t catalog_file_count;
 } lhg_ctx;
 
 void lhg_ctx_init(lhg_ctx *ctx);

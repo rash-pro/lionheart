@@ -12,6 +12,7 @@
 
 #include "platform.h"
 #include "sha1.h"
+#include "sha256.h"
 
 enum { UNIT_FUNCTIONS = 24 };
 
@@ -20,7 +21,22 @@ typedef struct {
     int index; /* LH_MODULE_MAIN_SET for the executable. */
     const lhg_image *image;
     const lhg_functions *functions;
+    /* NULL directory: emit nowhere. A key, when present, sees every byte that
+     * shapes the module's code but not which set it was emitted for. */
+    lhg_sha256 *key;
 } module_set;
+
+static void put_file(lhg_ctx *ctx, lhg_arena *arena, const module_set *set, const char *file, const lhg_text *text, size_t keyed)
+{
+    if (set->key) {
+        char header[96];
+        snprintf(header, sizeof header, "%s %llu\n", file, (unsigned long long)keyed);
+        lhg_sha256_add(set->key, header, strlen(header));
+        lhg_sha256_add(set->key, text->data, keyed);
+    }
+    if (set->directory)
+        lhg_write_if_changed(ctx, lhg_join_path(arena, set->directory, file), text->data, text->size);
+}
 
 static void emit_units(lhg_arena *arena, const module_set *set, lhg_arena *function_arena, lhg_text *body, lhg_text *cmake_sources)
 {
@@ -43,8 +59,9 @@ static void emit_units(lhg_arena *arena, const module_set *set, lhg_arena *funct
             lhg_emit_precise(function_arena, &analysis, body);
             lhg_arena_reset(function_arena);
         }
-        lhg_write_if_changed(ctx, lhg_join_path(arena, set->directory, file), body->data, body->size);
-        lhg_text_addf(cmake_sources, arena, "  \"${CMAKE_CURRENT_LIST_DIR}/modules/%s/%s\"\n", set->name, file);
+        put_file(ctx, arena, set, file, body, body->size);
+        if (cmake_sources)
+            lhg_text_addf(cmake_sources, arena, "  \"${CMAKE_CURRENT_LIST_DIR}/modules/%s/%s\"\n", set->name, file);
     }
 }
 
@@ -87,6 +104,15 @@ static size_t emit_tables(lhg_arena *arena, const module_set *set, const lhg_ima
     }
     lhg_free(ctx, pairs);
 
+    /* Everything above is the code; the descriptor below also names the set. */
+    size_t keyed = tables->size;
+    if (set->key) {
+        char facts[160];
+        snprintf(facts, sizeof facts, "main %d base %lu size %lu exe %lu %lu %lu entries %lu\n", set->index == -1,
+                 (unsigned long)set->image->base, (unsigned long)set->image->size, (unsigned long)lhg_fnv1a(exe->data, exe->size),
+                 (unsigned long)exe->base, (unsigned long)exe->size, (unsigned long)count);
+        lhg_sha256_add(set->key, facts, strlen(facts));
+    }
     uint8_t digest[20];
     lhg_sha1(set->image->data, set->image->size, digest);
     lhg_text_addf(tables, scratch, "LH_MODULE_EXPORT const lh_module_descriptor_t lh_module_descriptor = {\n"
@@ -104,8 +130,9 @@ static size_t emit_tables(lhg_arena *arena, const module_set *set, const lhg_ima
         lhg_text_adds(tables, "NULL, 0, NULL,\n");
     lhg_text_adds(tables, "NULL, 0, &lh_api\n};\n");
     lhg_arena_reset(scratch);
-    lhg_write_if_changed(ctx, lhg_join_path(arena, set->directory, "tables.c"), tables->data, tables->size);
-    lhg_text_addf(cmake_sources, arena, "  \"${CMAKE_CURRENT_LIST_DIR}/modules/%s/tables.c\"\n", set->name);
+    put_file(ctx, arena, set, "tables.c", tables, keyed);
+    if (cmake_sources)
+        lhg_text_addf(cmake_sources, arena, "  \"${CMAKE_CURRENT_LIST_DIR}/modules/%s/tables.c\"\n", set->name);
     return count;
 }
 
@@ -241,6 +268,7 @@ void lhg_emit_modules(lhg_arena *arena, const lhg_image *image, const lhg_functi
             set.functions = &overlay->functions;
         }
         set.directory = lhg_join_path(&unit_arena, root, set.name);
+        set.key = NULL;
         instructions += emit_module(&unit_arena, &set, image, &function_arena, &body, &tables, &cmake, rows, &json_arena);
         lhg_progress(ctx, "emit", (unsigned long)(index + 1), (unsigned long)(overlay_count + 1));
     }
@@ -257,4 +285,31 @@ void lhg_emit_modules(lhg_arena *arena, const lhg_image *image, const lhg_functi
     lhg_arena_release(&unit_arena);
     lhg_arena_release(&function_arena);
     lhg_arena_release(&json_arena);
+}
+
+void lhg_emit_module_set(lhg_arena *arena, const lhg_image *exe, int index, const lhg_image *image, const lhg_functions *functions,
+                         const char *directory, char key[65])
+{
+    lhg_ctx *ctx = arena->ctx;
+    lhg_sha256 hash;
+    lhg_sha256_init(&hash);
+    lhg_sha256_add(&hash, "lionheart-module-1\n", 19);
+    module_set set;
+    set.directory = directory;
+    set.name = index == -1 ? "main" : lhg_fmt(arena, "set-%d", index);
+    set.index = index;
+    set.image = image;
+    set.functions = functions;
+    set.key = &hash;
+    lhg_arena function_arena;
+    lhg_arena_init(&function_arena, ctx);
+    lhg_text body, tables;
+    lhg_text_init(&body, ctx);
+    lhg_text_init(&tables, ctx);
+    emit_units(arena, &set, &function_arena, &body, NULL);
+    emit_tables(arena, &set, exe, &function_arena, &tables, NULL);
+    lhg_sha256_finish(&hash, key);
+    lhg_text_free(&body);
+    lhg_text_free(&tables);
+    lhg_arena_release(&function_arena);
 }

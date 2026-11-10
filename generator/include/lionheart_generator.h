@@ -31,9 +31,19 @@ typedef struct {
     size_t fuse_forward_count;
 } lhg_register_cache;
 
+/* One catalog file held by the host, named as in catalog_dir. Borrowed for the call. */
+typedef struct {
+    const char *name;
+    const unsigned char *data;
+    size_t size;
+} lhg_catalog_file;
+
 typedef struct {
     /* Directory holding overlays.json, overlays-all.json and files-disc*.json. */
     const char *catalog_dir;
+    /* When nonzero, these replace catalog_dir; no catalog file is read from disk. */
+    const lhg_catalog_file *catalog_files;
+    size_t catalog_file_count;
     /* Exactly one of exe_path or disc_paths[0..disc_count) is used. */
     const char *exe_path;
     const char *disc_paths[4];
@@ -70,6 +80,53 @@ typedef struct {
 lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *error, size_t error_size);
 /* Source identity compiled by CMake, shared with the restoration ABI. */
 const char *lhg_generator_fingerprint(void);
+
+/* ---- One module at a time, for a host that builds them itself ----
+ *
+ * The full catalog (no legacy_overlays, no exe_path) in the module shape. A
+ * host lists the sets its discs hold from catalog metadata alone, then opens a
+ * session that reads the discs once and emits one set's module tree per call. */
+
+/* The executable's module uses this index, as the module ABI does. */
+#define LHG_MAIN_SET (-1)
+
+typedef struct {
+    /* Unique among the sets of one disc combination, but not across combinations. */
+    int index;
+    /* Bit n is set when disc n holds this image. The executable is on every disc. */
+    unsigned discs;
+    int effect;
+    /* Load range; base is 0 when only the image bytes can establish it. */
+    unsigned long base, size;
+    /* The catalog group, for display. */
+    char name[32];
+    /* SHA-256 of the catalog facts this set's code is generated from. Two sets
+     * with the same identity always produce the same module. */
+    char identity[65];
+} lhg_set_info;
+
+/* Reads no disc. disc_mask selects discs by number (bit n for disc n). The
+ * array is malloc'd, executable first, then overlay sets by index. */
+lhg_status lhg_plan_sets(const lhg_options *options, unsigned disc_mask, lhg_set_info **sets, size_t *count,
+                         char *error, size_t error_size);
+
+typedef struct lhg_session lhg_session;
+/* Reads and verifies options->disc_paths and discovers every set. Writes
+ * nothing: output_dir and assets_dir are ignored. */
+lhg_status lhg_session_open(const lhg_options *options, lhg_session **session, char *error, size_t error_size);
+/* The same rows lhg_plan_sets returns for these discs, owned by the session. */
+size_t lhg_session_sets(const lhg_session *session, const lhg_set_info **sets);
+/* Emits set number `set` (a row of lhg_session_sets) as one module tree:
+ * unit_NNN.c files and tables.c, into an existing directory, or nowhere when
+ * directory is NULL. key receives a SHA-256 of everything the module's code
+ * depends on and nothing else: identical code from two sets, or two discs,
+ * gets one key although the descriptor names the set it was emitted for.
+ * Calls on one session must not overlap. */
+lhg_status lhg_session_emit(lhg_session *session, size_t set, const char *directory, char key[65], char *error,
+                            size_t error_size);
+/* Whether the image of set `set` holds `size` bytes equal to `bytes` at guest address pc. */
+int lhg_session_contains(const lhg_session *session, size_t set, unsigned long pc, const unsigned char *bytes, size_t size);
+void lhg_session_close(lhg_session *session);
 
 #ifdef __cplusplus
 }
