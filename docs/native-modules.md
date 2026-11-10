@@ -37,4 +37,6 @@ actually produced, so a module built by another compiler with the same headers l
 The host (`backends/host/native_modules.c`) checks the file's extent before mapping it, then the identity, the
 tables, and for the main module every function's code against the executable it booted. Overlay code is checked
 when it runs, by the same fingerprints the linked build uses. A module is registered only at the top of the
-dispatch loop, where nothing holds a registry pointer; registered modules stay loaded until shutdown.
+dispatch loop, where nothing holds a registry pointer; registered modules stay loaded until shutdown, and must:
+a function that several sets contain is compiled into each of their modules, and the host points every set's
+entries at the copy registered first, as the linked build shares one body between sets.
