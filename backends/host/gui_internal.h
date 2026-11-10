@@ -88,6 +88,8 @@ int gui_state_save(const char *data_dir,const char *folder,int input,int native_
  * failure), and the copy for an installer's reason. */
 void gui_native_summary(const host_gui_native_t *,char *,size_t,int *alert);
 const char *gui_native_reason_id(const char *reason);
+/* "zip" or "tar.xz": the compiler archive this player installs. */
+const char *gui_archive_format(void);
 #ifdef __cplusplus
 }
 #endif

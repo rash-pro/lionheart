@@ -32,7 +32,10 @@ int gui_browser_accept(const gui_browser_t *browser,const char *path) {
     if (browser->kind==GUI_PICK_MOVIES || browser->kind==GUI_PICK_SCREENSHOTS) return 0;
     if (browser->show_all) return 1;
     if (browser->kind==GUI_PICK_DISC) return n>=4 && (!strcasecmp(path+n-4,".cue") || !strcasecmp(path+n-4,".bin"));
-    if (browser->kind==GUI_PICK_ARCHIVE) return n>=4 && !strcasecmp(path+n-4,".zip");
+    if (browser->kind==GUI_PICK_ARCHIVE) {
+        const char *format=gui_archive_format(); size_t k=strlen(format);
+        return n>k+1 && path[n-k-1]=='.' && !strcasecmp(path+n-k,format);
+    }
     return n>=4 && (!strcasecmp(path+n-4,".mcr") || !strcasecmp(path+n-4,".mcd") || !strcasecmp(path+n-4,".srm"));
 }
 static int compare(const void *a,const void *b) {

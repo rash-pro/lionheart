@@ -32,6 +32,12 @@ void native_modules_shutdown(cpu_t *c);
 
 native_module_status_t native_module_open(const char *path, native_module_t **module, char *error, size_t error_size);
 void native_module_close(native_module_t *module);
+/* For trying a compiler: a module that no executable identity applies to gets
+ * the checks of the file, the descriptor's layout and identity, its tables and
+ * its call table that native_module_open makes, and is bound. It stays open
+ * with its first entry in *first until native_module_untry. */
+native_module_status_t native_module_try(const char *path, void **handle, recompiled_fn *first, char *error, size_t error_size);
+void native_module_untry(void *handle);
 /* Queues an opened module; it takes effect at the next dispatch boundary. */
 void native_module_publish(native_module_t *module);
 /* The same, registered as overlay set `index` whatever set the descriptor

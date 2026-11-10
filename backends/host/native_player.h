@@ -1,13 +1,14 @@
 /* The release player's side of the build service: the generator as the
  * source of sets, the module loader as their destination, and the compiler
- * the player installed. Without that compiler none of this runs and the
- * player stays on the interpreter, exactly as before. */
+ * native_setup chose. Without a compiler none of this runs and the player
+ * stays on the interpreter, exactly as before. */
 #ifndef HOST_NATIVE_PLAYER_H
 #define HOST_NATIVE_PLAYER_H
 
 #include <stddef.h>
 #include "cpu.h"
 #include "native_build.h"
+#include "native_setup.h"
 
 typedef struct {
     const char *name;
@@ -23,7 +24,8 @@ extern const char host_native_catalog_digest[];
 typedef struct {
     int verbose;
     unsigned workers;
-    /* Developers only: another compiler driver in place of the installed one. */
+    /* Developers only: another driver in place of the chosen compiler's, given
+     * that family's options. */
     const char *compiler;
 } host_native_options_t;
 
@@ -42,5 +44,8 @@ void host_native_discs(const char *const discs[4], unsigned inserted);
 /* wait: let the build finish first, for headless runs that want a whole cache. */
 void host_native_stop(cpu_t *c, int wait);
 int host_native_running(void);
+/* A compiler this system has that builds modules this player accepts, from
+ * the verdict kept in <data>/native/compiler or by trying it now. Linux only. */
+int host_native_system_compiler(const char *data, native_setup_compiler_t *compiler);
 
 #endif
