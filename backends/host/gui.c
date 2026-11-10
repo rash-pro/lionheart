@@ -511,13 +511,15 @@ static void draw_disc_row(unsigned slot,float x,float y,float width,float height
     }
 /* ---- native code ---- */
 static unsigned megabytes(unsigned long long bytes) { return (unsigned)((bytes+1048575)/1048576); }
+/* The compiler archive's kind on this system: the browser lists only those. */
+const char *gui_archive_format(void) { return *gui.native.format ? gui.native.format : "zip"; }
 const char *gui_native_reason_id(const char *reason) {
     /* The installer's reasons are its own words; these are the player's. */
     static const struct { const char *needle,*id; } map[]={
         {"Cancelled","native.err.cancelled"},{"Download failed","native.err.download"},
         {"No download URL","native.err.no_url"},{"Archive size","native.err.archive"},
         {"Archive SHA-256","native.err.archive"},{"Cannot read archive","native.err.read"},
-        {"Invalid ZIP","native.err.zip"},{"self-check","native.err.check"},{"cannot be found","native.err.check"},
+        {"Invalid archive","native.err.damaged"},{"self-check","native.err.check"},{"cannot be found","native.err.check"},
         {"Another installer","native.err.busy"},{"Cannot start","native.err.other"},{"Cannot","native.err.disk"}};
     for (size_t i=0;reason && i<sizeof(map)/sizeof(map[0]);++i) if (strstr(reason,map[i].needle)) return map[i].id;
     return "native.err.other";
@@ -605,7 +607,7 @@ static void draw_native_install(float x,float y,float width) {
     label("setup.native.sub",x,y+46,width,GUI_SUB,GUI_DIM);
     snprintf(size,sizeof(size),S("native.size"),megabytes(n->bytes));
     if (*n->archive) snprintf(archive,sizeof(archive),"%s",n->archive);
-    else snprintf(archive,sizeof(archive),S("native.zip"),megabytes(n->bytes));
+    else snprintf(archive,sizeof(archive),S(strcmp(gui_archive_format(),"tar.xz") ? "native.type.zip" : "native.type.tar.xz"),megabytes(n->bytes));
     if (gui_ui_row("setup.native.download",S("setup.native.download"),n->downloadable ? size : S("native.unavailable"),R(x,y+106,half,150),
                    !n->downloadable || busy || ready ? GUI_DISABLED : 0)) native_install(NULL);
     if (gui_ui_row("setup.native.archive",S("setup.native.archive"),archive,R(x+half+20,y+106,half,150),busy || ready ? GUI_DISABLED : 0))

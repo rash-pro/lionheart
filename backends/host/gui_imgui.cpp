@@ -646,8 +646,10 @@ extern "C" int gui_ui_native_pick(gui_pick_t kind,char *path,size_t capacity) {
         nfdpickfolderu8args_t args={};NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_PickFolderU8_With(&selected,&args);
     } else {
-        nfdu8filteritem_t filter={host_gui_string(kind==GUI_PICK_DISC ? "nav.discs" : kind==GUI_PICK_ARCHIVE ? "browser.archives" : "nav.card"),
-            kind==GUI_PICK_DISC ? "cue,bin" : kind==GUI_PICK_ARCHIVE ? "zip" : "mcr,mcd,srm"};
+        const bool tar=!std::strcmp(gui_archive_format(),"tar.xz");
+        nfdu8filteritem_t filter={host_gui_string(kind==GUI_PICK_DISC ? "nav.discs" : kind!=GUI_PICK_ARCHIVE ? "nav.card" :
+                                                  tar ? "browser.archives.tar.xz" : "browser.archives.zip"),
+            kind==GUI_PICK_DISC ? "cue,bin" : kind==GUI_PICK_ARCHIVE ? gui_archive_format() : "mcr,mcd,srm"};
         nfdopendialogu8args_t args={};args.filterList=&filter;args.filterCount=1;
         NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_OpenDialogU8_With(&selected,&args);

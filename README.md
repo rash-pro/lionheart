@@ -71,13 +71,13 @@ If an older cache has no receipt, remove its `install-ucrt` folder and rebuild f
 Start Lionheart with no arguments. The setup screen asks for your discs and a memory card; you can create a new
 card or import a copy of an existing one. Then press **Play**.
 
-The third step installs a C compiler, a 60 MB download made once. With it Lionheart compiles the game from your
-discs into native code for your PC while you play: what a disc needs first takes a few minutes, and all four discs
-about 20 minutes on a 16-thread PC, longer on a smaller one. The result takes about 600 MB and later launches use
-it at once. You can skip the step and install the compiler later from the menu; the game runs without it, more
-slowly. On a PC without a connection, download the compiler archive from the
-[releases page](https://github.com/rash-pro/lionheart/releases/tag/toolchain-zig-0.17.1) and choose it in that
-step.
+The third step installs the Zig C compiler from ziglang.org, a download made once: 55 MB on Linux, 96 MB on
+Windows. With it Lionheart compiles the game from your discs into native code for your PC while you play:
+what a disc needs first takes a few minutes, and all four discs about 20 minutes on a 16-thread PC, longer on a
+smaller one. The result takes about 600 MB and later launches use it at once. You can skip the step and install the
+compiler later from the menu; the game runs without it, more slowly. On a PC without a connection, download Zig
+0.17.1 for your system (`zig-x86_64-linux-0.17.1.tar.xz` or `zig-x86_64-windows-0.17.1.zip`) from
+[Zig's download page](https://ziglang.org/download/) and choose it in that step.
 
 During the game, **Esc** or the controller's **Guide** button opens the menu. A renderer change made there applies
 at the next launch.

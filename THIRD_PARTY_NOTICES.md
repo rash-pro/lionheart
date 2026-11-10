@@ -40,9 +40,6 @@ The RetroAchievements transport uses system libcurl on Linux and the Windows Win
 The badge decoder uses the existing zlib dependency; no additional image library is shipped.
 
 The player does not contain a compiler. To build the game's native code it downloads, when the user starts that
-step, a trimmed copy of the official Zig 0.17.1 release from this project's
-[releases page](https://github.com/rash-pro/lionheart/releases/tag/toolchain-zig-0.17.1) and installs it in the
-user's data folder. Zig is MIT-licensed and includes LLVM under Apache-2.0 with LLVM exceptions; both licence texts
-and a notice of the archive's origin are inside each archive and are installed beside the compiler.
-[tools/player-check/README.md](tools/player-check/README.md) describes how the archives are rebuilt from the
-official ones.
+step, the official Zig 0.17.1 archive from [ziglang.org](https://ziglang.org/download/) and installs
+only the files it needs in the user's data folder. Zig is MIT-licensed and includes LLVM under Apache-2.0 with LLVM
+exceptions; both licence texts (`LICENSE` and `lib/libcxx/LICENSE.TXT`) are among the installed files.

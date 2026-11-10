@@ -159,6 +159,7 @@ static void gui_native(void *context, host_gui_native_t *out) {
         setup.state==NATIVE_SETUP_INSTALLED ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
     out->step = (host_gui_step_t)setup.phase; out->done = setup.done; out->total = setup.total;
     out->bytes = manifest->size; out->downloadable = manifest->url_count>0;
+    snprintf(out->format,sizeof(out->format),"%s",manifest->format);
     if (manifest->url_count) {
         const char *name = strrchr(manifest->urls[0],'/');
         if (name && name[1] && strlen(name+1)<sizeof(out->archive)) strcpy(out->archive,name+1);

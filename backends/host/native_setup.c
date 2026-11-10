@@ -45,7 +45,8 @@ static int load_fixture(const char *path) {
     fclose(f);
     fixture.text[n] = 0;
     memset(m, 0, sizeof(*m));
-    m->format = "zip";
+    /* The archive kind this system downloads, unless the fixture names one. */
+    m->format = host_tc_pinned()->format;
     m->urls = fixture.urls;
     m->files = fixture.files;
     for (line = fixture.text; line && *line; line = next) {
@@ -56,6 +57,7 @@ static int load_fixture(const char *path) {
         if (!(value = strchr(line, '='))) continue;
         *value++ = 0;
         if (!strcmp(line, "version")) m->version = value;
+        else if (!strcmp(line, "format")) m->format = value;
         else if (!strcmp(line, "prefix")) m->prefix = value;
         else if (!strcmp(line, "executable")) m->executable = value;
         else if (!strcmp(line, "sha256")) m->sha256 = value;

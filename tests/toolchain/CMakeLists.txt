@@ -19,7 +19,10 @@ if(LH_HOST_RUNNER)
   get_filename_component(root ../.. ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-info.txt" CONTENT
     "root=${root}\nemulator=${CMAKE_CROSSCOMPILING_EMULATOR}\nwindows_paths=${windows_paths}\nharness.test_toolchain.install=$<TARGET_FILE:toolchain_contract>\n")
-  foreach(case offline_and_receipt reject_archive_and_cancel http_resume_fallback_and_no_requests concurrent_installers)
+  foreach(case offline_and_receipt reject_archive_and_cancel http_resume_fallback_and_no_requests concurrent_installers
+      no_download_address_preserves_offline_install tar_xz_installs_only_the_listed_files
+      tar_xz_names_from_long_name_entries_pax_headers_and_ustar_prefixes tar_xz_refuses_entries_that_leave_the_destination
+      tar_xz_refuses_damaged_and_incomplete_archives tar_xz_cancelled_while_unpacking_installs_on_retry)
     add_test(NAME ${case} COMMAND "${LH_HOST_RUNNER}" --build-info
       "${CMAKE_CURRENT_BINARY_DIR}/build-info.txt" --run "test_toolchain::${case}")
   endforeach()

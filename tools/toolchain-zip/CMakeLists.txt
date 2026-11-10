@@ -1,6 +1,0 @@
-cmake_minimum_required(VERSION 3.21)
-project(toolchain_zip C)
-find_package(ZLIB REQUIRED)
-add_executable(toolchain-zip main.c)
-target_link_libraries(toolchain-zip PRIVATE ZLIB::ZLIB)
-set_target_properties(toolchain-zip PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES)

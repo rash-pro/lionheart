@@ -19,11 +19,12 @@ typedef struct {
     /* While installing: the step and how far it is, in bytes or entries. */
     host_gui_step_t step;
     unsigned long long done,total;
-    /* The download: its size, whether this build has an address for it, and
-     * the archive's file name when the address gives one. */
+    /* The download: its size, whether this build has an address for it, the
+     * archive's kind ("zip", "tar.xz") and its file name when the address
+     * gives one. */
     unsigned long long bytes;
     int downloadable;
-    char archive[128],reason[256];
+    char format[16],archive[128],reason[256];
     host_gui_build_t build;
     unsigned sets,ready,failed;
     /* -1 while there is no estimate worth showing. */

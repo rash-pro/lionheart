@@ -9,34 +9,12 @@
 #include "host_fixtures.h"
 #include "network.h"
 #include "lh_json.h"
+#include "tar_xz.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 
 namespace {
-void put(std::string &s, uint64_t v, int n) { for (int k = 0; k < n; ++k) s += char(v >> (8 * k)); }
-
-// One stored, executable entry, as the installer's reader expects.
-std::string zip_one(const std::string &name, const std::string &body) {
-    uint32_t crc = ~0u;
-    for (unsigned char c : body) {
-        crc ^= c;
-        for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
-    }
-    crc = ~crc;
-    std::string s, central;
-    put(s, 0x04034b50, 4); put(s, 20, 2); put(s, 0, 2); put(s, 0, 2); put(s, 0, 4); put(s, crc, 4);
-    put(s, body.size(), 4); put(s, body.size(), 4); put(s, name.size(), 2); put(s, 0, 2); s += name; s += body;
-    put(central, 0x02014b50, 4); put(central, 0x0314, 2); put(central, 20, 2); put(central, 0, 2); put(central, 0, 2);
-    put(central, 0, 4); put(central, crc, 4); put(central, body.size(), 4); put(central, body.size(), 4);
-    put(central, name.size(), 2); put(central, 0, 2); put(central, 0, 2); put(central, 0, 2); put(central, 0, 2);
-    put(central, uint64_t(0100755) << 16, 4); put(central, 0, 4); central += name;
-    const auto at = s.size();
-    s += central;
-    put(s, 0x06054b50, 4); put(s, 0, 4); put(s, 1, 2); put(s, 1, 2); put(s, central.size(), 4); put(s, at, 4); put(s, 0, 2);
-    return s;
-}
-
 // stall: the first answer stops halfway until the player hangs up.
 // fail: the first answer is an error. Later answers resume from a range.
 enum class Serve { whole, stall, fail };
@@ -53,7 +31,7 @@ public:
         lh::socket_check(!bind(socket_.get(), reinterpret_cast<sockaddr *>(&a), sizeof(a)), "bind");
         socklen_t n = sizeof(a);
         getsockname(socket_.get(), reinterpret_cast<sockaddr *>(&a), &n);
-        url = "http://127.0.0.1:" + std::to_string(ntohs(a.sin_port)) + "/zig-test.zip";
+        url = "http://127.0.0.1:" + std::to_string(ntohs(a.sin_port)) + "/zig-test.tar.xz";
         listen(socket_.get(), 8);
         worker_ = std::thread([this, bytes, how] {
             while (!stop_) {
@@ -101,8 +79,9 @@ struct Setup {
                                   data(c.temp() / "data") {
         lh::fs::create_directories(media);
         disc = synthetic::disc(media / "disc1.bin");
-        bytes = zip_one("zig-test/zig", lh::read_file(t.harness("fake_zig").program()));
-        archive = media / "zig-test.zip";
+        // As the Linux player's pinned archive is packed: tar in xz.
+        bytes = tar_xz::xz(tar_xz::tar({tar_xz::member({"zig-test/zig", '0', lh::read_file(t.harness("fake_zig").program())})}));
+        archive = media / "zig-test.tar.xz";
         lh::write_file(archive, bytes);
         lh::write_file(ini, "");
         // Pictures of each state, for people to look at; nothing compares them.
@@ -189,7 +168,7 @@ static std::vector<Reason> native_errors() {
       {"Cancelled","native.err.cancelled"},{"Download failed; retry to resume","native.err.download"},
       {"No download URL configured for this host","native.err.no_url"},{"Archive size mismatch","native.err.archive"},
       {"Archive SHA-256 mismatch","native.err.archive"},{"Cannot read archive","native.err.read"},
-      {"Invalid ZIP or missing retained file","native.err.zip"},{"Compiler version self-check failed","native.err.check"},
+      {"Invalid archive or missing retained file","native.err.damaged"},{"Compiler version self-check failed","native.err.check"},
       {"Another installer is active; retry","native.err.busy"},{"Cannot publish toolchain receipt","native.err.disk"},
       {"something new","native.err.other"}})
         out.push_back({row.second+"-"+std::to_string(out.size()),row.first,row.second});
@@ -241,8 +220,8 @@ LH_TEST(test_archive_chosen_in_the_file_browser_installs_offline) {
     Setup s(t);
     s.run(to_compiler_step(s) +
         "assert-text setup.native.download.sub \"Not available in this build\"\nassert-focus setup.native.archive\n"
-        "assert-text setup.native.archive.sub \"ZIP · 1 MB\"\nshot step-offline\nselect\nwait 3\n"
-        "assert-focus browser.entry.0\nassert-text browser.entry.0 \"zig-test.zip\"\nshot browser-archive\nselect\n"
+        "assert-text setup.native.archive.sub \"tar.xz · 1 MB\"\nshot step-offline\nselect\nwait 3\n"
+        "assert-focus browser.entry.0\nassert-text browser.entry.0 \"zig-test.tar.xz\"\nshot browser-archive\nselect\n"
         "wait-text native.installed \"Installed\" 1800\nassert-focus btn.finish\nselect\nwait 3\nquit\n");
     LH_CHECK(s.installed());
 }
