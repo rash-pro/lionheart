@@ -108,6 +108,18 @@ function(lh_harness name)
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT H_LIBRARY)
     list(APPEND link_flags -Wl,--exclude-all-symbols)
   endif()
+  # Libraries named among the link flags go after the objects. A linker that
+  # drops unneeded libraries as it reads them (the default on Ubuntu) would
+  # otherwise discard them before it has seen who uses them.
+  set(link_libraries)
+  foreach(flag IN LISTS link_flags)
+    if(flag MATCHES "^-l")
+      list(APPEND link_libraries "${flag}")
+    endif()
+  endforeach()
+  if(link_libraries)
+    list(REMOVE_ITEM link_flags ${link_libraries})
+  endif()
   if(H_LIBRARY)
     # A loadable module needs position-independent objects, including shared RUNTIME_ALL ones.
     list(APPEND c_flags -fPIC)
@@ -156,7 +168,7 @@ function(lh_harness name)
     "$<$<COMPILE_LANGUAGE:C>:${c_flags}>" "$<$<COMPILE_LANGUAGE:CXX>:${cxx_flags}>")
   target_include_directories("${target}" PRIVATE ${includes})
   target_link_options("${target}" PRIVATE ${link_flags})
-  target_link_libraries("${target}" PRIVATE ${H_LIBS} m)
+  target_link_libraries("${target}" PRIVATE ${link_libraries} ${H_LIBS} m)
 
   if(H_RUNTIME_ALL)
     string(MD5 key "${c_flags};${includes};${H_RUNTIME_EXCLUDE}")
