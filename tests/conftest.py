@@ -75,7 +75,7 @@ def owned_path(relative):
         if not path.is_file(): pytest.skip('optional owned memory card is not supplied (LIONHEART_SAVES)')
     else:
         path = ROOT / 'build/generated/extracted' / relative
-        if not path.is_file(): pytest.fail('run python tools/setup.py --disc1 DISC before owned-game tests')
+        if not path.is_file(): pytest.fail('run cmake -P tools/setup.cmake -- --disc1 DISC before owned-game tests')
     return path
 
 
