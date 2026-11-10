@@ -105,3 +105,13 @@ LH_TEST(concurrent_installers) {
     auto busy=t.run(cmd("ok"));LH_CHECK(busy.rc!=0);LH_CONTAINS(busy.out,"Another installer");
     LH_EQ(first.get().rc,0);LH_CONTAINS(t.ok(cmd("ok")).out,"after=2");
 }
+
+LH_TEST(no_download_address_preserves_offline_install) {
+    fixture_exe=t.harness("install").program();
+    fixture_name=lh::fs::path(fixture_exe).extension()==".exe"?"payload/zig.exe":"payload/zig";
+    auto d=t.temp(),a=d/"input.zip";auto bytes=zip();lh::write_file(a,bytes);Server s(bytes);
+    auto missing=t.run(t.harness("install").arg(d/"data").arg(a).arg("no-url").arg(s.url));
+    LH_CHECK(missing.rc!=0);LH_CONTAINS(missing.out,"No download URL configured for this host");
+    LH_EQ(s.requests.load(),0u);
+    LH_CONTAINS(t.ok(t.harness("install").arg(d/"data").arg(a).arg("no-url").arg("offline")).out,"after=2");
+}

@@ -1,12 +1,10 @@
 {
-  "platforms" : 
-  {
-    "x86_64-linux" : 
-    {
-      "executable" : "zig",
-      "files" : 
-      [
+  "platforms": {
+    "x86_64-linux": {
+      "executable": "zig",
+      "files": [
         "LICENSE",
+        "NOTICE.txt",
         "lib/include/__stddef_header_macro.h",
         "lib/include/__stddef_null.h",
         "lib/include/__stddef_offsetof.h",
@@ -52,22 +50,24 @@
         "lib/libc/include/x86-linux-gnu/bits/wordsize.h",
         "lib/libc/include/x86-linux-gnu/gnu/stubs-64.h",
         "lib/libc/include/x86-linux-gnu/gnu/stubs.h",
+        "lib/libcxx/LICENSE.TXT",
         "lib/std/std.zig",
         "zig"
       ],
-      "format" : "zip",
-      "prefix" : "zig-cc-slim/",
-      "sha256" : "7d57f0d30570b377f7ded43444d06eafc5c95415de047974f2b755bd339fbfff",
-      "size" : 59586314,
-      "urls" : [],
-      "version" : "0.17.1"
+      "format": "zip",
+      "prefix": "zig-cc-slim/",
+      "sha256": "80ab3a245182d4cbd32e1be6222d700692ac7cd3f1316e312a8e05382a3d7da3",
+      "size": 185840045,
+      "urls": [
+        "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-linux-cc.zip"
+      ],
+      "version": "0.17.1"
     },
-    "x86_64-windows" : 
-    {
-      "executable" : "zig.exe",
-      "files" : 
-      [
+    "x86_64-windows": {
+      "executable": "zig.exe",
+      "files": [
         "LICENSE",
+        "NOTICE.txt",
         "lib/include/__stddef_header_macro.h",
         "lib/include/__stddef_null.h",
         "lib/include/__stddef_offsetof.h",
@@ -113,15 +113,18 @@
         "lib/libc/include/x86-linux-gnu/bits/wordsize.h",
         "lib/libc/include/x86-linux-gnu/gnu/stubs-64.h",
         "lib/libc/include/x86-linux-gnu/gnu/stubs.h",
+        "lib/libcxx/LICENSE.TXT",
         "lib/std/std.zig",
         "zig.exe"
       ],
-      "format" : "zip",
-      "prefix" : "zig-x86_64-windows-0.17.1/",
-      "sha256" : "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e",
-      "size" : 100343666,
-      "urls" : [ "https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip" ],
-      "version" : "0.17.1"
+      "format": "zip",
+      "prefix": "zig-cc-slim/",
+      "sha256": "b8b9a8406d876fce30c5d26b3460a4878c66244f6f86057fa93c8f2667eca436",
+      "size": 190397158,
+      "urls": [
+        "https://github.com/rash-pro/lionheart/releases/download/toolchain-zig-0.17.1/zig-0.17.1-x86_64-windows-cc.zip"
+      ],
+      "version": "0.17.1"
     }
   }
 }
