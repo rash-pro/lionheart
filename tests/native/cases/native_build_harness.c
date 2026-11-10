@@ -2,7 +2,7 @@
  * a fake compiler, so the cache rules, the order, promotion, failures and the
  * locks can be checked without game data.
  *
- * Spec lines: INDEX DISCS EFFECT TOKEN [fail|slow|linkfail|units=N|pc=HEX|name=NAME]...
+ * Spec lines: INDEX DISCS EFFECT TOKEN [fail|slow|child|linkfail|units=N|pc=HEX|name=NAME]...
  * The first row is the executable (index -1). TOKEN names the code: rows with
  * the same token emit identical sources, as one overlay on several discs does.
  * Output: "deliver TOKEN INDEX" per module handed over, then a status line. */
@@ -32,7 +32,7 @@ extern char **environ;
 typedef struct {
     native_build_set_t info;
     char token[64], key[65];
-    int fail, slow, link_fail, units;
+    int fail, slow, child, link_fail, units;
     uint32_t pc;
 } row_t;
 
@@ -82,6 +82,7 @@ static int load_spec(const char *path) {
             else if (field == 3) snprintf(r->token, sizeof(r->token), "%s", word);
             else if (!strcmp(word, "fail")) r->fail = 1;
             else if (!strcmp(word, "slow")) r->slow = 1;
+            else if (!strcmp(word, "child")) r->child = 1;
             else if (!strcmp(word, "linkfail")) r->link_fail = 1;
             else if (!strncmp(word, "units=", 6)) r->units = atoi(word + 6);
             else if (!strncmp(word, "pc=", 3)) r->pc = (uint32_t)strtoul(word + 3, NULL, 16);
@@ -136,7 +137,7 @@ static int emit(void *user, size_t set, const char *directory, char key[65], cha
         FILE *f;
         snprintf(path, sizeof(path), "%s/unit_%03d.c", directory, unit);
         if (!(f = fopen(path, "wb"))) { snprintf(error, size, "cannot write %s", path); return 0; }
-        fprintf(f, "/* %s unit %d */\nSOURCE-TEXT-MUST-NOT-LEAK\n%s%s%s", r->token, unit, r->fail ? "LH_FAKE_FAIL\n" : "",
+        fprintf(f, "/* %s unit %d */\nSOURCE-TEXT-MUST-NOT-LEAK\n%s%s%s%s", r->token, unit, r->fail ? "LH_FAKE_FAIL\n" : "", r->child ? "LH_FAKE_CHILD\n" : "",
                 r->slow ? "LH_FAKE_SLOW\n" : "", r->link_fail ? "LH_FAKE_LINK_FAIL\n" : "");
         fclose(f);
     }

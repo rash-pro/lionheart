@@ -2,8 +2,12 @@
 // compiler: what reaches the cache and when it counts, the order sets are built
 // in, failures, and two players sharing one data folder.
 #include "lh_test.h"
+#include "lh_internal.h"
 
 #include <algorithm>
+#include <chrono>
+#include <sstream>
+#include <thread>
 
 namespace {
 struct Build {
@@ -298,4 +302,36 @@ LH_TEST(test_quitting_keeps_what_was_compiled) {
     LH_CONTAINS(b.run({"--workers", 1}), "state done sets 1 ready 1 failed 0 compiled 1 ");
     const size_t after = b.compiler_calls() - before;
     LH_CHECK_MSG(before + after <= 9 + 1 + 1, "compiler calls before " + std::to_string(before) + ", after " + std::to_string(after));
+}
+
+namespace {
+// A zombie no longer runs; it only waits for whoever adopted it to collect it.
+bool running(const std::string &pid) {
+    const lh::fs::path stat = "/proc/" + pid + "/stat";
+    if (!lh::fs::exists(stat)) return false;
+    const auto text = lh::read_file(stat);
+    const auto end = text.rfind(')');
+    return end != std::string::npos && end + 2 < text.size() && text[end + 2] != 'Z';
+}
+}
+
+LH_TEST(test_a_killed_player_leaves_no_compiler_running) {
+    // As zig cc does, each fake compile runs its work in a child of its own,
+    // which the driver's death signal alone would leave running. A job object
+    // does this on Windows, where the fake compiler starts no child.
+    if (lh::internal::build_info().windows_paths) lh::skip("process groups and the reaper are Linux's");
+    Build b(t);
+    b.sets("-1 0x1e 0 main child units=4\n2 0x02 0 field child units=4\n");
+    const auto pids = t.temp() / "pids.txt";
+    const auto killed = t.run(b.command({"--workers", 2, "--kill-after-ms", 1500}).env("FAKE_CC_PIDS", pids.string()));
+    LH_CHECK_MSG(killed.rc != 0, "the harness was killed");
+    LH_CHECK_MSG(lh::fs::exists(pids), "compilers started children before the kill");
+    std::vector<std::string> children;
+    std::istringstream list(lh::read_file(pids));
+    for (std::string pid; std::getline(list, pid);) if (!pid.empty()) children.push_back(pid);
+    LH_CHECK(!children.empty());
+    for (const auto &pid : children) {
+        for (int wait = 0; wait < 100 && running(pid); ++wait) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        LH_CHECK_MSG(!running(pid), "compiler child " + pid + " outlived the player");
+    }
 }

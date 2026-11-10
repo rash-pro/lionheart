@@ -402,15 +402,94 @@ typedef struct {
 } child_t;
 
 #ifndef _WIN32
+/* The death signal below reaches only the driver, and zig cc runs the real
+ * compiler as a child of its own, which would outlive a player that crashes
+ * or is killed. One small process, forked when building starts, holds the
+ * read end of a pipe on which every compiler announces its process group
+ * before it runs. Whatever ends the player closes the write end, and that
+ * process then kills every group still announced. As the child of a threaded
+ * process it touches only memory it was given and makes only system calls. */
+#define REAPER_GROUPS 4096
+static pid_t reaper_pid;
+static int reaper_fd = -1;
+static int32_t reaper_groups[REAPER_GROUPS];
+
+static void reaper_main(int fd) {
+    struct sigaction ignore;
+    size_t count = 0, k;
+    int32_t message[256];
+    ssize_t got, i;
+    int other;
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    /* Only the pipe ends it: signals a terminal sends to the player's group
+     * must not take it first and leave the compilers running. */
+    sigaction(SIGINT, &ignore, NULL); sigaction(SIGTERM, &ignore, NULL);
+    sigaction(SIGHUP, &ignore, NULL); sigaction(SIGQUIT, &ignore, NULL);
+    sigaction(SIGPIPE, &ignore, NULL);
+    setpgid(0, 0);
+    prctl(PR_SET_NAME, "lionheart-cc", 0, 0, 0);
+    if (fd) dup2(fd, 0);
+    /* Hold nothing else of the player's: its log pipe must close when it does. */
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 1u, ~0u, 0u))
+#endif
+        for (other = 1; other < 4096; ++other) close(other);
+    for (;;) {
+        got = read(0, message, sizeof(message));
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) break;
+        for (i = 0; i < got / (ssize_t)sizeof(message[0]); ++i) {
+            if (message[i] > 0 && count < REAPER_GROUPS) reaper_groups[count++] = message[i];
+            else if (message[i] < 0)
+                for (k = 0; k < count; ++k)
+                    if (reaper_groups[k] == -message[i]) { reaper_groups[k] = reaper_groups[--count]; break; }
+        }
+    }
+    for (k = 0; k < count; ++k) kill(-reaper_groups[k], SIGKILL);
+    _exit(0);
+}
+
+static void reaper_start(void) {
+    int fds[2];
+    pid_t pid;
+    if (pipe2(fds, O_CLOEXEC)) return;
+    pid = fork();
+    if (!pid) reaper_main(fds[0]);
+    close(fds[0]);
+    if (pid < 0) { close(fds[1]); return; }
+    reaper_pid = pid;
+    reaper_fd = fds[1];
+}
+
+/* Positive announces a group, negative retires it. A write this small is
+ * atomic on a pipe, so workers need no lock around it. */
+static void reaper_note(int32_t group) {
+    ssize_t written;
+    if (reaper_fd >= 0) { written = write(reaper_fd, &group, sizeof(group)); (void)written; }
+}
+
+/* Every compiler has ended by now, so it kills nothing. */
+static void reaper_stop(void) {
+    if (reaper_fd < 0) return;
+    close(reaper_fd);
+    reaper_fd = -1;
+    while (waitpid(reaper_pid, NULL, 0) < 0 && errno == EINTR) {}
+}
+
 /* The child shares this thread's memory until exec and only makes system
  * calls; it inherits this worker's lower priority, and dies with it. Its own
- * process group lets a stop take the driver's own children with it; after a
- * crash those finish their one file into a folder the next builder removes. */
-static pid_t spawn(const char *const *argv, char **envp, int fd) {
+ * process group lets a stop take the driver's own children with it, and the
+ * group is announced from the child itself, before the driver can start
+ * any, so no moment exists in which a crash would miss them. */
+static pid_t spawn(const char *const *argv, char **envp, int fd, pid_t player) {
     pid_t pid = vfork();
     if (!pid) {
         setpgid(0, 0);
         prctl(PR_SET_PDEATHSIG, SIGKILL);
+        /* The player may have died before the signal was asked for. */
+        if (getppid() != player) _exit(127);
+        reaper_note((int32_t)getpid());
         dup2(fd, 1); dup2(fd, 2);
         execve(argv[0], (char *const *)argv, envp);
         _exit(127);
@@ -539,12 +618,13 @@ static int run(const char *const *argv, const char *const *env, const char *log,
     if (fd < 0) { free(envp); return -1; }
     lock(guard);
     if (child->active < 0) { unlock(guard); close(fd); free(envp); return -1; }
-    pid = spawn(argv, envp, fd);
+    pid = spawn(argv, envp, fd, getpid());
     if (pid > 0) { child->pid = pid; child->active = 1; }
     unlock(guard);
     close(fd); free(envp);
     if (pid < 0) return -1;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    reaper_note(-(int32_t)pid);
     lock(guard);
     child->active = child->active < 0 ? -1 : 0;
     unlock(guard);
@@ -1579,7 +1659,8 @@ int native_build_start(const native_build_config_t *config, char *error, size_t 
     }
     if (!(b.service = CreateThread(NULL, 0, service_main, NULL, 0, NULL))) { snprintf(error, size, "cannot start a thread"); return 0; }
 #else
-    if (pthread_create(&b.service, NULL, service_main, NULL)) { snprintf(error, size, "cannot start a thread"); return 0; }
+    reaper_start();
+    if (pthread_create(&b.service, NULL, service_main, NULL)) { reaper_stop(); snprintf(error, size, "cannot start a thread"); return 0; }
 #endif
     b.running = 1;
     return 1;
@@ -1608,6 +1689,7 @@ void native_build_stop(void) {
 #else
     pthread_join(b.service, NULL);
     for (i = 0; i < b.worker_count; ++i) pthread_join(b.workers[i], NULL);
+    reaper_stop();
 #endif
     while (b.jobs) forget_job(b.jobs, 1);
     if (b.source_open && b.source.close) b.source.close(b.source.user);
