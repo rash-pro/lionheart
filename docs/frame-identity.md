@@ -1,6 +1,6 @@
 # Frame identity
 
-The first stage of presenting frames between the game's own (issue #4): for every projected 3D vertex, which
+The first stage of presenting frames between the game's own: for every projected 3D vertex, which
 vertex it was in the previous game frame, and for every polygon corner the GPU draws, which projection it came
 from. Nothing here draws anything or changes what the game computes; it is off unless a developer switch starts
 it, and the default path is unchanged.

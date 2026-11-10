@@ -1,6 +1,7 @@
 #include "frame_identity_host.h"
 #include "frame_identity.h"
 #include "ff8_ram_layout.h"
+#include "gte.h"
 #include "hw.h"
 #include "interp.h"
 #include "native_modules.h"
