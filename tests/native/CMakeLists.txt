@@ -136,6 +136,11 @@ if(NOT CMAKE_CROSSCOMPILING)
   file(GLOB lh_generator_sources CONFIGURE_DEPENDS "${LH_ROOT}/generator/src/*.c")
   add_library(lh_generator_support STATIC ${lh_generator_sources} support/generator_shim.c)
   target_include_directories(lh_generator_support PUBLIC "${LH_ROOT}/generator/include" "${LH_ROOT}/generator/src")
+  # The cache key includes the generator's own identity, which its build writes to a header.
+  include("${LH_ROOT}/generator/fingerprint.cmake")
+  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/generator-build/generator_build.h" CONTENT
+    "#define LHG_FINGERPRINT \"${LIONHEART_GENERATOR_FINGERPRINT}\"\n")
+  target_include_directories(lh_generator_support PRIVATE "${CMAKE_BINARY_DIR}/generator-build")
   set_target_properties(lh_generator_support PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
     POSITION_INDEPENDENT_CODE ON)
   target_compile_options(lh_generator_support PRIVATE -O2 -UNDEBUG)
