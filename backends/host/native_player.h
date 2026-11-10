@@ -23,6 +23,8 @@ extern const char host_native_catalog_digest[];
 typedef struct {
     int verbose;
     unsigned workers;
+    /* Developers only: another compiler driver in place of the installed one. */
+    const char *compiler;
 } host_native_options_t;
 
 /* Starts building for the booted executable, whose text is in c's RAM now,

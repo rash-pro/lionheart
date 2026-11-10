@@ -93,6 +93,23 @@ static double now(void) {
 }
 #endif
 
+/* Processor time of this process and the compilers it has waited for. */
+static double cpu_seconds(void) {
+#ifdef _WIN32
+    FILETIME created, ended, kernel, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user)) return -1;
+    /* Compilers run in their own processes and are not counted here. */
+    return ((double)((uint64_t)kernel.dwHighDateTime << 32 | kernel.dwLowDateTime) +
+            (double)((uint64_t)user.dwHighDateTime << 32 | user.dwLowDateTime)) / 1e7;
+#else
+    struct rusage self, children;
+    getrusage(RUSAGE_SELF, &self);
+    getrusage(RUSAGE_CHILDREN, &children);
+    return (double)(self.ru_utime.tv_sec + self.ru_stime.tv_sec + children.ru_utime.tv_sec + children.ru_stime.tv_sec) +
+           (double)(self.ru_utime.tv_usec + self.ru_stime.tv_usec + children.ru_utime.tv_usec + children.ru_stime.tv_usec) / 1e6;
+#endif
+}
+
 /* Paths that do not fit are refused, never cut short. */
 static int path_of(char *out, const char *format, ...) {
     va_list arguments;
@@ -369,10 +386,13 @@ typedef struct {
 
 #ifndef _WIN32
 /* The child shares this thread's memory until exec and only makes system
- * calls; it inherits this worker's lower priority, and dies with it. */
+ * calls; it inherits this worker's lower priority, and dies with it. Its own
+ * process group lets a stop take the driver's own children with it; after a
+ * crash those finish their one file into a folder the next builder removes. */
 static pid_t spawn(const char *const *argv, char **envp, int fd) {
     pid_t pid = vfork();
     if (!pid) {
+        setpgid(0, 0);
         prctl(PR_SET_PDEATHSIG, SIGKILL);
         dup2(fd, 1); dup2(fd, 2);
         execve(argv[0], (char *const *)argv, envp);
@@ -585,7 +605,7 @@ static struct {
     uint32_t promotions;
     unsigned sequence;
     native_build_status_t status;
-    double start, compile_start;
+    double start, compile_start, start_cpu;
     uint64_t compiled_work;
     /* Lock-free ring from the guest thread. */
     sample_t ring[RING];
@@ -718,7 +738,7 @@ static void count(void) {
         int left = 0;
         for (i = 0; i < b.set_count && !left; ++i)
             if ((priority(&b.sets[i]) >> 40) <= 2 && !b.sets[i].promoted && b.sets[i].state < SET_READY) left = 1;
-        if (!left) b.status.first_tier_seconds = now() - b.start;
+        if (!left) { b.status.first_tier_seconds = now() - b.start; b.status.first_tier_cpu = cpu_seconds() - b.start_cpu; }
     }
 }
 
@@ -1145,6 +1165,7 @@ static void *worker_main(void *argument)
         if (all_settled()) {
             b.status.state = NATIVE_BUILD_DONE;
             b.status.done_seconds = now() - b.start;
+            b.status.done_cpu = cpu_seconds() - b.start_cpu;
             cond_all(&b.changed);
             break;
         }
@@ -1408,6 +1429,7 @@ static void *service_main(void *argument)
             if (b.status.state != NATIVE_BUILD_DONE) {
                 b.status.state = NATIVE_BUILD_DONE;
                 b.status.done_seconds = now() - b.start;
+                b.status.done_cpu = cpu_seconds() - b.start_cpu;
                 say("done: %u sets native, %u failed, %u modules compiled, %u sets shared a module, %.1f s",
                     b.status.ready, b.status.failed, b.status.compiled, b.status.shared, b.status.done_seconds);
                 cond_all(&b.changed);
@@ -1439,6 +1461,16 @@ static void *service_main(void *argument)
         cond_wait(&b.changed, &b.guard, 100);
     }
     estimate();
+    if (b.status.state == NATIVE_BUILD_DONE && b.source_open) {
+        /* Nothing is left to emit: the discs' images need not stay in memory
+         * for the rest of the game. No emit can be running once all is settled. */
+        b.source_open = 0;
+        unlock(&b.guard);
+        lock(&b.emit_guard);
+        if (b.source.close) b.source.close(b.source.user);
+        unlock(&b.emit_guard);
+        lock(&b.guard);
+    }
     unlock(&b.guard);
 finished:
     lock(&b.guard);
@@ -1475,6 +1507,7 @@ int native_build_start(const native_build_config_t *config, char *error, size_t 
     b.status.state = NATIVE_BUILD_LOADING;
     b.status.seconds_left = -1;
     b.start = now();
+    b.start_cpu = cpu_seconds();
 #ifdef _WIN32
     if (!native_build_job && (native_build_job = CreateJobObjectW(NULL, NULL))) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
@@ -1502,7 +1535,7 @@ void native_build_stop(void) {
 #ifdef _WIN32
         if (c->active > 0 && c->process) TerminateProcess(c->process, 1);
 #else
-        if (c->active > 0) kill(c->pid, SIGKILL);
+        if (c->active > 0) kill(-c->pid, SIGKILL);
 #endif
         c->active = -1;
     }

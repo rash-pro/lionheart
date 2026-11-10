@@ -146,6 +146,10 @@ int host_native_start(cpu_t *c, const char *data, const char *const discs[4], un
     if (np.running || !data || !*data || host_tc_query(data, manifest) != HOST_TC_INSTALLED ||
         !host_tc_executable(data, manifest, np.compiler, sizeof(np.compiler)))
         return 0;
+    if (options && options->compiler) {
+        if (strlen(options->compiler) >= sizeof(np.compiler)) return 0;
+        strcpy(np.compiler, options->compiler);
+    }
     if (snprintf(np.root, sizeof(np.root), "%s/native", data) >= (int)sizeof(np.root)) return 0;
     np.disc_mask = 0;
     for (d = 0; d < 4; ++d) {
@@ -231,9 +235,10 @@ void host_native_stop(cpu_t *c, int wait) {
     native_build_status(&status);
     native_build_stop();
     if (np.verbose)
-        fprintf(stderr, "native: %u/%u sets native, %u failed, %u compiled, %u shared, %u from cache; cache %.3f s, first tier %.1f s, done %.1f s; %zu modules registered\n",
-                status.ready, status.sets, status.failed, status.compiled, status.shared, status.cached,
-                status.cached_seconds, status.first_tier_seconds, status.done_seconds, native_modules_registered());
+        fprintf(stderr, "native: %u/%u sets native, %u failed, %u compiled, %u shared, %u from cache; cache %.3f s, "
+                "first tier %.1f s (%.1f cpu s), done %.1f s (%.1f cpu s); %zu modules registered\n",
+                status.ready, status.sets, status.failed, status.compiled, status.shared, status.cached, status.cached_seconds,
+                status.first_tier_seconds, status.first_tier_cpu, status.done_seconds, status.done_cpu, native_modules_registered());
     native_modules_shutdown(c);
     native_modules_take_over(0);
     np.running = 0;

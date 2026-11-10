@@ -43,6 +43,7 @@
 #endif
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +64,9 @@ static unsigned native_pace_count, native_pace_vblanks;
 /* Hidden: drive and observe the native build headless. */
 static int native_off, native_status, native_wait, native_only;
 static unsigned native_workers;
+static const char *native_compiler;
+static volatile sig_atomic_t native_interrupted;
+static void native_interrupt(int signal_number) { (void)signal_number; native_interrupted = 1; }
 #endif
 static host_input_t input;
 static host_state_bridge_t *state_bridge;
@@ -513,6 +517,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--native-status")) native_status = 1;
         else if (!strcmp(argv[i], "--native-wait")) native_wait = 1;
         else if (!strcmp(argv[i], "--native-build-only")) native_only = native_wait = 1;
+        else if (!strcmp(argv[i], "--native-compiler") && i + 1 < argc) native_compiler = argv[++i];
         else if (!strcmp(argv[i], "--native-workers") && i + 1 < argc) {
             char *end;
             unsigned long count = strtoul(argv[++i], &end, 10);
@@ -936,7 +941,7 @@ int main(int argc, char **argv) {
     /* The player starts on the interpreter and switches set by set as its own
      * modules arrive; without the compiler this starts nothing. */
     if (!native_off) {
-        host_native_options_t native = {native_status, native_workers};
+        host_native_options_t native = {native_status, native_workers, native_compiler};
         if (!host_native_start(c, data_dir, disc_paths, 1, &native) && native_only) {
             fprintf(stderr, "No native compiler is installed\n");
             host_state_bridge_close(state_bridge); host_achievements_close(achievements);
@@ -980,8 +985,13 @@ int main(int argc, char **argv) {
 #ifdef FF8_PLAYER
     if (native_only) {
         native_build_status_t status;
-        host_native_stop(c, 1);
+        native_build_state_t state;
+        signal(SIGINT, native_interrupt);
+        signal(SIGTERM, native_interrupt);
+        do state = native_build_wait(0.5);
+        while (state != NATIVE_BUILD_DONE && state != NATIVE_BUILD_STOPPED && !native_interrupted);
         native_build_status(&status);
+        host_native_stop(c, 0);
         result = status.state == NATIVE_BUILD_DONE ? 0 : 1;
         snprintf(c->stop_reason, sizeof(c->stop_reason), "VBlank limit reached");
     } else

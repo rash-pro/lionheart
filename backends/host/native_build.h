@@ -56,6 +56,9 @@ typedef struct {
     /* Seconds from start until the cache had been read and every cached
      * module handed over; until the first tier was native; until done. */
     double cached_seconds, first_tier_seconds, done_seconds;
+    /* Processor seconds spent by then, compilers included where the system
+     * reports them to the player (Linux). */
+    double first_tier_cpu, done_cpu;
 } native_build_status_t;
 
 /* One set as the generator lists it. Row 0 is the executable. */
