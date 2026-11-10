@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include "interp.h"
+#include "frame_oracle.h"
 
 void (*interp_gte_command)(cpu_t *c, uint32_t opcode) = gte_cmd;
 
@@ -154,6 +155,7 @@ void interp_step(cpu_t *c) {
     default: cpu_exception(c, 10, 0); break;
     }
     if (branch && delayed) cpu_stop(c, "branch in branch delay slot (undefined R3000 behavior)");
+    FRAME_ORACLE(frame_oracle_step(c, word, a, b, address, dst, value, load, loaded));
     c_retire(c, dst, value, load, loaded);
 retired:
     if (c->halted) return;

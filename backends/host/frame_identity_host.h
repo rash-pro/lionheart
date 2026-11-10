@@ -4,10 +4,11 @@
 #define HOST_FRAME_IDENTITY_HOST_H
 #include "cpu.h"
 
-/* dump may be NULL (summary only). linked: the host runs recompiled code
+/* dump may be NULL (summary only). oracle: a report path, for developer
+ * builds with FF8_FRAME_ORACLE, or NULL. linked: the host runs recompiled code
  * linked into it, which only a build with FF8_FRAME_IDENTITY_LINKED can
  * observe. */
-int host_frame_identity_start(cpu_t *c, const char *dump, int linked);
+int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, int linked);
 /* A state was restored: observe its GPU and forget the history. */
 void host_frame_identity_restored(cpu_t *c);
 /* Unbind, flush and print the summary on stdout. Returns 0 if writing failed. */

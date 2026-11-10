@@ -4,6 +4,9 @@
 #include "hw.h"
 #include "interp.h"
 #include "native_modules.h"
+#ifdef FF8_FRAME_ORACLE
+#include "frame_oracle.h"
+#endif
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,6 +151,9 @@ static void sink(void *context, const frame_identity_frame_t *f) {
     if (h.dump && !h.failed && fwrite(h.buffer, 1, h.size, h.dump) != h.size) h.failed = 1;
     count(&h.total, f);
     count(&h.scene[scene_of(f->tag)], f);
+#ifdef FF8_FRAME_ORACLE
+    frame_oracle_judge(f);
+#endif
 }
 
 static void bind(int on) {
@@ -159,7 +165,7 @@ static void bind(int on) {
 #endif
 }
 
-int host_frame_identity_start(cpu_t *c, const char *dump, int linked) {
+int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, int linked) {
     frame_identity_config_t config;
 #ifndef FF8_FRAME_IDENTITY_LINKED
     if (linked) {
@@ -169,6 +175,11 @@ int host_frame_identity_start(cpu_t *c, const char *dump, int linked) {
     }
 #else
     (void)linked;
+#endif
+#ifdef FF8_FRAME_ORACLE
+    if (oracle && !frame_oracle_start(c, oracle)) return 0;
+#else
+    if (oracle) { fprintf(stderr, "--frame-oracle needs a developer build with -DFF8_FRAME_ORACLE=ON\n"); return 0; }
 #endif
     memset(&h, 0, sizeof(h));
     h.digest = UINT64_C(0xcbf29ce484222325);
@@ -194,6 +205,9 @@ int host_frame_identity_start(cpu_t *c, const char *dump, int linked) {
 void host_frame_identity_restored(cpu_t *c) {
     if (!h.running) return;
     frame_identity_rebind(c->hw->gpu);
+#ifdef FF8_FRAME_ORACLE
+    frame_oracle_restored(c);
+#endif
 }
 
 static double percent(uint64_t a, uint64_t b) { return b ? 100.0 * (double)a / (double)b : 0.0; }
@@ -222,6 +236,9 @@ int host_frame_identity_stop(void) {
     report("all", &h.total);
     for (i = 0; i < SCENES; ++i) if (h.scene[i].frames) report(scene_names[i], &h.scene[i]);
     printf("Frame identity digest: %016" PRIx64 "\n", h.digest);
+#ifdef FF8_FRAME_ORACLE
+    if (!frame_oracle_stop()) ok = 0;
+#endif
     free(h.buffer); free(h.dump_path);
     memset(&h, 0, sizeof(h));
     return ok;

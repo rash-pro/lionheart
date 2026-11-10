@@ -79,3 +79,33 @@ setup, run, projection and polygon counts; then per setup the five rotation word
 H, sf, lm; per run first, count, setup, previous, match, repeats, key (64-bit); per projection input x|y<<16,
 input z|SZ<<16, SXY, the three view coordinates, run, previous, match; per polygon opcode, corner count, and for
 four corners the packet word, state|age<<8 and projection. Held indices are `0xffffffff`.
+
+## The oracle
+
+A developer build configured with `-DFF8_FRAME_ORACLE=ON` (never the release player) adds an independent judge,
+`runtime/frame_oracle.c`, that runs only with `--interpreter`:
+
+```sh
+lionheart ... --interpreter --frame-oracle report.txt
+```
+
+Instruction by instruction it follows which RAM halfword each value came from, through registers, memory, the
+scratchpad and the GTE's vertex and matrix registers, across LHU, SLL 16, OR and ANDI 0xffff packing, and
+through additions with one untracked operand (kept, marked as offset). It also follows each projection's screen
+coordinates from the SXY FIFO through MFC2, SWC2, registers and memory into the words the GPU takes as polygon
+corners, from DMA linked lists or block transfers (words the CPU writes to the GP0 port stay undecided). Every
+source is checked against the live value before use. The service never reads any of it.
+
+A pair is **correct** when the three input coordinates of both projections came from the same halfwords with the
+same write generation, **wrong** when a coordinate came from another halfword and both halfwords were alive in
+both frames, **equivalent** when the oracle's own partner stood exactly where the service's did (one point held
+in two records), **partial** when some coordinates agree and none contradict, and undecided otherwise. A corner's
+link is **correct** when the packet word came from the linked projection, **equivalent** when it came from
+another projection at the same position whose pair stood within a pixel of the linked one's, **wrong** otherwise,
+and undecided when the oracle cannot tell where the word came from.
+
+The report has one `F` line per frame (number, vblank, tag, flags, projections, matched, correct, partial, wrong,
+equivalent, undecided, corners, linked, link correct, link equivalent, link wrong, link undecided, and held
+corners the oracle knows to be 3D), `W` lines describing the first wrong pairs and links of each scene, and `T`
+totals per scene. `LOST` means the oracle lost track (native code ran, or its counts disagree with the
+service's), and the run fails.
