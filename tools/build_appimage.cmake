@@ -143,13 +143,15 @@ else()
     file(COPY "${DEP_vulkan-headers}/include/${headers}" DESTINATION "${PREFIX}/include")
   endforeach()
 
-  # The Windows configuration, for the same LGPL libraries. configure is run by
-  # a relative name and installed under /usr, so neither the source folder nor
-  # the prefix enters the libraries' file names or configuration string.
+  # The Windows configuration, for the same LGPL libraries. configure finds the
+  # sources through a link named src, the one way it keeps their path relative,
+  # and installs under /usr, so neither the source folder nor the prefix enters
+  # the libraries' file names or configuration string.
   set(ffbuild "${DEP_ffmpeg}/build-linux")
   file(REMOVE_RECURSE "${ffbuild}")
   file(MAKE_DIRECTORY "${ffbuild}")
-  set(configure ../configure --prefix=/usr --libdir=/usr/lib --arch=x86_64 --target-os=linux
+  file(CREATE_LINK "${DEP_ffmpeg}" "${ffbuild}/src" SYMBOLIC)
+  set(configure src/configure --prefix=/usr --libdir=/usr/lib --arch=x86_64 --target-os=linux
     --disable-x86asm --disable-autodetect --disable-programs --disable-doc --disable-debug
     --disable-static --enable-shared --disable-network --disable-avdevice --disable-avfilter
     --disable-swresample --disable-encoders --disable-muxers --disable-filters --disable-devices)

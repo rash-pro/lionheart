@@ -12,10 +12,12 @@ set(ENV{PATH} "${DEP_llvm-mingw}/bin:$ENV{PATH}")
 set(ENV{LLVM_MINGW_ROOT} "${DEP_llvm-mingw}")
 set(ENV{WINDOWS_DEPS_ROOT} "${PREFIX}")
 
-# configure runs by a relative name and installs under a fixed prefix, so that
-# neither the source folder nor the dependency root enters the DLLs: their
-# file names and configuration string are the same wherever this runs.
-set(configure ../configure --prefix=/ffmpeg
+# configure finds the sources through a link named src, the one way it keeps
+# their path relative, and installs under a fixed prefix, so that neither the
+# source folder nor the dependency root enters the DLLs: their file names and
+# configuration string are the same wherever this runs. Nor does the time of
+# the link.
+set(configure src/configure --prefix=/ffmpeg --extra-ldsoflags=-Wl,--no-insert-timestamp
   --enable-cross-compile --target-os=mingw32 --arch=x86_64
   --cc=x86_64-w64-mingw32-clang --cxx=x86_64-w64-mingw32-clang++
   --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm --strip=llvm-strip
@@ -76,7 +78,9 @@ foreach(headers vulkan vk_video)
 endforeach()
 if(NOT EXISTS "${PREFIX}/lib/libavformat.dll.a")
   set(ffbuild "${DEP_ffmpeg}/build-ucrt")
+  file(REMOVE_RECURSE "${ffbuild}")
   file(MAKE_DIRECTORY "${ffbuild}")
+  file(CREATE_LINK "${DEP_ffmpeg}" "${ffbuild}/src" SYMBOLIC)
   execute_process(COMMAND ${configure} WORKING_DIRECTORY "${ffbuild}" RESULT_VARIABLE status)
   if(NOT status EQUAL 0)
     message(FATAL_ERROR "FFmpeg configure failed: ${status}")
@@ -106,12 +110,12 @@ foreach(pc IN LISTS metadata)
 endforeach()
 prefix_receipt(receipt)
 file(WRITE "${PREFIX}/SOURCE.sha256" "${receipt}")
-# Nor do the checkout and build folders enter the player.
+# Nor do the checkout and build folders or the time of the link enter the player.
 set(maps "-ffile-prefix-map=${RELEASE_ROOT}=. -ffile-prefix-map=${DEPS}=deps -ffile-prefix-map=${BUILD}=build")
 release_run("${CMAKE_COMMAND}" -S "${RELEASE_ROOT}" -B "${BUILD}"
   "-DCMAKE_TOOLCHAIN_FILE=${RELEASE_ROOT}/cmake/toolchains/windows-llvm-mingw.cmake"
   -DCMAKE_BUILD_TYPE=Release -DFF8_PLAYER=ON -DFF8_STATE_BRIDGE=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-  "-DCMAKE_C_FLAGS=${maps}" "-DCMAKE_CXX_FLAGS=${maps}"
+  "-DCMAKE_C_FLAGS=${maps}" "-DCMAKE_CXX_FLAGS=${maps}" -DCMAKE_EXE_LINKER_FLAGS=-Wl,--no-insert-timestamp
   "-DZLIB_LIBRARY=${PREFIX}/lib/libz.a" "-DZLIB_INCLUDE_DIR=${PREFIX}/include")
 release_run("${CMAKE_COMMAND}" --build "${BUILD}" --target ff8 --parallel "${JOBS}")
 set(PLATFORM windows)
