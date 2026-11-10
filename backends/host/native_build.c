@@ -267,6 +267,23 @@ static void sync_directory(const char *path) {
 #endif
 }
 
+static int rename_directory(const char *from, const char *to) {
+#ifdef _WIN32
+    wchar_t *a = wide(from), *b = wide(to);
+    int ok = a && b && MoveFileExW(a, b, 0);
+    free(a); free(b);
+    return ok;
+#else
+    return !rename(from, to);
+#endif
+}
+
+static int is_key(const char *name) {
+    size_t i;
+    for (i = 0; i < 64; ++i) if (!((name[i] >= '0' && name[i] <= '9') || (name[i] >= 'a' && name[i] <= 'f'))) return 0;
+    return !name[64];
+}
+
 /* replace: a receipt may replace an older one; a module never replaces anything. */
 static int publish(const char *from, const char *to, int replace) {
 #ifdef _WIN32
@@ -864,14 +881,16 @@ static void command_base(const char **argv, size_t *n) {
 
 static int compile_unit(unsigned worker, job_t *j, size_t unit, int *code) {
     const char *argv[48];
-    char object[PATH_CAP], log[PATH_CAP], define[160], global[PATH_CAP], local[PATH_CAP];
+    char object[PATH_CAP], part[PATH_CAP], log[PATH_CAP], define[160], global[PATH_CAP], local[PATH_CAP];
     const char *env[3];
     size_t n = 0;
     snprintf(define, sizeof(define), "-DLH_MODULE_ABI_ID=\"%s\"", b.config.abi_id);
     /* The compiler's caches would keep copies of objects; they live and die with the build. */
-    if (!path_of(object, "%s.o", j->units[unit]) || !path_of(log, "%s.log", j->units[unit]) ||
+    if (!path_of(object, "%s.o", j->units[unit]) || !path_of(part, "%s.o.part", j->units[unit]) || !path_of(log, "%s.log", j->units[unit]) ||
         !path_of(global, "ZIG_GLOBAL_CACHE_DIR=%s/cache", j->directory) || !path_of(local, "ZIG_LOCAL_CACHE_DIR=%s/cache", j->directory))
         return 0;
+    /* Finished by an earlier launch: an object exists only once it is whole. */
+    if (exists(object, NULL)) { *code = 0; return 1; }
     env[0] = global; env[1] = local; env[2] = NULL;
     command_base(argv, &n);
     argv[n++] = "-mcpu=baseline"; argv[n++] = "-O2"; argv[n++] = "-s"; argv[n++] = "-fomit-frame-pointer";
@@ -880,10 +899,11 @@ static int compile_unit(unsigned worker, job_t *j, size_t unit, int *code) {
     if (b.config.windows) argv[n++] = "-mno-stack-arg-probe";
     argv[n++] = "-DFF8_NATIVE_MODULE"; argv[n++] = define;
     argv[n++] = "-I"; argv[n++] = b.include;
-    argv[n++] = "-c"; argv[n++] = j->units[unit]; argv[n++] = "-o"; argv[n++] = object;
+    argv[n++] = "-c"; argv[n++] = j->units[unit]; argv[n++] = "-o"; argv[n++] = part;
     argv[n] = NULL;
     if (run(argv, env, log, &b.children[worker], &b.guard, code)) return 0;
     if (*code) keep_tail(j, log);
+    else if (!publish(part, object, 1)) *code = 1;
     return 1;
 }
 
@@ -1029,6 +1049,17 @@ static void emit_set(size_t row) {
         remove_tree(directory);
         lock(&b.guard);
         return;
+    }
+    {
+        /* Builds are kept under their key, so a later launch resumes one that
+         * a quit or a crash interrupted instead of compiling it all again. */
+        char kept[PATH_CAP];
+        if (path_of(kept, "%s/%s", b.work, key)) {
+            unlock(&b.guard);
+            if (exists(kept, NULL)) { remove_tree(directory); snprintf(directory, sizeof(directory), "%s", kept); }
+            else if (rename_directory(directory, kept)) snprintf(directory, sizeof(directory), "%s", kept);
+            lock(&b.guard);
+        }
     }
     if (!(j = calloc(1, sizeof(*j))) || !(j->sets = malloc(sizeof(*j->sets)))) {
         free(j);
@@ -1212,6 +1243,25 @@ static void clean_modules(void *user, const char *name, int directory) {
     if (!keep) directory ? remove_tree(path) : remove_file(path);
 }
 
+static void clean_part(void *user, const char *name, int directory) {
+    const char *parent = user;
+    char path[PATH_CAP];
+    size_t n = strlen(name);
+    if (directory || !join(path, parent, name)) return;
+    if (n > 5 && !strcmp(name + n - 5, ".part")) remove_file(path);
+}
+
+/* An interrupted build of a module not yet published is kept to resume;
+ * anything else in work/ is a leftover. */
+static void clean_work(void *user, const char *name, int directory) {
+    char path[PATH_CAP];
+    (void)user;
+    if (!join(path, b.work, name)) return;
+    if (directory && is_key(name) && !module_valid(name)) list(path, clean_part, path);
+    else if (directory) remove_tree(path);
+    else remove_file(path);
+}
+
 static void clean_temporary(void *user, const char *name, int directory) {
     const char *parent = user;
     char path[PATH_CAP];
@@ -1227,7 +1277,7 @@ static int become_builder(void) {
     b.builder_lock = file_lock(path, 1, 0);
     if (b.builder_lock == NO_FILE_LOCK) return 0;
     b.builder = 1;
-    remove_tree(b.work);
+    list(b.work, clean_work, NULL);
     if (!make_directory(b.work) || !make_directory(b.include) || !make_directory(b.modules) ||
         !make_directory(b.sets_dir) || !make_directory(b.failed_dir)) return -1;
     list(b.modules, clean_modules, NULL);
@@ -1463,6 +1513,13 @@ static void *service_main(void *argument)
         cond_wait(&b.changed, &b.guard, 100);
     }
     estimate();
+    if (b.status.state == NATIVE_BUILD_DONE && b.builder) {
+        /* Done: leftovers of interrupted builds whose sets went away. */
+        unlock(&b.guard);
+        remove_tree(b.work);
+        make_directory(b.work);
+        lock(&b.guard);
+    }
     if (b.status.state == NATIVE_BUILD_DONE && b.source_open) {
         /* Nothing is left to emit: the discs' images need not stay in memory
          * for the rest of the game. No emit can be running once all is settled. */

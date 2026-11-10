@@ -274,3 +274,17 @@ LH_TEST(test_module_the_loader_refuses_is_recorded_and_rebuilt_later) {
     LH_CONTAINS(out, "state done sets 2 ready 2 failed 0 compiled 1 ");
     LH_EQ(b.files("failed", ""), size_t(0));
 }
+
+LH_TEST(test_relaunch_resumes_an_interrupted_module) {
+    Build b(t);
+    b.sets("-1 0x1e 0 main slow units=8\n");
+    const auto killed = t.run(b.command({"--workers", 1, "--kill-after-ms", 1800}));
+    LH_CHECK_MSG(killed.rc != 0, "the harness was killed");
+    const size_t before = b.compiler_calls();
+    LH_CHECK_MSG(before >= 2 && before < 9, "some units compiled before the kill: " + std::to_string(before));
+    LH_CONTAINS(b.run({"--workers", 1}), "state done sets 1 ready 1 failed 0 compiled 1 ");
+    // Units finished before the kill are not compiled again; the one cut short is.
+    const size_t after = b.compiler_calls() - before;
+    LH_CHECK_MSG(after + before <= 9 + 1 + 1, "compiler calls before " + std::to_string(before) + ", after " + std::to_string(after));
+    LH_EQ(b.files("work", ""), size_t(0));
+}
