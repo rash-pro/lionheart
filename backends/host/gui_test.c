@@ -12,7 +12,7 @@ static struct {
     FILE *file,*measure,*measure_gpu;
     Uint32 text_event;
     char source[4096], capture[4096], id[512], expected[4096];
-    unsigned line, wait, close_attempts, measure_remaining, measure_frame, measure_gpu_frame;
+    unsigned line, wait, close_attempts, measure_remaining, measure_frame, measure_gpu_frame, patience;
     uint64_t at;
     int at_pending, close_pending, assertion, failed, finished;
     SDL_Scancode release;
@@ -139,7 +139,7 @@ void host_gui_test_tick(uint64_t guest_frame) {
         !strcmp(command,"select-down") || !strcmp(command,"back") || !strcmp(command,"section") ||
         !strcmp(command,"text") || !strcmp(command,"drop") || !strcmp(command,"mouse") ||
         !strcmp(command,"mouse-down") || !strcmp(command,"pad") || !strcmp(command,"assert-focus") ||
-        !strcmp(command,"assert-text"))) {
+        !strcmp(command,"assert-text") || !strcmp(command,"wait-text"))) {
         failure("interaction or assertion requires a visible GUI"); return;
     }
     if (!strcmp(command,"quit") && !*args) {
@@ -267,6 +267,16 @@ void host_gui_test_tick(uint64_t guest_frame) {
     } else if (!strcmp(command,"assert-focus")) {
         if (!*args || strlen(args)>=sizeof(script.id)) failure("invalid focus id");
         else { strcpy(script.id,args); script.assertion=1; }
+    } else if (!strcmp(command,"wait-text")) {
+        /* For states a worker reaches in its own time: up to N frames. */
+        char *limit=strrchr(args,' ');
+        if (!limit) { failure("expected wait-text ID text N"); return; }
+        *limit++=0; space=strpbrk(args," \t");
+        if (!space || !number(trim(limit),&count) || !count || count>1000000) { failure("expected wait-text ID text N"); return; }
+        *space++=0; space=trim(space);
+        if (!*args || strlen(args)>=sizeof(script.id) || !argument(space,script.expected,sizeof(script.expected)))
+            failure("invalid text wait");
+        else { strcpy(script.id,args); script.assertion=3; script.patience=(unsigned)count; }
     } else if (!strcmp(command,"assert-text")) {
         space=strpbrk(args," \t");
         if (!space) { failure("expected assert-text ID text"); return; }
@@ -298,6 +308,7 @@ void host_gui_test_observe(void) {
     const char *actual;
     if (!script.assertion || script.failed) return;
     actual=script.assertion==1 ? gui_ui_focused() : gui_ui_text_for(script.id);
+    if (script.assertion==3 && (!actual || strcmp(actual,script.expected)) && --script.patience) return;
     if (!actual || strcmp(actual,script.assertion==1 ? script.id : script.expected)) {
         fprintf(stderr,"GUI test %s:%u: %s assertion failed for %s (focus=%s, actual=%.200s)\n",script.source,script.line,
                 script.assertion==1 ? "focus" : "text",script.id,

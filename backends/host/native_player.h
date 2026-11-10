@@ -27,11 +27,18 @@ typedef struct {
     const char *compiler;
 } host_native_options_t;
 
-/* Starts building for the booted executable, whose text is in c's RAM now,
- * and the discs the player knows (by number, NULL when absent). Returns 0
- * when there is nothing to start: no compiler, no data directory. */
-int host_native_start(cpu_t *c, const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options);
+/* Keeps the booted executable's identity and text, which are intact only
+ * before the first instruction runs. Building can start any time after. */
+int host_native_boot(cpu_t *c);
+/* Starts building for the discs the player knows (by number, NULL when
+ * absent) with the compiler native_setup found or installed. Returns 0 when
+ * there is nothing to start: no compiler, no data directory, not booted. */
+int host_native_start(const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options);
+/* The inserted disc changed. */
 void host_native_disc(unsigned disc);
+/* The discs the player knows changed: building starts again on the new list;
+ * modules already loaded stay loaded. */
+void host_native_discs(const char *const discs[4], unsigned inserted);
 /* wait: let the build finish first, for headless runs that want a whole cache. */
 void host_native_stop(cpu_t *c, int wait);
 int host_native_running(void);

@@ -32,6 +32,7 @@ int gui_browser_accept(const gui_browser_t *browser,const char *path) {
     if (browser->kind==GUI_PICK_MOVIES || browser->kind==GUI_PICK_SCREENSHOTS) return 0;
     if (browser->show_all) return 1;
     if (browser->kind==GUI_PICK_DISC) return n>=4 && (!strcasecmp(path+n-4,".cue") || !strcasecmp(path+n-4,".bin"));
+    if (browser->kind==GUI_PICK_ARCHIVE) return n>=4 && !strcasecmp(path+n-4,".zip");
     return n>=4 && (!strcasecmp(path+n-4,".mcr") || !strcasecmp(path+n-4,".mcd") || !strcasecmp(path+n-4,".srm"));
 }
 static int compare(const void *a,const void *b) {
@@ -135,7 +136,7 @@ unsigned gui_browser_places(char names[][512],char paths[][512],unsigned capacit
 #endif
     return count;
 }
-int gui_state_load(const char *data_dir,char *folder,size_t capacity,int *input) {
+int gui_state_load(const char *data_dir,char *folder,size_t capacity,int *input,int *native_offered) {
     char path[4096],line[1024]; FILE *file;
     if (!data_dir || !*data_dir || snprintf(path,sizeof(path),"%s/gui-state.ini",data_dir)>=(int)sizeof(path)) return 0;
     file=fopen(path,"r"); if (!file) return 0;
@@ -148,10 +149,11 @@ int gui_state_load(const char *data_dir,char *folder,size_t capacity,int *input)
             else if (!strcmp(value,"mouse")) *input=HOST_GUI_MOUSE;
             else *input=HOST_GUI_KEYBOARD;
         }
+        if (native_offered && !strcmp(line,"native-offered=1")) *native_offered=1;
     }
     return fclose(file)==0;
 }
-int gui_state_save(const char *data_dir,const char *folder,int input) {
+int gui_state_save(const char *data_dir,const char *folder,int input,int native_offered) {
     char path[4096],temporary[4096]; FILE *file; int ok,n;
     if (!data_dir || !*data_dir || strchr(folder,'\r') || strchr(folder,'\n') || !host_player_directory(data_dir)) return 0;
     n=snprintf(path,sizeof(path),"%s/gui-state.ini",data_dir);
@@ -159,7 +161,8 @@ int gui_state_save(const char *data_dir,const char *folder,int input) {
     n=snprintf(temporary,sizeof(temporary),"%s/gui-state.ini.tmp",data_dir);
     if (n<0 || (size_t)n>=sizeof(temporary)) return 0;
     file=fopen(temporary,"w"); if (!file) return 0;
-    ok=fprintf(file,"last-folder=%s\nlast-input=%s\n",folder,input==HOST_GUI_PAD ? "pad" : input==HOST_GUI_MOUSE ? "mouse" : "keyboard")>0;
+    ok=fprintf(file,"last-folder=%s\nlast-input=%s\n%s",folder,input==HOST_GUI_PAD ? "pad" : input==HOST_GUI_MOUSE ? "mouse" : "keyboard",
+               native_offered ? "native-offered=1\n" : "")>0;
     if (fclose(file)) ok=0;
     if (ok) ok=!rename(temporary,path);
     if (!ok) remove(temporary);

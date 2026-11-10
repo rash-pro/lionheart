@@ -16,7 +16,7 @@
 #define FF8_VERSION "dev"
 #endif
 
-enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE };
+enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE,MODAL_NATIVE };
 static struct {
     host_options_t *options; host_gui_services_t services;
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
@@ -35,6 +35,11 @@ static struct {
     gui_browser_t browser;
     char browser_names[32][512],browser_paths[32][512]; unsigned browser_places;
     gui_disc_result_t browser_results[GUI_BROWSER_MAX]; unsigned browser_result_count;
+    /* native_only: setup opened at the compiler step alone, for an
+     * installation that finished setup before that step existed. */
+    host_gui_native_t native; host_gui_failure_t failures[6]; unsigned failure_count;
+    int native_offered,native_only,native_seen,native_local,after_browser;
+    char native_archive[512];
 } gui;
 
 const char *host_gui_string(const char *id) {
@@ -77,7 +82,7 @@ static void parent_folder(const char *path,char *out,size_t capacity) {
 static int overlay(void) { return gui.mode==HOST_GUI_OVERLAY; }
 static void request_focus(void) { gui.first_focus=1; ++gui.focus_epoch; }
 static void close_form(void) { memset(gui.password,0,sizeof(gui.password)); gui.ra_form=gui.ra_error=0; gui.keyboard=0; gui.edit=NULL; }
-static void persist_ui(void) { gui_state_save(gui.data,gui.last_folder,gui.input); }
+static void persist_ui(void) { gui_state_save(gui.data,gui.last_folder,gui.input,gui.native_offered); }
 static void changed(const char *key,const char *value) {
     char error[512];
     if (!host_options_set(gui.options,key,value)) return;
@@ -120,7 +125,9 @@ int host_gui_configure(host_options_t *options,const char *data,const host_gui_s
     if (data) snprintf(gui.data,sizeof(gui.data),"%s",data);
     gui.input=HOST_GUI_KEYBOARD; gui.mode=HOST_GUI_HIDDEN; gui.result=HOST_GUI_RUNNING;
     gui.generation=1; gui.started=SDL_GetTicks64();
-    { int last=gui.input; gui_state_load(gui.data,gui.last_folder,sizeof(gui.last_folder),&last); gui.input=(host_gui_input_t)last; }
+    { int last=gui.input; gui_state_load(gui.data,gui.last_folder,sizeof(gui.last_folder),&last,&gui.native_offered); gui.input=(host_gui_input_t)last; }
+    if (gui.services.native) gui.services.native(gui.services.context,&gui.native);
+    gui.native_seen=(int)gui.native.compiler;
     if (!gui_media_start()) return 0;
     gui.configured=1;
     for (unsigned i=0;i<4;++i) if (*options->discs[i]) {
@@ -132,9 +139,12 @@ int host_gui_configure(host_options_t *options,const char *data,const host_gui_s
     return 1;
 }
 void host_gui_attach_game(void) { gui.game=1; gui.mode=HOST_GUI_HIDDEN; gui.started=SDL_GetTicks64(); }
+static int native_offer(void);
+int host_gui_wants_shell(void) { return gui.configured && native_offer(); }
 host_gui_result_t host_gui_shell(void) {
-    gui.mode=(!gui.force_hub && !gui.options->disc1_configured) ? HOST_GUI_SETUP : HOST_GUI_HUB;
-    gui.result=HOST_GUI_RUNNING; request_focus(); gui.setup_step=0;
+    gui.native_only=!gui.force_hub && gui.options->disc1_configured && native_offer();
+    gui.mode=(!gui.force_hub && !gui.options->disc1_configured) || gui.native_only ? HOST_GUI_SETUP : HOST_GUI_HUB;
+    gui.result=HOST_GUI_RUNNING; request_focus(); gui.setup_step=gui.native_only ? 2 : 0;
     if (gui.services.loop) gui.result=gui.services.loop(gui.services.context,1);
     return gui.result;
 }
@@ -161,16 +171,23 @@ static void play(void) {
     if (overlay()) { host_gui_close(); return; }
     if (ready_to_play()) set_result(HOST_GUI_PLAY);
 }
+/* The browser can open over the compiler dialog and goes back to it. */
+static void close_browser(void) { gui.modal=gui.after_browser; gui.after_browser=MODAL_NONE; request_focus(); }
+static void finish_setup(void);
 static void back(int controller) {
     if (gui.keyboard) { gui.keyboard=0; gui.edit=NULL; return; }
     if (gui.modal==MODAL_BROWSER) {
         if (controller && gui_browser_up(&gui.browser)) return;
-        gui.modal=MODAL_NONE; request_focus(); return;
+        close_browser(); return;
     }
     if (gui.modal!=MODAL_NONE) { gui.modal=MODAL_NONE; request_focus(); return; }
     if (gui.pane==HOST_GUI_ACHIEVEMENTS && gui_achievements_back()) return;
     if (gui.ra_form) { close_form(); request_focus(); return; }
-    if (gui.mode==HOST_GUI_SETUP && gui.setup_step) { gui.setup_step=0; request_focus(); return; }
+    if (gui.mode==HOST_GUI_SETUP && gui.setup_step) {
+        if (gui.native_only) finish_setup();
+        else { --gui.setup_step; request_focus(); }
+        return;
+    }
     if (!gui.focus_rail && gui.mode!=HOST_GUI_SETUP) { gui.focus_rail=1; gui_ui_focus(overlay() ? "nav.game" : "nav.play"); return; }
     if (overlay()) host_gui_close();
     else { gui.modal=MODAL_QUIT; request_focus(); }
@@ -194,6 +211,10 @@ static void selected(const char *path,gui_pick_t kind,unsigned slot) {
             char key[16]; snprintf(key,sizeof(key),"card%u",slot+1); changed(key,destination);
             gui.card_imported[slot]=1; gui.error[0]=0;
         } else snprintf(gui.error,sizeof(gui.error),"%s",error);
+    } else if (kind==GUI_PICK_ARCHIVE) {
+        snprintf(gui.native_archive,sizeof(gui.native_archive),"%s",path); gui.native_local=1;
+        if (gui.services.native_install) gui.services.native_install(gui.services.context,path);
+        request_focus();
     } else changed(kind==GUI_PICK_MOVIES ? "movies" : "screenshot-dir",path);
 }
 static void pick(gui_pick_t kind,unsigned slot) {
@@ -218,7 +239,8 @@ static void pick(gui_pick_t kind,unsigned slot) {
 #endif
     ,kind);
     gui.browser_places=gui_browser_places(gui.browser_names,gui.browser_paths,32,gui.last_folder);
-    gui.browser_result_count=0; gui.modal=MODAL_BROWSER; request_focus();
+    gui.browser_result_count=0; gui.after_browser=gui.modal==MODAL_NATIVE ? MODAL_NATIVE : MODAL_NONE;
+    gui.modal=MODAL_BROWSER; request_focus();
 }
 static void remove_disc(unsigned slot) {
     if (slot>=4 || (overlay() && !slot)) return;
@@ -232,6 +254,11 @@ static void drop(const char *path) {
     struct stat st; size_t length=strlen(path);
     if (stat(path,&st)) { snprintf(gui.error,sizeof(gui.error),S("disc.err.missing"),path); return; }
     if (S_ISDIR(st.st_mode)) { if (gui.pane==HOST_GUI_VIDEO) changed("movies",path); return; }
+    if (length>=4 && !strcasecmp(path+length-4,".zip")) {
+        int asked=(gui.mode==HOST_GUI_SETUP && gui.setup_step==2) || gui.modal==MODAL_NATIVE;
+        if (asked && gui.native.compiler!=HOST_GUI_COMPILER_READY && gui.native.compiler!=HOST_GUI_COMPILER_INSTALLING) selected(path,GUI_PICK_ARCHIVE,0);
+        return;
+    }
     if (length>=4 && (!strcasecmp(path+length-4,".cue") || !strcasecmp(path+length-4,".bin"))) {
         unsigned slot=0;
         while (slot<4 && *gui.options->discs[slot]) ++slot;
@@ -348,10 +375,23 @@ static void new_card(unsigned slot) {
         snprintf(key,sizeof(key),"card%u",slot+1); changed(key,path); gui.card_imported[slot]=0; gui.error[0]=0;
     } else snprintf(gui.error,sizeof(gui.error),"%s",error);
 }
+static int has_native(void) { return gui.services.native!=NULL; }
+static int native_offer(void) { return has_native() && !gui.native_offered && gui.native.compiler!=HOST_GUI_COMPILER_READY; }
+static void finish_setup(void) {
+    int only=gui.native_only;
+    if (has_native() && !gui.native_offered) { gui.native_offered=1; persist_ui(); }
+    gui.native_only=0; gui.mode=HOST_GUI_HUB; gui.pane=HOST_GUI_GAME; request_focus();
+    /* Offered on its own, the step stood between the player and the game. */
+    if (only && ready_to_play()) set_result(HOST_GUI_PLAY);
+}
 static void setup_next(void) {
     if (!gui.setup_step) {
         if (gui.discs[0].state==GUI_DISC_VERIFIED) { gui.setup_step=1; request_focus(); if (!*gui.options->cards[0]) new_card(0); }
-    } else if (*gui.options->cards[0]) { gui.mode=HOST_GUI_HUB; gui.pane=HOST_GUI_GAME; request_focus(); }
+    } else if (gui.setup_step==1) {
+        if (!*gui.options->cards[0]) return;
+        if (has_native()) { gui.setup_step=2; request_focus(); }
+        else finish_setup();
+    } else finish_setup();
 }
 static void rail(void) {
     static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.controls","nav.ra","nav.achievements"};
@@ -468,12 +508,156 @@ static void draw_disc_row(unsigned slot,float x,float y,float width,float height
             remove_disc(slot);
         }
     }
+/* ---- native code ---- */
+static unsigned megabytes(unsigned long long bytes) { return (unsigned)((bytes+1048575)/1048576); }
+const char *gui_native_reason_id(const char *reason) {
+    /* The installer's reasons are its own words; these are the player's. */
+    static const struct { const char *needle,*id; } map[]={
+        {"Cancelled","native.err.cancelled"},{"Download failed","native.err.download"},
+        {"No download URL","native.err.no_url"},{"Archive size","native.err.archive"},
+        {"Archive SHA-256","native.err.archive"},{"Cannot read archive","native.err.read"},
+        {"Invalid ZIP","native.err.zip"},{"self-check","native.err.check"},{"cannot be found","native.err.check"},
+        {"Another installer","native.err.busy"},{"Cannot start","native.err.other"},{"Cannot","native.err.disk"}};
+    for (size_t i=0;reason && i<sizeof(map)/sizeof(map[0]);++i) if (strstr(reason,map[i].needle)) return map[i].id;
+    return "native.err.other";
+}
+static const char *native_step_id(host_gui_step_t step) {
+    static const char *const ids[]={"native.step.download","native.step.verify","native.step.extract","native.step.check","native.step.install"};
+    return ids[(unsigned)step<5 ? (unsigned)step : 4];
+}
+/* Bytes are counted only while downloading and checking the archive; the
+ * later steps count entries and checks, which say nothing as megabytes. */
+static int native_amount(const host_gui_native_t *n,char *out,size_t capacity) {
+    if ((n->step!=HOST_GUI_STEP_DOWNLOAD && n->step!=HOST_GUI_STEP_VERIFY) || !n->total) return 0;
+    snprintf(out,capacity,S("native.amount"),(unsigned)(n->done/1048576),megabytes(n->total)); return 1;
+}
+static void native_append(char *out,size_t capacity,const char *part) {
+    size_t n=strlen(out);
+    if (n<capacity) snprintf(out+n,capacity-n,"%s%s",n ? S("native.separator") : "",part);
+}
+static void native_left(int seconds,char *out,size_t capacity) {
+    unsigned minutes=(unsigned)(seconds+59)/60;
+    /* Coarser the further off: a closer finish earns finer steps. */
+    if (minutes>60) minutes=(minutes+9)/10*10;
+    else if (minutes>10) minutes=(minutes+4)/5*5;
+    if (!minutes) minutes=1;
+    if (minutes<60) snprintf(out,capacity,S("native.minutes"),minutes);
+    else snprintf(out,capacity,S("native.hours"),minutes/60,minutes%60);
+}
+void gui_native_summary(const host_gui_native_t *n,char *out,size_t capacity,int *alert) {
+    char part[128];
+    *alert=0; *out=0;
+    if (n->compiler==HOST_GUI_COMPILER_INSTALLING) {
+        native_append(out,capacity,S(native_step_id(n->step)));
+        if (native_amount(n,part,sizeof(part))) native_append(out,capacity,part);
+    } else if (n->compiler==HOST_GUI_COMPILER_FAILED) {
+        *alert=1; snprintf(out,capacity,"%s",S(gui_native_reason_id(n->reason)));
+    } else if (n->compiler==HOST_GUI_COMPILER_MISSING) snprintf(out,capacity,"%s",S("native.missing"));
+    else if (n->build==HOST_GUI_BUILD_OFF || !n->sets) snprintf(out,capacity,"%s",S("native.ready"));
+    else {
+        snprintf(out,capacity,S("native.count"),n->ready,n->sets);
+        if (n->failed) { *alert=1; snprintf(part,sizeof(part),S("native.part.failed"),n->failed); native_append(out,capacity,part); }
+        if (n->build==HOST_GUI_BUILD_STOPPED) { *alert=1; native_append(out,capacity,S("native.part.stopped")); }
+        else if (n->build==HOST_GUI_BUILD_RUNNING && n->seconds_left>=0) {
+            char left[64]; native_left(n->seconds_left,left,sizeof(left));
+            snprintf(part,sizeof(part),S("native.part.left"),left); native_append(out,capacity,part);
+        }
+    }
+}
+static void native_install(const char *archive) {
+    gui.native_local=archive!=NULL;
+    if (gui.services.native_install) gui.services.native_install(gui.services.context,archive);
+    request_focus();
+}
+/* The compiler's last words: the line before its count of errors, when it
+ * ends with one. */
+static const char *last_words(const char *words,char *out,size_t capacity) {
+    const char *end=words+strlen(words),*start;
+    for (int pass=0;pass<2;++pass) {
+        while (end>words && (end[-1]=='\n' || end[-1]=='\r')) --end;
+        start=end; while (start>words && start[-1]!='\n') --start;
+        snprintf(out,capacity,"%.*s",(int)(end-start),start);
+        if (!strstr(out," generated.") || start==words) break;
+        end=start;
+    }
+    return out;
+}
+static void open_native(void) {
+    if (gui.native.compiler!=HOST_GUI_COMPILER_READY) { gui.modal=MODAL_NATIVE; request_focus(); return; }
+    if (!gui.native.failed && gui.native.build!=HOST_GUI_BUILD_STOPPED) return;
+    gui.failure_count=gui.services.native_failures ? gui.services.native_failures(gui.services.context,gui.failures,6) : 0;
+    gui.modal=MODAL_NATIVE; request_focus();
+}
+static void native_row(float x,float y,float width,float height) {
+    char sub[256]; int alert;
+    if (!has_native()) return;
+    gui_native_summary(&gui.native,sub,sizeof(sub),&alert);
+    if (gui_ui_row("hub.native",S("nav.native"),sub,R(x,y,width,height),alert ? GUI_ALERT : 0)) open_native();
+}
+/* The compiler step, on the setup page and in the dialog the hub opens. */
+static void draw_native_install(float x,float y,float width) {
+    const host_gui_native_t *n=&gui.native;
+    int busy=n->compiler==HOST_GUI_COMPILER_INSTALLING,ready=n->compiler==HOST_GUI_COMPILER_READY;
+    float half=(width-20)/2,status=y+284;
+    char size[64],archive[160],line[160];
+    label("setup.native.title",x,y,width,GUI_TITLE,GUI_TEXT);
+    label("setup.native.sub",x,y+46,width,GUI_SUB,GUI_DIM);
+    snprintf(size,sizeof(size),S("native.size"),megabytes(n->bytes));
+    if (*n->archive) snprintf(archive,sizeof(archive),"%s",n->archive);
+    else snprintf(archive,sizeof(archive),S("native.zip"),megabytes(n->bytes));
+    if (gui_ui_row("setup.native.download",S("setup.native.download"),n->downloadable ? size : S("native.unavailable"),R(x,y+106,half,150),
+                   !n->downloadable || busy || ready ? GUI_DISABLED : 0)) native_install(NULL);
+    if (gui_ui_row("setup.native.archive",S("setup.native.archive"),archive,R(x+half+20,y+106,half,150),busy || ready ? GUI_DISABLED : 0))
+        pick(GUI_PICK_ARCHIVE,0);
+    if (busy) {
+        float bar=width-200,share=n->total ? (float)((double)n->done/(double)n->total) : 0;
+        text("native.step",S(native_step_id(n->step)),x+18,status,bar,GUI_REGULAR,GUI_TEXT);
+        gui_ui_panel(R(x+18,status+38,bar,6),0x1e1e26ff,3);
+        if (n->step==HOST_GUI_STEP_DOWNLOAD || n->step==HOST_GUI_STEP_VERIFY) gui_ui_panel(R(x+18,status+38,bar*(share>1 ? 1 : share),6),0x9fb4d8ff,3);
+        if (native_amount(n,line,sizeof(line))) text("native.amount",line,x+18,status+52,bar,GUI_SUB,GUI_DIM);
+        if (gui_ui_button("native.cancel",S("btn.cancel"),R(x+width-150,status-4,150,42),0) && gui.services.native_cancel)
+            gui.services.native_cancel(gui.services.context);
+    } else if (n->compiler==HOST_GUI_COMPILER_FAILED) {
+        text("native.error",S(gui_native_reason_id(n->reason)),x+18,status+6,width-200,GUI_SUB,GUI_ERROR);
+        if (gui_ui_button("native.retry",S("btn.retry"),R(x+width-150,status-4,150,42),0)) native_install(gui.native_local ? gui.native_archive : NULL);
+    } else if (ready) label("native.installed",x+18,status,width-36,GUI_REGULAR,GUI_OK);
+    if (gui.first_focus && gui.modal!=MODAL_BROWSER)
+        gui_ui_focus(ready ? (gui.modal==MODAL_NATIVE ? "btn.close" : "btn.finish") : busy ? "native.cancel" :
+                     n->compiler==HOST_GUI_COMPILER_FAILED ? "native.retry" : n->downloadable ? "setup.native.download" : "setup.native.archive");
+}
+static void draw_native_details(float x,float y,float width) {
+    char sub[256],id[64],words[512],more[64]; int alert; unsigned shown=0;
+    float row=y+96;
+    label("nav.native",x,y,width,GUI_TITLE,GUI_TEXT);
+    gui_native_summary(&gui.native,sub,sizeof(sub),&alert);
+    text("native.summary",sub,x,y+46,width,GUI_SUB,alert ? GUI_ERROR : GUI_DIM);
+    if (gui.native.build==HOST_GUI_BUILD_STOPPED && *gui.native.error) { text("native.stop",gui.native.error,x,row,width,GUI_MONO,GUI_DIM); row+=40; }
+    for (;shown<gui.failure_count && shown<6;++shown,row+=36) {
+        snprintf(id,sizeof(id),"native.failure.%u",shown); text(id,gui.failures[shown].name,x,row,180,GUI_MONO,GUI_TEXT);
+        snprintf(id,sizeof(id),"native.failure.%u.words",shown);
+        text(id,last_words(gui.failures[shown].words,words,sizeof(words)),x+190,row,width-190,GUI_SUB,GUI_DIM);
+    }
+    if (gui.native.failed>shown) { snprintf(more,sizeof(more),S("native.more"),gui.native.failed-shown); text("native.more",more,x,row,width,GUI_SUB,GUI_MUTED); }
+    if (gui.first_focus) gui_ui_focus("btn.close");
+}
 static void draw_setup(void) {
     float x=(gui.width-800)/2;
     gui_ui_emblem(R(48,24,44,44)); label("app.name",106,30,200,GUI_TITLE,GUI_TEXT);
-    label("setup.step1",gui.width-340,38,150,GUI_SUB,gui.setup_step ? GUI_MUTED : GUI_TEXT);
-    label("setup.step2",gui.width-190,38,160,GUI_SUB,gui.setup_step ? GUI_TEXT : GUI_MUTED);
-    if (!gui.setup_step) {
+    if (has_native()) {
+        label("setup.step1",gui.width-480,38,120,GUI_SUB,gui.setup_step==0 ? GUI_TEXT : GUI_MUTED);
+        label("setup.step2",gui.width-340,38,150,GUI_SUB,gui.setup_step==1 ? GUI_TEXT : GUI_MUTED);
+        label("setup.step3",gui.width-170,38,130,GUI_SUB,gui.setup_step==2 ? GUI_TEXT : GUI_MUTED);
+    } else {
+        label("setup.step1",gui.width-340,38,150,GUI_SUB,gui.setup_step ? GUI_MUTED : GUI_TEXT);
+        label("setup.step2",gui.width-190,38,160,GUI_SUB,gui.setup_step ? GUI_TEXT : GUI_MUTED);
+    }
+    if (gui.setup_step==2) {
+        int going=gui.native.compiler==HOST_GUI_COMPILER_READY || gui.native.compiler==HOST_GUI_COMPILER_INSTALLING;
+        draw_native_install(x,120,800);
+        if (!gui.native_only && button("btn.back",48,gui.height-124,120,0)) { gui.setup_step=1; request_focus(); }
+        /* An installation still running goes on in the background. */
+        if (button(going ? "btn.finish" : "btn.not_now",gui.width-198,gui.height-124,150,going ? GUI_PRIMARY : 0)) finish_setup();
+    } else if (!gui.setup_step) {
         if (gui.discs[0].state==GUI_DISC_EMPTY) {
             label("setup.disc1.title",x,120,800,GUI_TITLE,GUI_TEXT);
             label("setup.disc1.supported",x,164,800,GUI_SUB,GUI_DIM);
@@ -499,8 +683,9 @@ static void draw_setup(void) {
         card_status(0,x+18,404,764);
         if (*gui.options->cards[0]) text("card.1.path",base_name(gui.options->cards[0]),x+18,440,764,GUI_MONO,GUI_DIM);
         if (button("btn.back",48,gui.height-124,120,0)) { gui.setup_step=0; request_focus(); }
-        if (button("btn.finish",gui.width-198,gui.height-124,150,*gui.options->cards[0] ? GUI_PRIMARY : GUI_DISABLED)) setup_next();
-        if (gui.first_focus) gui_ui_focus(*gui.options->cards[0] ? "btn.finish" : "setup.card.new");
+        const char *next=has_native() ? "btn.continue" : "btn.finish";
+        if (button(next,gui.width-198,gui.height-124,150,*gui.options->cards[0] ? GUI_PRIMARY : GUI_DISABLED)) setup_next();
+        if (gui.first_focus) gui_ui_focus(*gui.options->cards[0] ? next : "setup.card.new");
     }
     if (*gui.error) text("setup.error",gui.error,x,530,800,GUI_SUB,GUI_ERROR);
 }
@@ -525,6 +710,7 @@ static void draw_game(void) {
         if (gui_ui_row("game.load",S("game.load"),available ? NULL : S("game.load.empty"),R(x,378,width,64),available ? 0 : GUI_DISABLED)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F7); }
         if (gui_ui_row("game.shot",S("game.shot"),NULL,R(x,446,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F12); }
         if (gui_ui_row("btn.view_ach",S("btn.view_ach"),NULL,R(x,514,width,58),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
+        native_row(x,582,width,58);
     } else {
         pane_header("nav.play",S("hub.subtitle"));
         if (button("btn.play",x,126,170,ready_to_play() ? GUI_PRIMARY : GUI_DISABLED)) play();
@@ -533,15 +719,18 @@ static void draw_game(void) {
             label("disc.needed",x+190,138,width-360,GUI_SUB,GUI_ERROR);
             if (gui_ui_button("hub.locate",S("btn.locate"),R(x+width-150,126,150,42),gui.discs[0].state==GUI_DISC_CHECKING ? GUI_DISABLED : 0)) pick(GUI_PICK_DISC,0);
         }
+        /* One more row when native code has one: the same rows, a little closer. */
+        float top=has_native() ? 196 : 210,step=has_native() ? 68 : 72,tall=has_native() ? 64 : 68;
         unsigned added=0; for (unsigned i=0;i<4;++i) if (gui.discs[i].state==GUI_DISC_VERIFIED) ++added;
         snprintf(sub,sizeof(sub),S("hub.discs"),added);
-        if (gui_ui_row("hub.discs",S("nav.discs"),sub,R(x,210,width,68),0)) change_pane(HOST_GUI_DISCS);
-        if (gui_ui_row("hub.card",S("nav.card"),*gui.options->cards[0] ? base_name(gui.options->cards[0]) : S("card.empty"),R(x,282,width,68),0)) change_pane(HOST_GUI_CARD);
+        if (gui_ui_row("hub.discs",S("nav.discs"),sub,R(x,top,width,tall),0)) change_pane(HOST_GUI_DISCS);
+        if (gui_ui_row("hub.card",S("nav.card"),*gui.options->cards[0] ? base_name(gui.options->cards[0]) : S("card.empty"),R(x,top+step,width,tall),0)) change_pane(HOST_GUI_CARD);
         snprintf(sub,sizeof(sub),S("hub.video"),S(gui.options->renderer ? "val.vulkan" : "val.soft"),(unsigned)gui.options->internal_scale,S(gui.options->crt==0 ? "val.off" : gui.options->crt==1 ? "val.pvm" : gui.options->crt==2 ? "val.tv" : "val.arcade"));
-        if (gui_ui_row("hub.video",S("nav.video"),sub,R(x,354,width,68),0)) change_pane(HOST_GUI_VIDEO);
-        if (gui_ui_row("hub.controls",S("nav.controls"),S(gui.options->dualshock ? "val.dualshock" : "val.digital"),R(x,426,width,68),0)) change_pane(HOST_GUI_CONTROLS);
-        if (gui_ui_row("hub.ra",S("nav.ra"),S(gui.options->ra ? "tag.casual" : "ra.off"),R(x,498,width,68),0)) change_pane(HOST_GUI_RA);
-        label("app.wip",x,606,width,GUI_SUB,GUI_MUTED);
+        if (gui_ui_row("hub.video",S("nav.video"),sub,R(x,top+2*step,width,tall),0)) change_pane(HOST_GUI_VIDEO);
+        if (gui_ui_row("hub.controls",S("nav.controls"),S(gui.options->dualshock ? "val.dualshock" : "val.digital"),R(x,top+3*step,width,tall),0)) change_pane(HOST_GUI_CONTROLS);
+        if (gui_ui_row("hub.ra",S("nav.ra"),S(gui.options->ra ? "tag.casual" : "ra.off"),R(x,top+4*step,width,tall),0)) change_pane(HOST_GUI_RA);
+        native_row(x,top+5*step,width,tall);
+        label("app.wip",x,has_native() ? 618 : 606,width,GUI_SUB,GUI_MUTED);
     }
 }
 static void draw_discs(void) {
@@ -757,7 +946,7 @@ static void draw_browser(void) {
     int submitted=gui_ui_edit("browser.path",R(142,20,gui.width-372,46),gui.browser.path,sizeof(gui.browser.path),0);
     if (submitted) {
         if (!gui_browser_open(&gui.browser,gui.browser.path,gui.browser.kind)) {
-            if (gui_browser_accept(&gui.browser,gui.browser.path)) { selected(gui.browser.path,gui.pick_kind,(unsigned)gui.pick_slot); gui.modal=MODAL_NONE; }
+            if (gui_browser_accept(&gui.browser,gui.browser.path)) { selected(gui.browser.path,gui.pick_kind,(unsigned)gui.pick_slot); close_browser(); }
             else snprintf(gui.browser.error,sizeof(gui.browser.error),"%s",S("browser.error"));
         } else browser_changed();
     }
@@ -780,7 +969,7 @@ static void draw_browser(void) {
         if (!tag) { snprintf(meta,sizeof(meta),S("browser.bytes"),(unsigned)((entry->bytes+1048575)/1048576)); tag=meta; }
         if (gui_ui_row(id,entry->name,tag,R(list_x,y,gui.width-list_x-48,44),0)) {
             if (entry->directory) { char path[512]; snprintf(path,sizeof(path),"%s",entry->path); gui_browser_open(&gui.browser,path,gui.browser.kind); browser_changed(); }
-            else { char path[512]; snprintf(path,sizeof(path),"%s",entry->path); selected(path,gui.pick_kind,(unsigned)gui.pick_slot); gui.modal=MODAL_NONE; }
+            else { char path[512]; snprintf(path,sizeof(path),"%s",entry->path); selected(path,gui.pick_kind,(unsigned)gui.pick_slot); close_browser(); }
             break;
         }
         if (gui.first_focus && !i) gui_ui_focus(id);
@@ -788,15 +977,20 @@ static void draw_browser(void) {
     gui_ui_scroll_end();
     if (*gui.browser.error) text("browser.error",gui.browser.error,list_x,gui.height-140,gui.width-list_x-48,GUI_SUB,GUI_ERROR);
     if (gui.browser.kind==GUI_PICK_MOVIES || gui.browser.kind==GUI_PICK_SCREENSHOTS) {
-        if (gui_ui_button("browser.choose_folder",S("btn.continue"),R(gui.width-230,gui.height-120,182,42),GUI_PRIMARY)) { selected(gui.browser.folder,gui.pick_kind,(unsigned)gui.pick_slot); gui.modal=MODAL_NONE; }
+        if (gui_ui_button("browser.choose_folder",S("btn.continue"),R(gui.width-230,gui.height-120,182,42),GUI_PRIMARY)) { selected(gui.browser.folder,gui.pick_kind,(unsigned)gui.pick_slot); close_browser(); }
     }
-    if (gui_ui_button("browser.cancel",S("btn.cancel"),R(48,gui.height-120,132,42),0)) { gui.modal=MODAL_NONE; request_focus(); }
+    if (gui_ui_button("browser.cancel",S("btn.cancel"),R(48,gui.height-120,132,42),0)) close_browser();
     gui_ui_modal_end();
 }
 static void draw_dialog(void) {
-    float height=gui.modal==MODAL_RA_WARNING ? 346 : 236,width=600,x=(gui.width-width)/2,y=(gui.height-height)/2;
+    float height=gui.modal==MODAL_RA_WARNING ? 346 : gui.modal==MODAL_NATIVE ? 470 : 236,width=gui.modal==MODAL_NATIVE ? 864 : 600;
+    float x=(gui.width-width)/2,y=(gui.height-height)/2;
     gui_ui_modal_begin("dialog",R(x,y,width,height));
-    if (gui.modal==MODAL_RA_WARNING) {
+    if (gui.modal==MODAL_NATIVE) {
+        if (gui.native.compiler!=HOST_GUI_COMPILER_READY) draw_native_install(x+32,y+28,width-64);
+        else draw_native_details(x+32,y+28,width-64);
+        if (button("btn.close",x+width-166,y+height-72,134,0)) { gui.modal=MODAL_NONE; request_focus(); }
+    } else if (gui.modal==MODAL_RA_WARNING) {
         label("ra.warn.title",x+32,y+28,width-64,GUI_TITLE,GUI_TEXT);
         static const char *const lines[]={"ra.warn.1","ra.warn.2","ra.warn.3","ra.warn.4","ra.warn.5"};
         for (unsigned i=0;i<5;++i) label(lines[i],x+32,y+84+(float)i*34,width-64,GUI_SUB,GUI_TEXT);
@@ -850,6 +1044,13 @@ void host_gui_frame(unsigned width,unsigned height) {
     host_ra_idle();
     gui.width=(float)width/gui_scale(height); gui.height=(float)height/gui_scale(height); gui.rail=gui_scale(height)<0.9f ? 240 : 300;
     apply_results();
+    if (gui.services.native) {
+        gui.services.native(gui.services.context,&gui.native);
+        if ((int)gui.native.compiler!=gui.native_seen) {
+            gui.native_seen=(int)gui.native.compiler;
+            if ((gui.mode==HOST_GUI_SETUP && gui.setup_step==2) || gui.modal==MODAL_NATIVE) request_focus();
+        }
+    }
     unsigned focus_epoch=gui.focus_epoch;
     gui_ui_begin(width,height,overlay());
     gui_ui_panel(R(0,0,gui.width,gui.height),overlay() ? 0x00000000 : 0x0b0b10ff,0);

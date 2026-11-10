@@ -514,7 +514,7 @@ extern "C" int gui_ui_row(const char *id,const char *label,const char *sub,gui_r
     if (sub && *sub) {
         label_rect.Min.y+=pixel(8);label_rect.Max.y=label_rect.Min.y+pixel(25);
         ImRect sub_rect=it.rect;sub_rect.Min.x+=pixel(18);sub_rect.Max.x-=pixel(18);sub_rect.Min.y+=pixel(34);sub_rect.Max.y-=pixel(6);
-        text_at(sub,sub_rect,GUI_SUB,opacity(flags & GUI_DANGER ? colours[GUI_ERROR] : colours[GUI_DIM],it.enabled));
+        text_at(sub,sub_rect,GUI_SUB,opacity(flags & (GUI_DANGER|GUI_ALERT) ? colours[GUI_ERROR] : colours[GUI_DIM],it.enabled));
     } else { label_rect.Min.y+=std::round((it.rect.GetHeight()-ui.fonts[GUI_REGULAR]->FontSize)*0.5f); }
     text_at(label,label_rect,GUI_REGULAR,opacity(flags & GUI_DANGER ? colours[GUI_ERROR] : colours[GUI_TEXT],it.enabled));
     observe(id,label,it.id);
@@ -646,7 +646,8 @@ extern "C" int gui_ui_native_pick(gui_pick_t kind,char *path,size_t capacity) {
         nfdpickfolderu8args_t args={};NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_PickFolderU8_With(&selected,&args);
     } else {
-        nfdu8filteritem_t filter={host_gui_string(kind==GUI_PICK_DISC ? "nav.discs" : "nav.card"),kind==GUI_PICK_DISC ? "cue,bin" : "mcr,mcd,srm"};
+        nfdu8filteritem_t filter={host_gui_string(kind==GUI_PICK_DISC ? "nav.discs" : kind==GUI_PICK_ARCHIVE ? "browser.archives" : "nav.card"),
+            kind==GUI_PICK_DISC ? "cue,bin" : kind==GUI_PICK_ARCHIVE ? "zip" : "mcr,mcd,srm"};
         nfdopendialogu8args_t args={};args.filterList=&filter;args.filterCount=1;
         NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_OpenDialogU8_With(&selected,&args);

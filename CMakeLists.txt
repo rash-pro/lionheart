@@ -115,8 +115,9 @@ if(FF8_PLAYER)
   list(APPEND native_embedded_inputs "${CMAKE_SOURCE_DIR}/runtime/cpu.h" "${CMAKE_SOURCE_DIR}/runtime/perf_stats.h"
     "${CMAKE_SOURCE_DIR}/runtime/gte.h" "${CMAKE_SOURCE_DIR}/runtime/native_module.h" "${CMAKE_SOURCE_DIR}/runtime/native_module_api.h")
   set_source_files_properties("${native_embedded}" PROPERTIES OBJECT_DEPENDS "${native_embedded_inputs}")
-  target_sources(ff8 PRIVATE backends/host/native_build.c backends/host/native_player.c "${native_embedded}")
-  set_source_files_properties(backends/host/native_build.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+  target_sources(ff8 PRIVATE backends/host/native_build.c backends/host/native_player.c backends/host/native_setup.c
+    "${native_embedded}")
+  set_source_files_properties(backends/host/native_build.c backends/host/native_setup.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
   set_source_files_properties(backends/host/native_player.c PROPERTIES
     COMPILE_DEFINITIONS "LH_MODULE_ABI_ID=\"${LH_MODULE_ABI_ID}\"" COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic"
     INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/generator/src")
