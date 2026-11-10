@@ -31,10 +31,7 @@ Native test projects can add this directory with `add_subdirectory` and run
 `$<TARGET_FILE:assetgen>`, or use the standalone build above. Metadata fixtures
 can invoke the scripts with their own `INPUT` directory or JSON file.
 `test_disc_validation` and the identity-header fixtures in `test_host_player`
-can use the metadata interface. `test_host_gui` can use the GUI interface.
-`test_startup` and the synthetic-player fixtures still need the separate native
-catalog generator; these replacements remove only their header dependency.
-No tests are ported here.
+can use the metadata interface. `test_host_gui` use the GUI interface.
 
 For a cross-build, `host.cmake` configures a separate native CMake project and
 uses its executable. `LH_HOST_C_COMPILER` selects a host compiler if automatic

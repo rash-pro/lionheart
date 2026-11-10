@@ -1,4 +1,4 @@
-// Tests of the test framework. Their names do not start with test_, so they are
+// Framework checks use the infra tier and do not count toward the coverage baseline.
 #include "lh_internal.h"
 
 #include <chrono>

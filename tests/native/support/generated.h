@@ -1,5 +1,5 @@
-// Native cases that run the C generator on a synthetic program. A case builds
-// runtime, and calls the result. See "Generated programs" in tests/README.md.
+// Build synthetic programs with the C generator, compile against the runtime,
+// and call the result. See "Generated programs" in tests/README.md.
 #pragma once
 
 #include "lh_test.h"
@@ -13,7 +13,7 @@ extern "C" {
 }
 
 namespace lh::gen {
-// positions: r(18, rd=10) is r(18, 0, 0, 10).
+// Register operands follow the instruction fields: function, rs, rt, rd, shift.
 constexpr uint32_t r(uint32_t fn, uint32_t rs = 0, uint32_t rt = 0, uint32_t rd = 0, uint32_t sh = 0) {
     return rs << 21 | rt << 16 | rd << 11 | sh << 6 | fn;
 }
@@ -32,8 +32,7 @@ struct Words : std::vector<uint32_t> {
 inline Words operator+(Words a, const Words &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
 inline const Words RET = {r(8, 31), 0};
 
-// struct.pack('<%dI', *words): little-endian bytes of the words, which is what
-// both generators are given.
+// Pack instruction words as little-endian bytes.
 std::string pack(const Words &words);
 
 // recomp.discover.Image.
