@@ -38,7 +38,9 @@ const fs::path &Case::temp() {
         for (char &c : prefix) {
             if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '.') c = '_';
         }
-        temp_ = mkdtemp_under(fs::temp_directory_path() / "lionheart-tests", prefix.substr(0, 100) + "-");
+        // Programs print the paths the system gives them, so a temporary folder named through ".." or
+        // a link has to be compared in its resolved form.
+        temp_ = mkdtemp_under(fs::weakly_canonical(fs::temp_directory_path()) / "lionheart-tests", prefix.substr(0, 100) + "-");
     }
     return temp_;
 }
