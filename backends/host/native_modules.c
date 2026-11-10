@@ -75,7 +75,9 @@ int native_modules_configure(uint32_t fnv, uint32_t base, uint32_t size, const u
 
 static uint32_t read_u16(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8; }
 static uint32_t read_u32(const uint8_t *p) { return read_u16(p) | read_u16(p + 2) << 16; }
+#ifndef _WIN32
 static uint64_t read_u64(const uint8_t *p) { return (uint64_t)read_u32(p) | (uint64_t)read_u32(p + 4) << 32; }
+#endif
 
 /* Mapping a file whose contents end early succeeds and faults later, so its
  * declared extent is compared with the real length before anything maps it. */
