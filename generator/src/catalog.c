@@ -498,7 +498,7 @@ static const lhg_json *path_index_find(const path_index *index, const char *path
  * the last location listing them; set numbers below 128 stay the original
  * top-table overlays, and the rest are numbered in catalog order. */
 static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int present[5], const path_index indexes[5],
-                        lhg_plan_row **out, size_t *out_count)
+                        int strict, lhg_plan_row **out, size_t *out_count)
 {
     lhg_ctx *ctx = arena->ctx;
     lhg_plan_row *rows = NULL;
@@ -534,8 +534,15 @@ static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int pre
             lhg_plan_row *item = &rows[slot];
             const char *path = lhg_json_str(ctx, lhg_json_require(ctx, item->location, "path", "location"), "path");
             const lhg_json *inventory_entry = path_index_find(&indexes[item->disc], path);
-            if (!inventory_entry)
+            if (!inventory_entry && strict)
                 lhg_fail(ctx, "%s has no inventory entry on disc %d", path, item->disc);
+            /* A loader reports it where it always did: after the bytes were checked. */
+            if (!inventory_entry) {
+                item->missing = 1;
+                *out = rows;
+                *out_count = slot + 1;
+                return;
+            }
             const lhg_json *locator = lhg_json_require(ctx, inventory_entry, "locator", "inventory entry");
             int has_top = !strcmp(lhg_json_str(ctx, lhg_json_require(ctx, locator, "table", "locator"), "table"), "top");
             int64_t raw_top = has_top ? lhg_json_int(ctx, lhg_json_require(ctx, locator, "index", "locator"), "index") : -1;
@@ -595,7 +602,7 @@ void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_m
         path_index_build(arena, &indexes[number], lhg_json_list(ctx, lhg_json_require(ctx, inventory, "entries", "inventory"), "entries"));
         present[number] = 1;
     }
-    plan_groups(arena, catalog, present, indexes, rows, count);
+    plan_groups(arena, catalog, present, indexes, 1, rows, count);
 }
 
 void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
@@ -645,7 +652,7 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
 
     lhg_plan_row *plan;
     size_t plan_count, plan_next = 0;
-    plan_groups(arena, catalog, present, indexes, &plan, &plan_count);
+    plan_groups(arena, catalog, present, indexes, 0, &plan, &plan_count);
     lhg_json *evidence = lhg_json_new_object(arena);
     lhg_overlay_set *result = NULL;
     size_t result_count = 0, result_capacity = 0;
@@ -760,6 +767,9 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
             }
             /* The plan walked the same groups and locations in the same order. */
             const lhg_plan_row *planned = plan_next < plan_count ? &plan[plan_next++] : NULL;
+            if (planned && planned->missing)
+                lhg_fail(ctx, "%s has no inventory entry on disc %d",
+                         lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path"), disc);
             if (!planned || planned->group != group_index || planned->location != location || strcmp(planned->loaded_sha1, item->loaded_sha1))
                 lhg_fail(ctx, "%s: catalog plan disagrees with the verified images", group_name);
             int has_top = planned->has_top, top = planned->top, index = planned->index;

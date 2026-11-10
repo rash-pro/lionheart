@@ -64,7 +64,7 @@ disc's game sets (field, menus, world, battle and the rest of the non-effects); 
                                   modules/KEY.so (.dll) and KEY.ok, the receipt written after it
                                   sets/IDENTITY   the KEY that serves a set
                                   failed/IDENTITY attempts, KEY, the end of the compiler's diagnostics
-                                  work/       builds in progress
+                                  work/KEY/   a build in progress, kept to resume after a quit or crash
 ```
 
 The cache id is a SHA-256 of the module ABI id, the generator fingerprint, the embedded catalog, the pinned compiler
@@ -75,8 +75,10 @@ whose code is the same on four discs, or under two catalog names, is compiled on
 
 A module is valid only with its receipt, and the receipt only if the file still has the recorded size. Publication
 links the finished file into `modules/` without replacing anything, then writes the receipt and the set receipts by
-rename. A builder starting up removes `work/`, any module without a receipt and any leftover temporary file; nothing
-it removes has ever been loaded. A second player on the same data folder loads published modules, checks for new ones
+rename. A compiled object counts only once the compiler has finished and it has been renamed into place, so a builder
+starting up keeps `work/KEY/` folders of unpublished modules and resumes them; it removes anything else in `work/`,
+any module without a receipt and any leftover temporary file, none of which has ever been loaded. `work/` is emptied
+once everything is built. A second player on the same data folder loads published modules, checks for new ones
 every two seconds, and becomes the builder when the first one exits. A set whose module fails to compile or is
 refused by the loader is recorded in `failed/` with the end of the diagnostics (compiled without carets, so no
 source text, and with build paths removed), retried once on a later launch, and then left interpreted. A failure

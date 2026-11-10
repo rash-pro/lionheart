@@ -19,6 +19,8 @@ typedef struct {
     const lhg_json *group_json, *location;
     const char *group_name, *loaded_sha1;
     int index, disc, top, has_top;
+    /* No inventory entry: the loader fails here once the bytes are verified. */
+    int missing;
     /* Discs holding these loaded bytes. */
     unsigned discs;
 } lhg_plan_row;
