@@ -75,7 +75,8 @@ void lhg_analyze(lhg_arena *arena, const lhg_function *f, lhg_analysis *analysis
         const lhg_insn *i = &f->insns[index];
         if (!lhg_insn_flow(i))
             continue;
-        const lhg_insn *target = lhg_function_insn(f, (int64_t)lhg_insn_target(i));
+        /* A register jump has no static target: its low half holds rd, shamt and funct. */
+        const lhg_insn *target = i->op == LHG_OP_JR || i->op == LHG_OP_JALR ? NULL : lhg_function_insn(f, (int64_t)lhg_insn_target(i));
         if (target)
             analysis->is_leader[target - f->insns] = 1;
         const lhg_insn *after = lhg_function_insn(f, (int64_t)i->pc + 8);

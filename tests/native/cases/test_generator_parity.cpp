@@ -775,6 +775,27 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
+    if (fn == "test_register_jumps_make_no_leaders") {
+        // The return at +8 reads as an offset of 8 words to +44, which is in the
+        // function; only real branch targets and fall-through points resume.
+        Words w = {imm(4, 0, 0, 3), 0, r(8, 31), 0};
+        for (int n = 0; n < 7; ++n)
+            w.push_back(imm(9, 2, 2, 1));
+        w = w + Words{imm(9, 2, 2, 2), j(2, BASE + 8), 0};
+        auto main = image(w);
+        main["seeds"] = A{num(BASE)};
+        main["scan_calls"] = false;
+        for (auto v : std::vector<std::pair<std::string, std::string>>{{"fast", "precise"}, {"fast", "fast"}, {"trace", "fast"}}) {
+            auto spec = main_spec(main);
+            spec["mode"] = v.first;
+            spec["host_mode"] = v.second;
+            auto out = parity(t, spec, "register-jump-" + v.first + "-" + v.second);
+            auto tables = lh::read_file(out / "dispatch_table.c");
+            LH_CONTAINS(tables, "{0x80010010u, f_80010000},");
+            LH_NOT_CONTAINS(tables, "{0x8001002cu, f_80010000},");
+        }
+        return;
+    }
     if (fn == "test_hinted_zero_functions") {
         // A caller and, at +0x100, a delay function: `zeros` no-ops, then
         // `last` (a return when it is one) and a zero delay slot.
