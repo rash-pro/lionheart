@@ -44,6 +44,27 @@ function(player_licences dist)
       "You may replace the DLLs with compatible modified versions. No static FFmpeg linkage.\n"
       "Distributors must preserve LGPL notices and make corresponding source available;\n"
       "this source URL and the checked-in pinned fetch/build recipe accompany this distribution.\n")
+  elseif(PLATFORM STREQUAL "appimage")
+    configure_file("${DEP_SDL2}/LICENSE.txt" "${dest}/SDL2-zlib.txt" COPYONLY)
+    configure_file("${DEP_ffmpeg}/COPYING.LGPLv2.1" "${dest}/FFmpeg-LGPL-2.1.txt" COPYONLY)
+    configure_file("${DEP_zlib}/LICENSE" "${dest}/zlib.txt" COPYONLY)
+    configure_file("${DEP_curl}/COPYING" "${dest}/curl.txt" COPYONLY)
+    configure_file("${RELEASE_ROOT}/licenses/AppImage-runtime.txt" "${dest}/AppImage-runtime.txt" COPYONLY)
+    file(READ "${PREFIX}/ffmpeg-configure.txt" configure)
+    string(STRIP "${configure}" configure)
+    if(NOT configure MATCHES "^[.][.]/configure ")
+      message(FATAL_ERROR "Missing FFmpeg configure provenance")
+    endif()
+    string(REGEX REPLACE "^[^ ]+" "$FFMPEG_SOURCE/configure" configure "${configure}")
+    file(WRITE "${dest}/FFmpeg-configure.txt" "${configure}\n")
+    file(WRITE "${dest}/FFmpeg-source.txt"
+      "FFmpeg 7.1.1, unmodified source: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz\n"
+      "LGPL shared libraries in usr/lib; no GPL, nonfree or version3 enabled.\n"
+      "Rebuild with tools/build_appimage.cmake; the exact configure line is adjacent.\n"
+      "You may replace the libraries with compatible modified versions: extract the AppImage with\n"
+      "--appimage-extract and run squashfs-root/AppRun. No static FFmpeg linkage.\n"
+      "Distributors must preserve LGPL notices and make corresponding source available;\n"
+      "this source URL and the checked-in pinned fetch/build recipe accompany this distribution.\n")
   endif()
 endfunction()
 
