@@ -362,8 +362,7 @@ int code_valid(cpu_t *c, const code_region_t *region) {
      * region. Keep that answer beside the CPU state instead of touching the
      * large, hashed source cache at every checkpoint. */
     if (!region) return 0;
-    if (c->recent_region == region && c->recent_epoch == c->code_epoch)
-        return c->recent_valid;
+    if (code_valid_recent(c, region)) return c->recent_valid;
     c->recent_valid = code_valid_full(c, region);
     c->recent_region = region; c->recent_epoch = c->code_epoch;
     return c->recent_valid;

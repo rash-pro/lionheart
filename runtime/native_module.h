@@ -56,6 +56,7 @@ typedef struct {
     uint32_t flags, api_slots;
     uint32_t cpu_size, cpu_r, cpu_cycles, cpu_ram, cpu_code_epoch, cpu_recomp_instructions;
     uint32_t cpu_ram_limit, cpu_code_watched, cpu_load_reg, cpu_perf;
+    uint32_t cpu_recent_region, cpu_recent_epoch, cpu_recent_valid;
     uint32_t entry_size, region_size, span_size, overlay_size;
 } lh_module_traits;
 
@@ -66,6 +67,7 @@ typedef struct {
     (uint32_t)offsetof(cpu_t, ram), (uint32_t)offsetof(cpu_t, code_epoch), \
     (uint32_t)offsetof(cpu_t, recomp_instructions), (uint32_t)offsetof(cpu_t, ram_limit), \
     (uint32_t)offsetof(cpu_t, code_watched), (uint32_t)offsetof(cpu_t, load_reg), (uint32_t)offsetof(cpu_t, perf), \
+    (uint32_t)offsetof(cpu_t, recent_region), (uint32_t)offsetof(cpu_t, recent_epoch), (uint32_t)offsetof(cpu_t, recent_valid), \
     (uint32_t)sizeof(entry_t), (uint32_t)sizeof(code_region_t), (uint32_t)sizeof(code_span_t), (uint32_t)sizeof(overlay_t) }
 
 /* A main-owned function a module calls directly; the host writes the slot

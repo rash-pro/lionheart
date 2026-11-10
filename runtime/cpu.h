@@ -148,6 +148,12 @@ struct cpu {
     unsigned pc_profile_active;
 };
 
+/* code_valid's first answer: the region asked about last, unchanged since.
+ * Module code takes it without crossing into the runtime. */
+static inline int code_valid_recent(const cpu_t *c, const code_region_t *region) {
+    return c->recent_region == region && c->recent_epoch == c->code_epoch;
+}
+
 /* Module builds reach the runtime through a table, not through symbols. This
  * has to precede every prototype and inline below so that they all see it. */
 #ifdef FF8_NATIVE_MODULE

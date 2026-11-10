@@ -110,7 +110,11 @@ LH_MODULE_VALUE_CALLS(LHM_VALUE_FORWARD)
 #define hw_sr_changed lhm_hw_sr_changed
 #define interp_step lhm_interp_step
 #define mem_slow_write lhm_mem_slow_write
-#define code_valid lhm_code_valid
+/* Most checks repeat the last one; only a new question crosses the table. */
+static inline __attribute__((always_inline)) int lhm_code_valid_recent(cpu_t *c, const code_region_t *region) {
+    return region && code_valid_recent(c, region) ? c->recent_valid : lh_api.code_valid(c, region);
+}
+#define code_valid lhm_code_valid_recent
 #define gte_read lhm_gte_read
 #define mem_slow_read lhm_mem_slow_read
 /* cpu.h withholds this one's prototype from module builds. */
