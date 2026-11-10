@@ -90,6 +90,9 @@ You can also pass discs on the command line. Repeat `--disc` for each disc; Lion
 
 On Windows: `Lionheart.exe --disc "C:\Games\FF8\disc1.cue"`.
 
+Run `./build/lionheart --version` (Windows: `Lionheart.exe --version`) and include the output in bug reports.
+It prints the version and, for checkout builds, the commit and any `-dirty` marker without starting the player.
+
 ## Controls
 
 Controllers map to the original pad. Keyboard and hotkeys:
