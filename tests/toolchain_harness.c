@@ -59,6 +59,7 @@ int main(int argc,char **argv) {
     if(!strcmp(mode,"checksum")) hex[0]=hex[0]=='0'?'1':'0';
     if(!strcmp(mode,"size")) size++;
     host_tc_manifest m={"test","zip","payload/",files[0],hex,size,urls,argc>5?2:1,files,1};
+    if(!strcmp(mode,"no-url")) {m.urls=NULL;m.url_count=0;}
     host_tc_error error;
     printf("before=%d\n",host_tc_query(argv[1],&m));
     int ok=host_tc_install(argv[1],&m,!strcmp(argv[4],"offline")?argv[2]:NULL,progress,argv[1],&error);

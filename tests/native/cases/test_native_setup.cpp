@@ -8,6 +8,7 @@
 #include "synthetic_player.h"
 #include "host_fixtures.h"
 #include "network.h"
+#include "lh_json.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -118,7 +119,7 @@ struct Setup {
                                      "\nsize=" + std::to_string(bytes.size()) + "\nfile=zig\n" + (url.empty() ? "" : "url=" + url + "\n"));
     }
     // "shot NAME" in steps captures the screen to the pictures folder.
-    lh::Result run(std::string steps, const std::string &name = "gui") {
+    lh::Result run(std::string steps, const std::string &name = "gui", bool pinned = false) {
         const auto script = t.temp() / (name + ".txt");
         for (size_t at = 0; (at = steps.find("\nshot ", at)) != std::string::npos;) {
             const auto end = steps.find('\n', ++at);
@@ -130,7 +131,8 @@ struct Setup {
         auto command = lh::dummy(t.target(binary)).args({"--config", ini, "--gui-test", script, "--present-size", "1280x720"})
                            .cwd(t.temp()).env("SDL_RENDER_DRIVER", "software").env("HOME", t.temp().string())
                            .env("XDG_DATA_HOME", data.string()).env("XDG_CONFIG_HOME", (t.temp() / "config").string())
-                           .env("LIONHEART_TOOLCHAIN_TEST_MANIFEST", manifest.string()).timeout(120);
+                           .timeout(120);
+        if (!pinned) command.env("LIONHEART_TOOLCHAIN_TEST_MANIFEST", manifest.string());
         auto result = t.run(command);
         lh::write_file(t.temp() / (name + ".log"), result.out + result.err);
         LH_CHECK_MSG(result.rc == 0 && !result.timed_out, result.out + result.err);
@@ -243,6 +245,15 @@ LH_TEST(test_archive_chosen_in_the_file_browser_installs_offline) {
         "assert-focus browser.entry.0\nassert-text browser.entry.0 \"zig-test.zip\"\nshot browser-archive\nselect\n"
         "wait-text native.installed \"Installed\" 1800\nassert-focus btn.finish\nselect\nwait 3\nquit\n");
     LH_CHECK(s.installed());
+}
+
+LH_TEST(test_pinned_compiler_download_is_enabled_and_shows_manifest_size) {
+    Setup s(t);
+    auto entry = lh::Json::parse(lh::read_file(t.root()/"data/toolchain/manifest.json"))["platforms"]["x86_64-linux"];
+    LH_CHECK(entry["urls"].size() > 0);
+    auto mb = (entry["size"].integer() + 1048575) / 1048576;
+    s.run(to_compiler_step(s) + "assert-focus setup.native.download\n"
+          "assert-text setup.native.download.sub \"" + std::to_string(mb) + " MB\"\nquit\n", "pinned", true);
 }
 
 LH_TEST(test_skipping_the_step_still_reaches_the_game) {

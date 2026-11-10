@@ -33,3 +33,39 @@ turning those algorithms into CMake string processing. These tools add no depend
 Run the synthetic offline download-cache contracts with `cmake -P tools/test_release_tools.cmake`.
 They check extraction, cache reuse, source provenance, archive digests, archive sizes and missing inputs.
 The scanner's existing test identities are in `tests/native/cases/test_player_legal.cpp`.
+
+## Compiler release assets
+
+The player pins trimmed Zig ZIPs in `data/toolchain/manifest.json`. Official input
+names and SHA-256 values are reviewed separately in `data/toolchain/upstream.json`.
+Obtain those official Zig 0.17.1 archives from ziglang.org and verify upstream
+Minisign signatures when updating the pins. To reproduce either release asset:
+
+```sh
+cmake -DPLATFORM=x86_64-linux -DINPUT=/path/to/zig-x86_64-linux-0.17.1.tar.xz \
+  -DWORK=/outside/checkout/fresh-linux -DOUTPUT=/output/zig-0.17.1-x86_64-linux-cc.zip \
+  -P tools/toolchain_release.cmake
+```
+
+Repeat with `x86_64-windows`, its official `.zip` input and an independent fresh
+work directory. A host C compiler and zlib development files are required. The
+script verifies input SHA-256 before extracting only the selected files. It checks
+the output size and hash against the player manifest; use `-DVERIFY=OFF` only
+while preparing new pins, then repeat with verification enabled.
+
+`tools/toolchain-zip` writes ZIP32 entries compressed with zlib at level 9, in sorted
+path order, with a fixed DOS date of 1980-01-01, no extra fields or comments, and
+Unix regular-file permissions 0644 (0755 for the compiler). No source metadata,
+locale or timezone enters the bytes, so two builds with the same zlib are identical.
+The compressed bytes can differ between zlib versions and implementations; the
+pinned archives were written with zlib 1.3.2. With another zlib, check a published
+asset by content instead: extract it and the archive you built and compare the
+trees. Input bytes are copied unmodified. `LICENSE`, the LLVM text at
+`lib/libcxx/LICENSE.TXT`, and the added provenance `NOTICE.txt` are included and
+installed beside the compiler.
+
+Upload `zig-0.17.1-x86_64-linux-cc.zip` and
+`zig-0.17.1-x86_64-windows-cc.zip` as assets of this repository's
+`toolchain-zig-0.17.1` GitHub release after checking both manifest hashes. The
+builder itself creates no tag or release and performs no upload. Build each in
+two fresh work directories and compare the ZIPs before publishing.

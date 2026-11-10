@@ -40,6 +40,7 @@ inline lh::fs::path player(lh::Case &t, bool dev = false) {
         for (auto &f : files) inputs += f.string() + lh::read_file(f);
     }
     inputs += lh::read_file(t.root()/"CMakeLists.txt") + lh::read_file(t.root()/"tests/native/support/synthetic_player.h");
+    inputs += lh::read_file(t.root()/"data/toolchain/manifest.json");
     auto dir = lh::fs::temp_directory_path()/("lionheart-synthetic-"+lh::sha256(inputs)+(dev?"-dev":"-player"));
     lh::fs::create_directories(dir);
     int fd = open((dir/"lock").c_str(), O_CREAT|O_RDWR, 0600);

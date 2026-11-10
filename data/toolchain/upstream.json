@@ -1,0 +1,10 @@
+{
+  "x86_64-linux": {
+    "file": "zig-x86_64-linux-0.17.1.tar.xz",
+    "sha256": "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a"
+  },
+  "x86_64-windows": {
+    "file": "zig-x86_64-windows-0.17.1.zip",
+    "sha256": "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e"
+  }
+}
