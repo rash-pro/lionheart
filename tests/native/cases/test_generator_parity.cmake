@@ -1,0 +1,11 @@
+if(NOT CMAKE_CROSSCOMPILING)
+  # The standalone generator's Release default must not change harness flags.
+  if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE None)
+  endif()
+  set(LIONHEART_GENERATOR_SANITIZE ${FF8_TEST_SANITIZE})
+  add_subdirectory("${LH_ROOT}/generator" "${CMAKE_BINARY_DIR}/generator-parity")
+  add_executable(test_generator_parity.lionheart-gen-spec ALIAS lionheart-gen-spec)
+  add_executable(test_generator_parity.lionheart-gen ALIAS lionheart-gen)
+  set_property(GLOBAL APPEND PROPERTY LH_HARNESSES test_generator_parity.lionheart-gen-spec test_generator_parity.lionheart-gen)
+endif()

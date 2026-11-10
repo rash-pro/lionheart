@@ -8,7 +8,16 @@ if(DEFINED ENV{CTEST_PARALLEL_LEVEL} AND NOT "$ENV{CTEST_PARALLEL_LEVEL}" STREQU
 else()
   cmake_host_system_information(RESULT jobs QUERY NUMBER_OF_LOGICAL_CORES)
 endif()
-execute_process(COMMAND "${CTEST}" --test-dir "${BUILD}" -j${jobs} -LE realtime --output-junit "${BUILD}/parity.xml")
+if(DEFINED ENV{LH_PARITY_STEMS})
+  set(STEMS "$ENV{LH_PARITY_STEMS}")
+endif()
+set(selection "")
+if(STEMS)
+  list(JOIN STEMS "|" stems_regex)
+  set(selection -R "^(${stems_regex})::")
+endif()
+execute_process(COMMAND "${CTEST}" --test-dir "${BUILD}" -j${jobs} -LE realtime ${selection}
+                --output-junit "${BUILD}/parity.xml")
 execute_process(COMMAND "${RUNNER}" --build-info "${INFO}" --compare-results "${BUILD}/parity.xml" ${STEMS}
                 RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
