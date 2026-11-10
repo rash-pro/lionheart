@@ -543,11 +543,13 @@ int main(int argc, char **argv) {
     int option_start = 2;
 #ifdef FF8_PLAYER
     char default_card[4096] = {0}, default_states[4096] = {0};
+    int positional_disc = 0;
     if (argc < 2 || !strncmp(argv[1],"--",2)) { exe_path = NULL; option_start = 1; }
     else {
         size_t n = strlen(argv[1]);
         if (n >= 4 && (!SDL_strcasecmp(argv[1]+n-4,".cue") || !SDL_strcasecmp(argv[1]+n-4,".bin"))) {
             disc_paths[disc_count++] = argv[1]; exe_path = NULL;
+            positional_disc = 1;
         }
     }
 #endif
@@ -696,13 +698,15 @@ int main(int argc, char **argv) {
         if (!bad_disc) {
             char paths[4][512] = {{0}};
             const char *long_paths[4] = {0};
+            /* Opening one image from the desktop keeps the other known discs. */
+            if (positional_disc) memcpy(paths,options.discs,sizeof(paths));
             for (d=0;d<4;++d) if (sorted[d]) {
                 if (strlen(sorted[d]) >= sizeof(paths[d])) long_paths[d] = sorted[d];
                 else strcpy(paths[d],sorted[d]);
             }
             memcpy(options.discs,paths,sizeof(paths));
             for (d=0;d<4;++d) disc_paths[d] = long_paths[d] ? long_paths[d] : *options.discs[d] ? options.discs[d] : NULL;
-        } else {
+        } else if (!positional_disc) {
             /* Keep rejected paths visible to the GUI worker for replacement. */
             char paths[4][512] = {{0}};
             for (d=0;d<count;++d) {
@@ -710,6 +714,8 @@ int main(int argc, char **argv) {
                 strcpy(paths[d],supplied[d]);
             }
             memcpy(options.discs,paths,sizeof(paths));
+            for (d=0;d<4;++d) disc_paths[d] = *options.discs[d] ? options.discs[d] : NULL;
+        } else {
             for (d=0;d<4;++d) disc_paths[d] = *options.discs[d] ? options.discs[d] : NULL;
         }
         disc_count = 0;

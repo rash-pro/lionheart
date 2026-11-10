@@ -2,7 +2,8 @@
 Type=Application
 Name=Lionheart
 Comment=Play Final Fantasy VIII from your own discs
-Exec=lionheart
+Exec=lionheart %f
+MimeType=application/x-cue;
 Icon=lionheart
 Terminal=false
 Categories=Game;
