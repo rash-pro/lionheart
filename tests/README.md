@@ -309,8 +309,10 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 ## What can be ported next
 
 Every file represented in `identities.tsv` has a complete native case file.
-`tests/test_dispatch_index.py` is the only pytest file without a native port;
-it was added after the inventory and has no inventory rows yet.
+`tests/test_dispatch_index.py` still needs a native port and inventory rows.
+`test_generator_parity.py` is also outside the inventory and has no native case
+file: it compares the native generator with the Python implementation and stays
+until Python is removed.
 
 Before adding a helper under `support/`, look for one that already does the job.
 

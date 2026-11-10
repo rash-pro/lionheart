@@ -20,9 +20,9 @@ LH_TEST(pause_probe_replays_the_player_compile_and_link_commands) {
         }
         compile.insert(compile.end(),{"-MD","-MMD","-MP","-MF",(build/"must-stay.d").string(),"-MT","main.o","-MQ","main.o"});
         auto recorded=compile;lh::replace_operand(recorded,"-c",t.root()/"backends/host/main.c");
-        dt::Json row=dt::Json::Object{{"directory",build.string()},{"file",(t.root()/"backends/host/main.c").string()}};
-        if(arguments) {dt::Json array=dt::Json::array();for(const auto &s:recorded) array.push(s);row.set("arguments",array);}else row.set("command",shell(recorded));
-        lh::write_file(build/"compile_commands.json",dt::Json(dt::Json::Array{row}).dump());
+        lh::Json::Object row={{"directory",build.string()},{"file",(t.root()/"backends/host/main.c").string()}};
+        if(arguments) {lh::Json::Array array;for(const auto &s:recorded) array.emplace_back(s);row.emplace("arguments",array);}else row.emplace("command",shell(recorded));
+        lh::write_file(build/"compile_commands.json",lh::Json(lh::Json::Array{lh::Json(row)}).dump());
         std::vector<std::string> link={"cc",(build/"main.o").string(),(build/"cpu.o").string(),(build/"gui.o").string(),"-o",(build/"lionheart").string(),"-Wl,--dependency-file="+(build/"link.d").string()};
         lh::write_file(build/"CMakeFiles/ff8.dir/link.txt",shell(link));lh::run_arguments(t,link,build);
         lh::write_file(build/"must-stay.d","unchanged\n");

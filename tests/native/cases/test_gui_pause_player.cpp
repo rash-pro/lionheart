@@ -21,8 +21,8 @@ LH_GAME_TEST_P(test_actual_modal_loop_freezes_every_cpu_byte,renderers) {
         if(!control) command.args({"--gui-test",script});
         command=lh::dummy(command).cwd(out).env("VK_DRIVER_FILES",icd.string()).env("XDG_DATA_HOME",(out/"data").string()).timeout(180);
         if(fault) command.env("FF8_GUI_PAUSE_PROBE_STEP","1");auto result=t.run(command);lh::write_file(out/"run.log",result.out+result.err);
-        dt::Json args=dt::Json::array();args.push(binary.string());for(const auto &arg:command.arguments()) args.push(arg.text());
-        lh::write_file(out/"receipt.json",dt::Json(dt::Json::Object{{"command",args},{"exit",result.rc},{"binary_sha256",lh::sha256_file(binary)},{"injected_retirement",fault}}).dump(2)+"\n");
+        lh::Json::Array args{binary.string()};for(const auto &arg:command.arguments()) args.emplace_back(arg.text());
+        lh::write_file(out/"receipt.json",lh::Json(lh::Json::Object{{"command",args},{"exit",result.rc},{"binary_sha256",lh::sha256_file(binary)},{"injected_retirement",fault}}).dump(2)+"\n");
         if(fault) {LH_EQ(result.rc,99);LH_CONTAINS(result.err,"guest changed inside modal loop");continue;}
         LH_CHECK_MSG(result.rc==0,result.out+result.err);LH_CONTAINS(result.out,"Stop: VBlank limit reached");
         if(!control) {
