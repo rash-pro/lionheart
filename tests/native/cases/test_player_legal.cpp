@@ -103,6 +103,13 @@ static const char *const sources[]={"generated-exact/catalog.c","gen/overlay_2_0
 LH_TEST_P(test_catalog_sources_are_rejected,sources) {
     rejects([&]{pc::check_compile_commands(database(t,{},p));},"generated catalog source");
 }
+LH_TEST(test_player_module_cache_paths_are_rejected) {
+    const std::string cache="data/lionheart/native/0123456789abcdef0123456789abcdef/fedcba9876543210fedcba9876543210";
+    rejects([&]{pc::check_compile_commands(database(t,{},cache+"/work/1-1/unit_000.c"));},"generated catalog source");
+    rejects([&]{pc::check_compile_commands(database(t,{"-I",cache+"/include"}));},"generated catalog include");
+    // Other folders that happen to be called native stay allowed.
+    LH_CHECK(pc::check_compile_commands(database(t,{"-Itests/native/support"},"tests/native/cases/x.c")).at("passed").truth());
+}
 LH_TEST(test_named_catalog_directory_and_symlink_are_rejected) {
     auto catalog=t.temp()/"catalog"; lh::fs::create_directory(catalog); lh::fs::create_directory_symlink(catalog,t.temp()/"alias");
     rejects([&]{pc::check_compile_commands(database(t,{"-Ialias"}),{catalog});},"generated catalog include");

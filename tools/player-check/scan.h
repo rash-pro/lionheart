@@ -114,6 +114,13 @@ inline Json check_compile_commands(const fs::path &input,const std::vector<fs::p
         if(kind=="include" && lower(path.filename().string()).find("generated")!=std::string::npos) bad=true;
         for(auto &root:roots) { auto p=path; for(;;) { if(p==root) bad=true; auto parent=p.parent_path(); if(parent==p) break; p=parent; } }
         if(kind=="source" && std::regex_search(path.filename().string(),std::regex("^(functions_|overlay_|dispatch_table|interpreter_table)"))) bad=true;
+        // The player's own module cache, <data>/native/<cache id>/...: code generated from a player's discs.
+        std::string previous;
+        for(auto &part:path) {
+            auto name=lower(part.string());
+            if(previous=="native" && name.size()==32 && name.find_first_not_of("0123456789abcdef")==std::string::npos) bad=true;
+            previous=name;
+        }
         require(!bad,"generated catalog "+kind+" in player compile command: "+path.string());
     };
     std::vector<std::string> options={"-I","-isystem","-iquote","-idirafter","-include","-imacros","-isystem-after","-iframework","-F","--include-directory","/I","/FI","/external:I"};
