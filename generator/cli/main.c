@@ -37,7 +37,7 @@ static void usage(FILE *to)
     fprintf(to,
             "usage: lionheart-gen [EXE] [--disc CUE ...] [--catalog DIR] [--assets-dir DIR]\n"
             "                     [-o DIR] [--mode trace|fast] [--timing exact|block|loose]\n"
-            "                     [--host-mode precise|fast] [--legacy-overlays]\n");
+            "                     [--host-mode precise|fast] [--legacy-overlays] [--shape linked|modules]\n");
 }
 
 static const char *value_of(int argc, char **argv, int *index, const char *arg, const char *flag)
@@ -138,6 +138,18 @@ int main(int argc, char **argv)
                 options.host_mode = LHG_HOST_FAST;
             else {
                 fprintf(stderr, "lionheart-gen: unknown --host-mode %s\n", value);
+                return 2;
+            }
+        } else if (matches_flag(arg, "--shape")) {
+            const char *value = value_of(argc, argv, &index, arg, "--shape");
+            if (!value)
+                return 2;
+            if (!strcmp(value, "linked"))
+                options.shape = LHG_SHAPE_LINKED;
+            else if (!strcmp(value, "modules"))
+                options.shape = LHG_SHAPE_MODULES;
+            else {
+                fprintf(stderr, "lionheart-gen: unknown --shape %s\n", value);
                 return 2;
             }
         } else if (!strcmp(arg, "--legacy-overlays")) {

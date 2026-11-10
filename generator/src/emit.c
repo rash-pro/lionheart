@@ -10,23 +10,13 @@
 enum { UNIT_FUNCTIONS = 24 };
 
 typedef struct {
-    uint32_t start, size;
-} span;
-
-typedef struct {
-    const span *items;
-    uint32_t count;
-    uint64_t fingerprint;
-} span_list;
-
-typedef struct {
     const char *prefix;
     const lhg_image *image;
     const lhg_functions *functions;
     int has_index, index;
     int poll_forward, direct_memory;
     uint32_t *owners;
-    span_list *spans;
+    lhg_span_list *spans;
 } emit_set;
 
 typedef struct {
@@ -34,10 +24,6 @@ typedef struct {
     uint32_t set, function;
     int used;
 } owner_slot;
-
-typedef struct {
-    uint32_t pc, owner, sequence;
-} entry_pair;
 
 /* Interned text for per-unit symbol collection. */
 typedef struct {
@@ -266,9 +252,9 @@ static size_t count_unique_pcs(lhg_ctx *ctx, const lhg_function *const *function
     return unique;
 }
 
-static void code_spans(lhg_arena *arena, const lhg_function *f, span_list *list)
+void lhg_code_spans(lhg_arena *arena, const lhg_function *f, lhg_span_list *list)
 {
-    span *spans = lhg_arena_alloc(arena, (f->insn_count + f->table_word_count + 1) * sizeof *spans);
+    lhg_span *spans = lhg_arena_alloc(arena, (f->insn_count + f->table_word_count + 1) * sizeof *spans);
     uint32_t count = 0, left = 0, right = 0;
     while (left < f->insn_count || right < f->table_word_count) {
         uint32_t pc;
@@ -292,16 +278,16 @@ static void code_spans(lhg_arena *arena, const lhg_function *f, span_list *list)
     list->count = count;
 }
 
-static const uint8_t *image_bytes(const lhg_image *image, uint32_t pc)
+const uint8_t *lhg_image_bytes(const lhg_image *image, uint32_t pc)
 {
     return image->data + (size_t)((int64_t)pc - (int64_t)image->base);
 }
 
-static uint64_t spans_fingerprint(const lhg_image *image, const span_list *list)
+uint64_t lhg_spans_fingerprint(const lhg_image *image, const lhg_span_list *list)
 {
     uint64_t state = LHG_FNV64_INIT;
     for (uint32_t index = 0; index < list->count; index++)
-        state = lhg_fnv64_add(state, image_bytes(image, list->items[index].start), list->items[index].size);
+        state = lhg_fnv64_add(state, lhg_image_bytes(image, list->items[index].start), list->items[index].size);
     return state;
 }
 
@@ -310,13 +296,13 @@ static int same_code(const emit_set *a, uint32_t a_function, const emit_set *b, 
     const lhg_function *fa = &a->functions->items[a_function], *fb = &b->functions->items[b_function];
     if (fa->entry != fb->entry)
         return 0;
-    const span_list *la = &a->spans[a_function], *lb = &b->spans[b_function];
+    const lhg_span_list *la = &a->spans[a_function], *lb = &b->spans[b_function];
     if (la->count != lb->count || la->fingerprint != lb->fingerprint)
         return 0;
     for (uint32_t index = 0; index < la->count; index++) {
         if (la->items[index].start != lb->items[index].start || la->items[index].size != lb->items[index].size)
             return 0;
-        if (memcmp(image_bytes(a->image, la->items[index].start), image_bytes(b->image, lb->items[index].start), la->items[index].size))
+        if (memcmp(lhg_image_bytes(a->image, la->items[index].start), lhg_image_bytes(b->image, lb->items[index].start), la->items[index].size))
             return 0;
     }
     return 1;
@@ -340,8 +326,8 @@ static void assign_owners(lhg_arena *arena, emit_set *sets, size_t set_count)
         set->spans = lhg_arena_alloc(arena, (count + 1) * sizeof *set->spans);
         for (uint32_t row = 0; row < count; row++) {
             const lhg_function *f = &set->functions->items[row];
-            code_spans(arena, f, &set->spans[row]);
-            set->spans[row].fingerprint = spans_fingerprint(set->image, &set->spans[row]);
+            lhg_code_spans(arena, f, &set->spans[row]);
+            set->spans[row].fingerprint = lhg_spans_fingerprint(set->image, &set->spans[row]);
             uint64_t hash = set->spans[row].fingerprint ^ ((uint64_t)f->entry * UINT64_C(0x9E3779B97F4A7C15));
             size_t at = (size_t)hash & (capacity - 1);
             uint32_t owner = (uint32_t)set_index;
@@ -367,7 +353,7 @@ static void assign_owners(lhg_arena *arena, emit_set *sets, size_t set_count)
 
 static int compare_entry_pair(const void *a, const void *b)
 {
-    const entry_pair *x = a, *y = b;
+    const lhg_entry_pair *x = a, *y = b;
     if (x->pc != y->pc)
         return x->pc < y->pc ? -1 : 1;
     return x->sequence < y->sequence ? -1 : x->sequence > y->sequence;
@@ -375,10 +361,10 @@ static int compare_entry_pair(const void *a, const void *b)
 
 /* Maps every resume point to the function that owns it. Function entries are
  * seeded first, so a shared leader keeps the earliest owner in entry order. */
-static size_t build_entry_map(lhg_ctx *ctx, const lhg_functions *functions, lhg_arena *scratch, int compact, entry_pair **out)
+size_t lhg_build_entry_map(lhg_ctx *ctx, const lhg_functions *functions, lhg_arena *scratch, int compact, lhg_entry_pair **out)
 {
     size_t capacity = 16, count = 0;
-    entry_pair *pairs = lhg_alloc(ctx, capacity * sizeof *pairs);
+    lhg_entry_pair *pairs = lhg_alloc(ctx, capacity * sizeof *pairs);
     for (size_t row = 0; row < functions->count; row++) {
         pairs = lhg_grow(ctx, pairs, &capacity, count, sizeof *pairs);
         pairs[count].pc = functions->items[row].entry;
@@ -411,7 +397,7 @@ static size_t build_entry_map(lhg_ctx *ctx, const lhg_functions *functions, lhg_
     return unique;
 }
 
-static int same_entry_maps(const entry_pair *a, size_t a_count, const entry_pair *b, size_t b_count)
+static int same_entry_maps(const lhg_entry_pair *a, size_t a_count, const lhg_entry_pair *b, size_t b_count)
 {
     if (a_count != b_count)
         return 0;
@@ -427,7 +413,7 @@ static void add_line(lhg_text *text, const char *line)
     lhg_text_add(text, "\n", 1);
 }
 
-static void emit_map_entries(lhg_text *tables, lhg_arena *scratch, const entry_pair *pairs, size_t count, const emit_set *sets,
+static void emit_map_entries(lhg_text *tables, lhg_arena *scratch, const lhg_entry_pair *pairs, size_t count, const emit_set *sets,
                              const emit_set *set, const lhg_functions *main_functions)
 {
     if (!count) {
@@ -443,7 +429,7 @@ static void emit_map_entries(lhg_text *tables, lhg_arena *scratch, const entry_p
     lhg_arena_reset(scratch);
 }
 
-static void emit_map_regions(lhg_text *tables, lhg_arena *scratch, const entry_pair *pairs, size_t count, const emit_set *sets,
+static void emit_map_regions(lhg_text *tables, lhg_arena *scratch, const lhg_entry_pair *pairs, size_t count, const emit_set *sets,
                              const emit_set *set)
 {
     if (!count) {
@@ -654,7 +640,7 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
         for (size_t row = 0; row < item_count; row++) {
             const lhg_function *f = items[row];
             size_t function_row = (size_t)(f - set->functions->items);
-            const span_list *spans = &set->spans[function_row];
+            const lhg_span_list *spans = &set->spans[function_row];
             const char *name = lhg_fmt(&unit_arena, "%scode_%X", set->prefix, f->entry);
             lhg_text_addf(&tables, &unit_arena, "static const code_span_t %s_spans[] = {", name);
             for (uint32_t s = 0; s < spans->count; s++) {
@@ -690,9 +676,9 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
         const char *table_name = set->has_index ? lhg_fmt(arena, "%sentries", set->prefix) : "generated_entries";
         const char *region_name = set->has_index ? lhg_fmt(arena, "%sregions", set->prefix) : "generated_regions";
         lhg_text_addf(&tables, &unit_arena, "const entry_t %s[] = {\n", table_name);
-        entry_pair *dispatch_pairs, *compact_pairs;
-        size_t dispatch_count = build_entry_map(ctx, set->functions, &function_arena, 0, &dispatch_pairs);
-        size_t compact_count = build_entry_map(ctx, set->functions, &function_arena, 1, &compact_pairs);
+        lhg_entry_pair *dispatch_pairs, *compact_pairs;
+        size_t dispatch_count = lhg_build_entry_map(ctx, set->functions, &function_arena, 0, &dispatch_pairs);
+        size_t compact_count = lhg_build_entry_map(ctx, set->functions, &function_arena, 1, &compact_pairs);
         int same_maps = same_entry_maps(dispatch_pairs, dispatch_count, compact_pairs, compact_count);
         if (!same_maps) {
             add_line(&tables, "#if defined(FF8_COMPACT)");

@@ -148,10 +148,18 @@ struct cpu {
     unsigned pc_profile_active;
 };
 
+/* Module builds reach the runtime through a table, not through symbols. This
+ * has to precede every prototype and inline below so that they all see it. */
+#ifdef FF8_NATIVE_MODULE
+#include "native_module_api.h"
+#endif
+
 void cpu_init(cpu_t *c);
 void dispatch_invalidate(cpu_t *c);
 void cpu_log(cpu_t *c, const char *format, ...);
+#ifndef FF8_NATIVE_MODULE
 void cpu_stop(cpu_t *c, const char *format, ...);
+#endif
 void cpu_exception(cpu_t *c, unsigned code, uint32_t bad_address);
 void c_poll(cpu_t *c);
 void hw_event(cpu_t *c);

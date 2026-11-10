@@ -38,6 +38,10 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         lhg_fail(&ctx, "unknown timing policy: %d", options->timing);
     if (options->timing != LHG_TIMING_EXACT && options->mode == LHG_MODE_TRACE)
         lhg_fail(&ctx, "experimental timing requires fast emission");
+    if (options->shape != LHG_SHAPE_LINKED && options->shape != LHG_SHAPE_MODULES)
+        lhg_fail(&ctx, "unknown output shape: %d", options->shape);
+    if (options->shape == LHG_SHAPE_MODULES && (options->mode != LHG_MODE_FAST || options->host_mode != LHG_HOST_PRECISE || options->timing != LHG_TIMING_EXACT))
+        lhg_fail(&ctx, "module output requires fast emission, a precise host and exact timing");
 
     const lhg_register_cache *selection = options->register_cache;
     if (selection)
@@ -64,10 +68,13 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
     lhg_discover(&arena, program.main, experimental ? program.main->timing_entry_points : NULL,
                  experimental ? program.main->timing_entry_point_count : 0, 1, &functions);
 
-    lhg_emit_options emit_options = {options->mode, options->host_mode, options->timing, selection};
+    lhg_emit_options emit_options = {options->mode, options->host_mode, options->timing, selection, options->shape};
     lhg_emit_result result;
     memset(&result, 0, sizeof result);
-    lhg_emit(&arena, program.main, &functions, options->output_dir, program.overlays, program.overlay_count, &emit_options, &result);
+    if (options->shape == LHG_SHAPE_MODULES)
+        lhg_emit_modules(&arena, program.main, &functions, options->output_dir, program.overlays, program.overlay_count, &result);
+    else
+        lhg_emit(&arena, program.main, &functions, options->output_dir, program.overlays, program.overlay_count, &emit_options, &result);
 
     if (summary) {
         summary->functions = (unsigned long)result.functions;
