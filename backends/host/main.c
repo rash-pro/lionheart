@@ -40,6 +40,7 @@
 #include "native_modules.h"
 #ifdef FF8_PLAYER
 #include "native_player.h"
+#include "native_setup.h"
 #endif
 #include <errno.h>
 #include <limits.h>
@@ -67,6 +68,12 @@ static unsigned native_workers;
 static const char *native_compiler;
 static volatile sig_atomic_t native_interrupted;
 static void native_interrupt(int signal_number) { (void)signal_number; native_interrupted = 1; }
+/* Building starts at boot when the compiler is there, or as soon as it is
+ * installed during the session. */
+static host_native_options_t native_options;
+static int native_waiting, native_announced;
+static char native_data[4096];
+static void native_poll(void);
 #endif
 static host_input_t input;
 static host_state_bridge_t *state_bridge;
@@ -114,6 +121,9 @@ static void gui_changed(void *context, const char *key, int overlay) {
         disc_count = 0;
         for (d=0;d<4;++d) if (disc_paths[d]) disc_count = d+1;
         gui_hotkeys(o);
+#ifdef FF8_PLAYER
+        host_native_discs(disc_paths,host_display_disc_value());
+#endif
     }
 }
 static void gui_action(void *context, unsigned scancode) {
@@ -136,9 +146,57 @@ static const char *gui_device(void *context) { (void)context; return host_displa
 static const char *gui_controller(void *context) { (void)context; return host_display_gui_controller(); }
 static int gui_controller_type(void *context) { (void)context; return host_display_gui_controller_type(); }
 static int gui_fullscreen_exclusive(void *context) { (void)context; return host_display_gui_fullscreen_exclusive(); }
+#ifdef FF8_PLAYER
+static void gui_native(void *context, host_gui_native_t *out) {
+    const host_tc_manifest *manifest = native_setup_manifest();
+    native_setup_status_t setup;
+    (void)context;
+    native_poll();
+    native_setup_status(&setup);
+    memset(out,0,sizeof(*out));
+    out->compiler = setup.state==NATIVE_SETUP_RUNNING ? HOST_GUI_COMPILER_INSTALLING :
+        setup.state==NATIVE_SETUP_FAILED ? HOST_GUI_COMPILER_FAILED :
+        setup.state==NATIVE_SETUP_INSTALLED ? HOST_GUI_COMPILER_READY : HOST_GUI_COMPILER_MISSING;
+    out->step = (host_gui_step_t)setup.phase; out->done = setup.done; out->total = setup.total;
+    out->bytes = manifest->size; out->downloadable = manifest->url_count>0;
+    if (manifest->url_count) {
+        const char *name = strrchr(manifest->urls[0],'/');
+        if (name && name[1] && strlen(name+1)<sizeof(out->archive)) strcpy(out->archive,name+1);
+    }
+    snprintf(out->reason,sizeof(out->reason),"%s",setup.reason);
+    out->seconds_left = -1;
+    if (host_native_running()) {
+        native_build_status_t status;
+        native_build_status(&status);
+        out->build = status.state==NATIVE_BUILD_DONE ? HOST_GUI_BUILD_DONE : status.state==NATIVE_BUILD_STOPPED ? HOST_GUI_BUILD_STOPPED :
+            status.state==NATIVE_BUILD_OFF ? HOST_GUI_BUILD_OFF : HOST_GUI_BUILD_RUNNING;
+        out->sets = status.sets; out->ready = status.ready; out->failed = status.failed;
+        out->seconds_left = status.seconds_left;
+        snprintf(out->error,sizeof(out->error),"%s",status.error);
+    }
+}
+static void gui_native_install(void *context, const char *archive) { (void)context; native_setup_install(archive); }
+static void gui_native_cancel(void *context) { (void)context; native_setup_cancel(); }
+static unsigned gui_native_failures(void *context, host_gui_failure_t *rows, unsigned capacity) {
+    native_build_failure_t found[16];
+    size_t total, i;
+    (void)context;
+    if (!host_native_running()) return 0;
+    total = native_build_failures(found, capacity < 16 ? capacity : 16);
+    for (i = 0; i < total && i < capacity && i < 16; ++i) {
+        snprintf(rows[i].name,sizeof(rows[i].name),"%s",found[i].name);
+        snprintf(rows[i].words,sizeof(rows[i].words),"%s",found[i].words);
+    }
+    return (unsigned)total;
+}
+#endif
 static host_gui_services_t gui_services(gui_session_t *session) {
     host_gui_services_t services = {session,gui_changed,gui_action,gui_state_slot,gui_state_available,
-        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive};
+        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive,NULL,NULL,NULL,NULL};
+#ifdef FF8_PLAYER
+    services.native = gui_native; services.native_install = gui_native_install;
+    services.native_cancel = gui_native_cancel; services.native_failures = gui_native_failures;
+#endif
     return services;
 }
 static host_gui_result_t gui_shell_display(host_options_t *o) {
@@ -197,8 +255,35 @@ static void trace(void *context, const char *line) {
     fprintf((FILE *)context, "%s\n", line);
 }
 
+#ifdef FF8_PLAYER
+static void native_poll(void) {
+    native_setup_status_t setup;
+    native_build_status_t status;
+    if (native_waiting) {
+        native_setup_status(&setup);
+        if (setup.state == NATIVE_SETUP_INSTALLED) {
+            native_waiting = 0;
+            host_native_start(native_data, disc_paths, host_display_disc_value(), &native_options);
+        }
+    }
+    if (native_announced || !host_native_running()) return;
+    native_build_status(&status);
+    if (status.first_tier_seconds <= 0 || status.cached_seconds <= 0) return;
+    native_announced = 1;
+    /* Only news is said: a launch that found the first tier in the cache
+     * says nothing. */
+    if (status.first_tier_seconds <= status.cached_seconds) return;
+    fprintf(stderr, "native: first tier native after %.1f s\n", status.first_tier_seconds);
+#ifdef FF8_GUI
+    host_osd_post(host_gui_string("osd.native"), host_gui_string("osd.native.value"), 0);
+#endif
+}
+#endif
 static void present_frame(cpu_t *c, void *context) {
     (void)context;
+#ifdef FF8_PLAYER
+    native_poll();
+#endif
     if (!host_audio_pump(c->hw->spu)) cpu_stop(c, "host audio dump failed");
     host_present(c->hw->gpu);
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
@@ -686,12 +771,21 @@ int main(int argc, char **argv) {
     if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
     host_ra_configure(data_dir,options.ra,options.ra_notify);
     atexit(host_ra_shutdown);
+#ifdef FF8_PLAYER
+    snprintf(native_data,sizeof(native_data),"%s",data_dir);
+    native_setup_configure(data_dir);
+    /* An installation still running when the player ends is cancelled. */
+    atexit(native_setup_shutdown);
+#endif
 #ifdef FF8_GUI
     if (gui_allowed) {
         if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
         if (!host_gui_configure(&options,data_dir,&services,options.gui_test)) { host_gui_shutdown(); free(c); return 2; }
         gui_configured = 1;
-        if (!headless && (options.gui || startup_problem)) {
+#ifdef FF8_PLAYER
+        if (host_session_crash_log()) host_gui_previous_crash(host_session_crash_log());
+#endif
+        if (!headless && (options.gui || startup_problem || host_gui_wants_shell())) {
             host_gui_result_t shell;
             if (*startup_detail) host_gui_startup_error(startup_pane,startup_detail);
             if (options.gui) host_gui_hub();
@@ -941,8 +1035,11 @@ int main(int argc, char **argv) {
     /* The player starts on the interpreter and switches set by set as its own
      * modules arrive; without the compiler this starts nothing. */
     if (!native_off) {
-        host_native_options_t native = {native_status, native_workers, native_compiler};
-        if (!host_native_start(c, data_dir, disc_paths, 1, &native) && native_only) {
+        int started;
+        native_options.verbose = native_status; native_options.workers = native_workers; native_options.compiler = native_compiler;
+        started = host_native_boot(c) && host_native_start(data_dir, disc_paths, 1, &native_options);
+        native_waiting = !started && !native_only;
+        if (!started && native_only) {
             fprintf(stderr, "No native compiler is installed\n");
             host_state_bridge_close(state_bridge); host_achievements_close(achievements);
             host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);

@@ -2,7 +2,9 @@
  * the source into the object; a link concatenates objects into the module.
  * Markers in a source fail the compile, fail the link, or slow the compile
  * down, so cases can place failures and kills where they want them. Every
- * call is appended to $FAKE_CC_LOG, so a case can see whether any ran. */
+ * call is appended to $FAKE_CC_LOG, so a case can see whether any ran. As zig
+ * cc does, a compile marked LH_FAKE_CHILD runs the work in a child process of
+ * its own, whose pid goes to $FAKE_CC_PIDS. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -12,7 +14,9 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 #endif
 
 static char *slurp(const char *path, size_t *size) {
@@ -65,6 +69,18 @@ int main(int argc, char **argv) {
         if (!text) { fprintf(stderr, "%s: error: cannot read\n", source); return 1; }
         note("compile", source);
         if (strstr(text, "LH_FAKE_SLOW")) pause_ms(400);
+#ifndef _WIN32
+        if (strstr(text, "LH_FAKE_CHILD")) {
+            pid_t worker = fork();
+            const char *pids = getenv("FAKE_CC_PIDS");
+            if (!worker) { pause_ms(60000); _exit(0); }
+            if (worker > 0 && pids) {
+                FILE *list = fopen(pids, "ab");
+                if (list) { fprintf(list, "%ld\n", (long)worker); fclose(list); }
+            }
+            if (worker > 0) waitpid(worker, NULL, 0);
+        }
+#endif
         if (strstr(text, "LH_FAKE_FAIL")) {
             fprintf(stderr, "%s:1:1: error: forced failure\n1 error generated.\n", source);
             free(text);

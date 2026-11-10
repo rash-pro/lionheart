@@ -37,7 +37,10 @@ as `toolchain/<version>/`. Interrupted stages never count as installed.
 
 The hidden developer option is `--toolchain-install [archive.zip]`.
 `--toolchain-install --url URL` substitutes a fixture URL while preserving the
-pinned size and checksum. Neither form appears in player help.
+pinned size and checksum. Neither form appears in player help. For the
+interface's own tests, `LIONHEART_TOOLCHAIN_TEST_MANIFEST` names a whole
+fixture manifest (`backends/host/native_setup.h`) whose addresses must be on
+this machine.
 
 Native cases live in `tests/native/cases/test_toolchain.cpp`. The standalone
 `tests/toolchain` CMake project builds the same contract executable without

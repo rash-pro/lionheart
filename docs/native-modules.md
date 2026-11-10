@@ -49,6 +49,32 @@ With the compiler installed under `<data>/toolchain/<version>/`, the release pla
 each module is registered at a dispatch boundary as it arrives, and the first registration switches the guest off
 interpreter-only mode. Without the compiler nothing starts and the player behaves as it always did.
 
+The player installs the compiler from the third setup step or from the hub's native code row
+(`backends/host/native_setup.h`: a worker thread around `host_tc_install`, polled by the interface). An
+installation that finished setup before that step existed is offered it once, on its own; `native-offered=1` in
+`<data>/gui-state.ini` records the offer. The executable's identity and text are kept from boot
+(`host_native_boot`), so building starts as soon as an installation finishes during a session. Discs added or
+removed in the hub during the game restart the service on the new list (`host_native_discs`); modules already
+registered stay registered and the cache hands the rest over again at once. The generator reads discs only through
+cue sheets, so a raw image gets a temporary sheet in `<data>/native/` while the discs are read. Tests install a
+fixture archive by naming a manifest in `LIONHEART_TOOLCHAIN_TEST_MANIFEST` (lines `version=`, `prefix=`,
+`executable=`, `sha256=`, `size=`, `file=` and `url=`), whose addresses must be on this machine.
+
+The hub row shows how many sets are ready, failed sets or a stop with their details on demand
+(`native_build_failures`: each failed set's name and the end of its diagnostics), and a time left. Measured on
+full four-disc builds, the first tier is a few large sets that cost far more per instruction than the hundreds of
+small effect sets after it, so a rate over the whole build said twice the real time left throughout and, in its
+first minutes, jumped between one and sixty hours; and the last sets are mostly other discs' copies of code already
+built, which settle at once. The estimate is therefore withheld until the first tier is done, then taken over the
+last five minutes with units already compiled in unfinished modules counted, a set that has an earlier set's name,
+address and size counted as a copy that costs nothing, and shown smoothed so that it counts down with the clock.
+The OSD says once when the first tier is native; a launch that found it in the cache says nothing.
+
+A compiler driver's own children do not get its death signal, and zig cc compiles in a child of its own. Every
+compiler therefore announces its process group, from the child before it runs, on a pipe to a small process the
+service forks when it starts; whatever ends the player closes that pipe, and the process then kills every group
+still announced. On Windows a job object does the same.
+
 The service lists the sets of the discs the player knows from the catalog alone (`lhg_plan_sets`, no disc read),
 hands over every module the cache already has, and only then, if anything is missing, reads the discs once
 (`lhg_session_open`) and emits one set at a time (`lhg_session_emit`) into a build folder. Worker threads compile

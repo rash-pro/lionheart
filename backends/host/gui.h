@@ -10,6 +10,27 @@ typedef enum { HOST_GUI_HIDDEN, HOST_GUI_SETUP, HOST_GUI_HUB, HOST_GUI_OVERLAY }
 typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_CONTROLS, HOST_GUI_RA, HOST_GUI_ACHIEVEMENTS } host_gui_pane_t;
 typedef enum { HOST_GUI_RUNNING, HOST_GUI_PLAY, HOST_GUI_QUIT, HOST_GUI_RECREATE, HOST_GUI_ERROR } host_gui_result_t;
 typedef enum { HOST_GUI_KEYBOARD, HOST_GUI_MOUSE, HOST_GUI_PAD } host_gui_input_t;
+/* Native code as the player knows it this frame. */
+typedef enum { HOST_GUI_COMPILER_MISSING, HOST_GUI_COMPILER_INSTALLING, HOST_GUI_COMPILER_FAILED, HOST_GUI_COMPILER_READY } host_gui_compiler_t;
+typedef enum { HOST_GUI_BUILD_OFF, HOST_GUI_BUILD_RUNNING, HOST_GUI_BUILD_DONE, HOST_GUI_BUILD_STOPPED } host_gui_build_t;
+typedef enum { HOST_GUI_STEP_DOWNLOAD, HOST_GUI_STEP_VERIFY, HOST_GUI_STEP_EXTRACT, HOST_GUI_STEP_CHECK, HOST_GUI_STEP_INSTALL } host_gui_step_t;
+typedef struct {
+    host_gui_compiler_t compiler;
+    /* While installing: the step and how far it is, in bytes or entries. */
+    host_gui_step_t step;
+    unsigned long long done,total;
+    /* The download: its size, whether this build has an address for it, and
+     * the archive's file name when the address gives one. */
+    unsigned long long bytes;
+    int downloadable;
+    char archive[128],reason[256];
+    host_gui_build_t build;
+    unsigned sets,ready,failed;
+    /* -1 while there is no estimate worth showing. */
+    int seconds_left;
+    char error[256];
+} host_gui_native_t;
+typedef struct { char name[32],words[512]; } host_gui_failure_t;
 typedef struct {
     void *context;
     void (*changed)(void *, const char *key, int overlay);
@@ -22,11 +43,23 @@ typedef struct {
     const char *(*controller)(void *);
     int (*controller_type)(void *);
     int (*fullscreen_exclusive)(void *);
+    /* Absent in hosts without native code; the interface then shows none. */
+    void (*native)(void *, host_gui_native_t *);
+    /* archive NULL downloads. */
+    void (*native_install)(void *, const char *archive);
+    void (*native_cancel)(void *);
+    /* Fills up to capacity rows; returns how many sets failed. */
+    unsigned (*native_failures)(void *, host_gui_failure_t *, unsigned capacity);
 } host_gui_services_t;
 int host_gui_configure(host_options_t *, const char *data_dir, const host_gui_services_t *, const char *script);
 void host_gui_attach_game(void);
 void host_gui_startup_error(host_gui_pane_t,const char *detail);
 void host_gui_hub(void);
+/* The previous session ended without saying so; its log is at path. */
+void host_gui_previous_crash(const char *log);
+/* Something must be shown before the game starts: the compiler step to an
+ * installation that finished setup without it, or a crash. */
+int host_gui_wants_shell(void);
 host_gui_result_t host_gui_shell(void);
 void host_gui_request(host_gui_pane_t);
 int host_gui_requested(void);

@@ -402,15 +402,94 @@ typedef struct {
 } child_t;
 
 #ifndef _WIN32
+/* The death signal below reaches only the driver, and zig cc runs the real
+ * compiler as a child of its own, which would outlive a player that crashes
+ * or is killed. One small process, forked when building starts, holds the
+ * read end of a pipe on which every compiler announces its process group
+ * before it runs. Whatever ends the player closes the write end, and that
+ * process then kills every group still announced. As the child of a threaded
+ * process it touches only memory it was given and makes only system calls. */
+#define REAPER_GROUPS 4096
+static pid_t reaper_pid;
+static int reaper_fd = -1;
+static int32_t reaper_groups[REAPER_GROUPS];
+
+static void reaper_main(int fd) {
+    struct sigaction ignore;
+    size_t count = 0, k;
+    int32_t message[256];
+    ssize_t got, i;
+    int other;
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    /* Only the pipe ends it: signals a terminal sends to the player's group
+     * must not take it first and leave the compilers running. */
+    sigaction(SIGINT, &ignore, NULL); sigaction(SIGTERM, &ignore, NULL);
+    sigaction(SIGHUP, &ignore, NULL); sigaction(SIGQUIT, &ignore, NULL);
+    sigaction(SIGPIPE, &ignore, NULL);
+    setpgid(0, 0);
+    prctl(PR_SET_NAME, "lionheart-cc", 0, 0, 0);
+    if (fd) dup2(fd, 0);
+    /* Hold nothing else of the player's: its log pipe must close when it does. */
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 1u, ~0u, 0u))
+#endif
+        for (other = 1; other < 4096; ++other) close(other);
+    for (;;) {
+        got = read(0, message, sizeof(message));
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) break;
+        for (i = 0; i < got / (ssize_t)sizeof(message[0]); ++i) {
+            if (message[i] > 0 && count < REAPER_GROUPS) reaper_groups[count++] = message[i];
+            else if (message[i] < 0)
+                for (k = 0; k < count; ++k)
+                    if (reaper_groups[k] == -message[i]) { reaper_groups[k] = reaper_groups[--count]; break; }
+        }
+    }
+    for (k = 0; k < count; ++k) kill(-reaper_groups[k], SIGKILL);
+    _exit(0);
+}
+
+static void reaper_start(void) {
+    int fds[2];
+    pid_t pid;
+    if (pipe2(fds, O_CLOEXEC)) return;
+    pid = fork();
+    if (!pid) reaper_main(fds[0]);
+    close(fds[0]);
+    if (pid < 0) { close(fds[1]); return; }
+    reaper_pid = pid;
+    reaper_fd = fds[1];
+}
+
+/* Positive announces a group, negative retires it. A write this small is
+ * atomic on a pipe, so workers need no lock around it. */
+static void reaper_note(int32_t group) {
+    ssize_t written;
+    if (reaper_fd >= 0) { written = write(reaper_fd, &group, sizeof(group)); (void)written; }
+}
+
+/* Every compiler has ended by now, so it kills nothing. */
+static void reaper_stop(void) {
+    if (reaper_fd < 0) return;
+    close(reaper_fd);
+    reaper_fd = -1;
+    while (waitpid(reaper_pid, NULL, 0) < 0 && errno == EINTR) {}
+}
+
 /* The child shares this thread's memory until exec and only makes system
  * calls; it inherits this worker's lower priority, and dies with it. Its own
- * process group lets a stop take the driver's own children with it; after a
- * crash those finish their one file into a folder the next builder removes. */
-static pid_t spawn(const char *const *argv, char **envp, int fd) {
+ * process group lets a stop take the driver's own children with it, and the
+ * group is announced from the child itself, before the driver can start
+ * any, so no moment exists in which a crash would miss them. */
+static pid_t spawn(const char *const *argv, char **envp, int fd, pid_t player) {
     pid_t pid = vfork();
     if (!pid) {
         setpgid(0, 0);
         prctl(PR_SET_PDEATHSIG, SIGKILL);
+        /* The player may have died before the signal was asked for. */
+        if (getppid() != player) _exit(127);
+        reaper_note((int32_t)getpid());
         dup2(fd, 1); dup2(fd, 2);
         execve(argv[0], (char *const *)argv, envp);
         _exit(127);
@@ -539,12 +618,13 @@ static int run(const char *const *argv, const char *const *env, const char *log,
     if (fd < 0) { free(envp); return -1; }
     lock(guard);
     if (child->active < 0) { unlock(guard); close(fd); free(envp); return -1; }
-    pid = spawn(argv, envp, fd);
+    pid = spawn(argv, envp, fd, getpid());
     if (pid > 0) { child->pid = pid; child->active = 1; }
     unlock(guard);
     close(fd); free(envp);
     if (pid < 0) return -1;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    reaper_note(-(int32_t)pid);
     lock(guard);
     child->active = child->active < 0 ? -1 : 0;
     unlock(guard);
@@ -570,6 +650,9 @@ typedef struct {
     job_t *job;
     unsigned attempts;
     uint32_t promoted;
+    /* An earlier set has its name, address and size: most likely another
+     * disc's copy of the same code, which its module will serve. */
+    int twin;
     char key[65];
 } set_t;
 
@@ -582,6 +665,7 @@ struct job {
     int failed, linking;
     char tail[TAIL_CAP];
     uint64_t work;
+    double began;
 };
 
 typedef enum { KNOWN_NEW, KNOWN_DELIVERING, KNOWN_DELIVERED, KNOWN_REFUSED } known_state_t;
@@ -623,7 +707,13 @@ static struct {
     unsigned sequence;
     native_build_status_t status;
     double start, compile_start, start_cpu;
+    /* Work compiled; the estimate shown and when it was made. */
     uint64_t compiled_work;
+    double shown_left, shown_at;
+    int figure;
+    /* Work done, in-flight units included, sampled every few seconds. */
+    struct { double at, done; } samples[64];
+    unsigned sample_count;
     /* Lock-free ring from the guest thread. */
     sample_t ring[RING];
     unsigned ring_write, ring_read;
@@ -956,7 +1046,7 @@ static int finish_built(job_t *j) {
     for (i = 0; i < j->set_count; ++i) write_set_receipt(&b.sets[j->sets[i]], j->key);
     b.status.compiled++;
     b.compiled_work += j->work;
-    say("built %s (%s)", b.sets[j->sets[0]].info.name, j->key);
+    say("built %s (%s), work %llu, %.1f s", b.sets[j->sets[0]].info.name, j->key, (unsigned long long)j->work, now() - j->began);
     return 1;
 }
 
@@ -1001,6 +1091,27 @@ static int building(void) {
 }
 
 /* Under the guard; returns with it held. */
+static void mark_twins(void) {
+    size_t i, k;
+    for (i = 0; i < b.set_count; ++i) {
+        const native_build_set_t *a = &b.sets[i].info;
+        b.sets[i].twin = 0;
+        for (k = 0; k < i && !b.sets[i].twin; ++k) {
+            const native_build_set_t *o = &b.sets[k].info;
+            b.sets[i].twin = a->base == o->base && a->size == o->size && !strcmp(a->name, o->name);
+        }
+    }
+}
+
+static unsigned twins(void) {
+    size_t i;
+    unsigned n = 0;
+    for (i = 0; i < b.set_count; ++i) n += b.sets[i].twin;
+    return n;
+}
+
+static uint64_t set_work(const set_t *s) { return s->info.work ? s->info.work : s->info.size; }
+
 static void emit_set(size_t row) {
     set_t *s = &b.sets[row];
     char directory[PATH_CAP], key[65], error[512] = "";
@@ -1071,7 +1182,8 @@ static void emit_set(size_t row) {
     snprintf(j->key, sizeof(j->key), "%s", key);
     snprintf(j->directory, sizeof(j->directory), "%s", directory);
     j->sets[0] = row; j->set_count = 1;
-    j->work = s->info.work ? s->info.work : s->info.size;
+    j->work = set_work(s);
+    j->began = now();
     if (!list(directory, add_unit, j) || !j->unit_count) j->failed = 1;
     {
         size_t i;
@@ -1362,17 +1474,59 @@ static void drain_samples(void) {
     }
 }
 
+/* Measured on full builds of four discs: the first tier is a few large sets
+ * that cost far more per instruction than the hundreds of small effect sets
+ * after them, so a rate taken over the whole build said twice the time left
+ * from start to end, and in its first minutes jumped between one and sixty
+ * hours; and the last sets are mostly other discs' copies of code already
+ * built, which take no time. The rate is taken only once the first tier is
+ * done, over the last few minutes, with units already compiled in modules
+ * still in progress counted; sets that look like copies count as no work;
+ * and what is shown counts down with the clock, moving only part of the way
+ * to each new figure. */
+#define ESTIMATE_WINDOW 300.0
+#define ESTIMATE_GROUND 60.0
+#define ESTIMATE_SETTLE 90.0
 static void estimate(void) {
-    double elapsed = now() - b.compile_start;
-    uint64_t left = 0;
+    double t = now(), done = (double)b.compiled_work, left = 0, figure, rate = 0;
     size_t i;
+    unsigned k;
     char *out = b.status.compiling;
     size_t room = sizeof(b.status.compiling);
     job_t *j;
     for (i = 0; i < b.set_count; ++i)
-        if (b.sets[i].state != SET_READY && b.sets[i].state != SET_FAILED) left += b.sets[i].info.work ? b.sets[i].info.work : b.sets[i].info.size;
-    b.status.seconds_left = b.compiled_work && b.compile_start > 0 ? (int)(elapsed * (double)left / (double)b.compiled_work + 0.5) : -1;
+        if (b.sets[i].state != SET_READY && b.sets[i].state != SET_FAILED && !b.sets[i].twin) left += (double)set_work(&b.sets[i]);
+    for (j = b.jobs; j; j = j->next) {
+        /* The link is one more step after the units. */
+        double part = (double)j->work * (double)j->finished / (double)(j->unit_count + 1);
+        done += part; left -= part;
+    }
+    if (left < 0) left = 0;
+    if (b.status.first_tier_seconds > 0 && (!b.sample_count || t - b.samples[(b.sample_count - 1) % 64].at >= 5)) {
+        b.samples[b.sample_count % 64].at = t;
+        b.samples[b.sample_count % 64].done = done;
+        b.sample_count++;
+    }
+    for (k = b.sample_count > 64 ? b.sample_count - 64 : 0; k < b.sample_count; ++k) {
+        double since = t - b.samples[k % 64].at;
+        if (since > ESTIMATE_WINDOW) continue;
+        if (since >= ESTIMATE_GROUND && done > b.samples[k % 64].done) rate = (done - b.samples[k % 64].done) / since;
+        break;
+    }
     if (!left) b.status.seconds_left = 0;
+    else if (rate <= 0) b.status.seconds_left = b.shown_at > 0 ? b.status.seconds_left : -1;
+    else {
+        figure = left / rate;
+        if (b.shown_at <= 0) b.shown_left = figure;
+        else {
+            double since = t - b.shown_at, counted = b.shown_left - since;
+            b.shown_left = counted + (figure - counted) * since / (since + ESTIMATE_SETTLE);
+        }
+        b.shown_at = t;
+        if (b.shown_left < 1) b.shown_left = 1;
+        b.status.seconds_left = (int)(b.shown_left + 0.5);
+        b.figure = (int)(figure + 0.5);
+    }
     *out = 0;
     for (j = b.jobs; j; j = j->next) {
         const char *name = b.sets[j->sets[0]].info.name;
@@ -1430,6 +1584,7 @@ static int open_source(void) {
             ok = rows[i].index == b.sets[i].info.index && !strcmp(rows[i].identity, b.sets[i].info.identity);
         if (!ok) snprintf(error, sizeof(error), "the discs do not match the catalog plan");
         for (i = 0; ok && i < count; ++i) b.sets[i].info = rows[i];
+        if (ok) mark_twins();
     }
     free(rows);
     lock(&b.guard);
@@ -1462,6 +1617,7 @@ static void *service_main(void *argument)
     b.sets = calloc(count, sizeof(*b.sets));
     if (!b.sets) { stop_building("out of memory"); unlock(&b.guard); free(rows); goto finished; }
     for (i = 0; i < count; ++i) b.sets[i].info = rows[i];
+    mark_twins();
     b.set_count = count;
     b.status.sets = (unsigned)count;
     free(rows);
@@ -1503,14 +1659,15 @@ static void *service_main(void *argument)
         if (!b.source_open) {
             if (!open_source()) break;
             if (!start_workers()) { stop_building("cannot start build threads"); break; }
-            say("building %u sets with %u workers", b.status.sets - b.status.ready - b.status.failed, b.worker_count);
+            say("building %u sets with %u workers; %u look like copies of others", b.status.sets - b.status.ready - b.status.failed,
+                b.worker_count, twins());
         }
         drain_samples();
         estimate();
         if (b.config.verbose && now() - last_report >= 10) {
             last_report = now();
-            say("%u/%u ready, %u failed, compiling %s, about %d s left", b.status.ready, b.status.sets, b.status.failed,
-                *b.status.compiling ? b.status.compiling : "-", b.status.seconds_left);
+            say("%u/%u ready, %u failed, compiling %s, about %d s left (%d at the recent rate)", b.status.ready, b.status.sets, b.status.failed,
+                *b.status.compiling ? b.status.compiling : "-", b.status.seconds_left, b.figure);
         }
         cond_wait(&b.changed, &b.guard, 100);
     }
@@ -1579,7 +1736,8 @@ int native_build_start(const native_build_config_t *config, char *error, size_t 
     }
     if (!(b.service = CreateThread(NULL, 0, service_main, NULL, 0, NULL))) { snprintf(error, size, "cannot start a thread"); return 0; }
 #else
-    if (pthread_create(&b.service, NULL, service_main, NULL)) { snprintf(error, size, "cannot start a thread"); return 0; }
+    reaper_start();
+    if (pthread_create(&b.service, NULL, service_main, NULL)) { reaper_stop(); snprintf(error, size, "cannot start a thread"); return 0; }
 #endif
     b.running = 1;
     return 1;
@@ -1608,6 +1766,7 @@ void native_build_stop(void) {
 #else
     pthread_join(b.service, NULL);
     for (i = 0; i < b.worker_count; ++i) pthread_join(b.workers[i], NULL);
+    reaper_stop();
 #endif
     while (b.jobs) forget_job(b.jobs, 1);
     if (b.source_open && b.source.close) b.source.close(b.source.user);
@@ -1657,4 +1816,39 @@ native_build_state_t native_build_wait(double seconds) {
     state = b.status.state;
     unlock(&b.guard);
     return state;
+}
+
+size_t native_build_failures(native_build_failure_t *rows, size_t capacity) {
+    char (*identities)[65] = capacity ? calloc(capacity, sizeof(*identities)) : NULL;
+    size_t i, shown = 0, total = 0;
+    if (!b.running) { free(identities); return 0; }
+    lock(&b.guard);
+    for (i = 0; b.sets && i < b.set_count; ++i) {
+        if (b.sets[i].state != SET_FAILED) continue;
+        if (identities && shown < capacity) {
+            snprintf(rows[shown].name, sizeof(rows[shown].name), "%s", b.sets[i].info.name);
+            memcpy(identities[shown++], b.sets[i].info.identity, sizeof(identities[0]));
+        }
+        total++;
+    }
+    unlock(&b.guard);
+    /* The record is "attempts", "module", then the diagnostics; the end of
+     * them says most, so that is what is kept when they do not fit. */
+    for (i = 0; i < shown; ++i) {
+        char path[PATH_CAP], *text, *words;
+        size_t n;
+        rows[i].words[0] = 0;
+        if (!join(path, b.failed_dir, identities[i]) || !(text = read_small(path, 1u << 14, NULL))) continue;
+        words = text;
+        for (n = 0; n < 2 && words; ++n) if ((words = strchr(words, '\n'))) ++words;
+        if (words) {
+            n = strlen(words);
+            while (n && (words[n - 1] == '\n' || words[n - 1] == '\r')) words[--n] = 0;
+            if (n >= sizeof(rows[i].words)) words += n - (sizeof(rows[i].words) - 1);
+            snprintf(rows[i].words, sizeof(rows[i].words), "%s", words);
+        }
+        free(text);
+    }
+    free(identities);
+    return total;
 }

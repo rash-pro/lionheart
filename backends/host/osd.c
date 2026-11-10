@@ -98,6 +98,7 @@ void host_osd_event(unsigned event,unsigned number,const char *detail) {
     else snprintf(value,sizeof(value),"%s",format);
     host_osd_post(copy[event].label,value,copy[event].persistent); osd.event=event;
 }
+const char *host_osd_showing(void) { return opacity() ? osd.label : ""; }
 void host_osd_clear(unsigned event) {
     if (osd.event==event) { *osd.label=0; osd.dirty=1; }
 }

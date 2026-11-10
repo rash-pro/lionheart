@@ -47,6 +47,14 @@ Other endings and control transfers:
 player, GUI-pause and PGXP tests. `Last PC:` is retained in exactly the same
 stdout summary format; no existing consumer parses that label directly.
 
+## The next start
+
+The session marks itself running in `<data>/running`, held locked, and clears the mark when the player returns 0
+or 2. A mark left behind by a fatal signal, a kill, or an abnormal guest stop (status 1, which closes the window
+without a message) opens the hub on the next start with one line naming the log that recorded it, by then rotated
+to `logs/lionheart.1.log`, and an action that opens it. A second player on the same data folder cannot take the
+lock and reports nothing.
+
 ## Fatal path
 
 The session installs handlers before starting the player and redirects fatal

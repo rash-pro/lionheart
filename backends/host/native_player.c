@@ -2,7 +2,7 @@
 #include "native_modules.h"
 #include "native_module.h"
 #include "player_catalog.h"
-#include "toolchain.h"
+#include "native_setup.h"
 #include "lionheart_generator.h"
 #include "sha256.h"
 
@@ -26,7 +26,8 @@ static const char windows_entry[] =
 #endif
 
 static struct {
-    int running, verbose;
+    int booted, running, service, verbose;
+    unsigned workers;
     char root[4096], compiler[4096], cache_id[33], exe_id[33];
     char discs[4][4096];
     unsigned disc_mask;
@@ -83,12 +84,42 @@ static int source_plan(void *user, unsigned discs, native_build_set_t **rows, si
     return ok;
 }
 
+/* The generator reads discs through cue sheets, and the player also takes a
+ * raw image. Such an image gets a sheet beside the cache while the discs are
+ * read; an open session holds all it needs. 1 made, 0 none needed, -1 failed. */
+static int raw_sheet(unsigned d, char *sheet, size_t size) {
+    char absolute[4096];
+    const char *path = np.discs[d];
+    size_t n = strlen(path);
+    FILE *f;
+    int ok;
+    if (n >= 4 && path[n - 4] == '.' && (path[n - 3] | 32) == 'c' && (path[n - 2] | 32) == 'u' && (path[n - 1] | 32) == 'e') return 0;
+#ifdef _WIN32
+    if (!_fullpath(absolute, path, sizeof(absolute))) return -1;
+#else
+    if (!realpath(path, absolute)) return -1;
+#endif
+    if (strchr(absolute, '"') || snprintf(sheet, size, "%s/disc%u.cue", np.root, d + 1) >= (int)size || !(f = fopen(sheet, "wb"))) return -1;
+    ok = fprintf(f, "FILE \"%s\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n", absolute) > 0;
+    if (fclose(f) || !ok) { remove(sheet); return -1; }
+    return 1;
+}
+
 static int source_open(void *user, char *error, size_t size) {
     lhg_options options = generator_options();
+    char sheets[4][4200];
+    int made[4] = {0}, ok = 1;
     unsigned d;
     (void)user;
-    for (d = 0; d < 4; ++d) if (*np.discs[d]) options.disc_paths[options.disc_count++] = np.discs[d];
-    return lhg_session_open(&options, &np.session, error, size) == LHG_OK;
+    for (d = 0; d < 4 && ok; ++d) {
+        if (!*np.discs[d]) continue;
+        made[d] = raw_sheet(d, sheets[d], sizeof(sheets[d]));
+        if (made[d] < 0) { snprintf(error, size, "cannot read %s", np.discs[d]); ok = 0; }
+        else options.disc_paths[options.disc_count++] = made[d] ? sheets[d] : np.discs[d];
+    }
+    ok = ok && lhg_session_open(&options, &np.session, error, size) == LHG_OK;
+    for (d = 0; d < 4; ++d) if (made[d] > 0) remove(sheets[d]);
+    return ok;
 }
 
 static int source_emit(void *user, size_t set, const char *directory, char key[65], char *error, size_t size) {
@@ -135,22 +166,21 @@ static void add_line(lhg_sha256 *hash, const char *text) {
     lhg_sha256_add(hash, "\n", 1);
 }
 
-int host_native_start(cpu_t *c, const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options) {
-    const host_tc_manifest *manifest = host_tc_pinned();
-    native_build_config_t config;
-    static const native_build_source_t source = {NULL, source_plan, source_open, source_emit, source_contains, source_close};
+int host_native_boot(cpu_t *c) {
     lhg_sha256 hash;
-    char error[256];
-    size_t i;
+    if (np.booted) return 1;
+    lhg_sha256_init(&hash);
+    lhg_sha256_add(&hash, c->ram + (generated_base & 0x1fffffffu), generated_size);
+    hex_digest(&hash, np.exe_id);
+    /* The text is intact only now; the loader keeps its own copy, so building
+     * can start whenever the compiler arrives. */
+    if (!native_modules_configure(generated_hash, generated_base, generated_size, c->ram + (generated_base & 0x1fffffffu))) return 0;
+    np.booted = 1;
+    return 1;
+}
+
+static int set_discs(const char *const discs[4]) {
     unsigned d;
-    if (np.running || !data || !*data || host_tc_query(data, manifest) != HOST_TC_INSTALLED ||
-        !host_tc_executable(data, manifest, np.compiler, sizeof(np.compiler)))
-        return 0;
-    if (options && options->compiler) {
-        if (strlen(options->compiler) >= sizeof(np.compiler)) return 0;
-        strcpy(np.compiler, options->compiler);
-    }
-    if (snprintf(np.root, sizeof(np.root), "%s/native", data) >= (int)sizeof(np.root)) return 0;
     np.disc_mask = 0;
     for (d = 0; d < 4; ++d) {
         np.discs[d][0] = 0;
@@ -159,7 +189,47 @@ int host_native_start(cpu_t *c, const char *data, const char *const discs[4], un
         strcpy(np.discs[d], discs[d]);
         np.disc_mask |= 1u << (d + 1);
     }
-    if (!np.disc_mask) return 0;
+    return np.disc_mask != 0;
+}
+
+static int start_service(unsigned inserted) {
+    static const native_build_source_t source = {NULL, source_plan, source_open, source_emit, source_contains, source_close};
+    native_build_config_t config;
+    char error[256];
+    memset(&config, 0, sizeof(config));
+    config.root = np.root; config.cache_id = np.cache_id; config.exe_id = np.exe_id;
+    config.compiler = np.compiler; config.driver = driver; config.driver_count = 1;
+    config.target = NATIVE_TARGET;
+#ifdef _WIN32
+    config.windows = 1;
+#endif
+    config.abi_id = LH_MODULE_ABI_ID;
+    config.files = np.files; config.file_count = np.file_count;
+    config.discs = np.disc_mask; config.disc = inserted;
+    config.workers = np.workers;
+    config.source = &source;
+    config.deliver = deliver;
+    config.verbose = np.verbose;
+    if (!native_build_start(&config, error, sizeof(error))) {
+        fprintf(stderr, "native: %s\n", error);
+        return 0;
+    }
+    np.service = 1;
+    return 1;
+}
+
+int host_native_start(const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options) {
+    const host_tc_manifest *manifest = native_setup_manifest();
+    lhg_sha256 hash;
+    size_t i;
+    if (np.running || !np.booted || !data || !*data || !native_setup_compiler(np.compiler, sizeof(np.compiler)))
+        return 0;
+    if (options && options->compiler) {
+        if (strlen(options->compiler) >= sizeof(np.compiler)) return 0;
+        strcpy(np.compiler, options->compiler);
+    }
+    if (snprintf(np.root, sizeof(np.root), "%s/native", data) >= (int)sizeof(np.root)) return 0;
+    if (!set_discs(discs)) return 0;
     np.catalog_count = host_native_catalog_count;
     for (i = 0; i < np.catalog_count; ++i) {
         np.catalog[i].name = host_native_catalog[i].name;
@@ -189,30 +259,11 @@ int host_native_start(cpu_t *c, const char *data, const char *const discs[4], un
     add_line(&hash, NATIVE_TARGET);
     add_line(&hash, NATIVE_BUILD_RECIPE);
     hex_digest(&hash, np.cache_id);
-    lhg_sha256_init(&hash);
-    lhg_sha256_add(&hash, c->ram + (generated_base & 0x1fffffffu), generated_size);
-    hex_digest(&hash, np.exe_id);
 
-    /* The text is intact only now; the loader keeps its own copy. */
-    if (!native_modules_configure(generated_hash, generated_base, generated_size, c->ram + (generated_base & 0x1fffffffu))) return 0;
+    np.workers = options ? options->workers : 0;
+    np.verbose = options && options->verbose;
     native_modules_take_over(1);
-    memset(&config, 0, sizeof(config));
-    config.root = np.root; config.cache_id = np.cache_id; config.exe_id = np.exe_id;
-    config.compiler = np.compiler; config.driver = driver; config.driver_count = 1;
-    config.target = NATIVE_TARGET;
-#ifdef _WIN32
-    config.windows = 1;
-#endif
-    config.abi_id = LH_MODULE_ABI_ID;
-    config.files = np.files; config.file_count = np.file_count;
-    config.discs = np.disc_mask; config.disc = inserted;
-    config.workers = options ? options->workers : 0;
-    config.source = &source;
-    config.deliver = deliver;
-    config.verbose = options && options->verbose;
-    np.verbose = config.verbose;
-    if (!native_build_start(&config, error, sizeof(error))) {
-        fprintf(stderr, "native: %s\n", error);
+    if (!start_service(inserted)) {
         native_modules_take_over(0);
         return 0;
     }
@@ -222,24 +273,39 @@ int host_native_start(cpu_t *c, const char *data, const char *const discs[4], un
 }
 
 void host_native_disc(unsigned disc) {
-    if (np.running) native_build_disc(disc);
+    if (np.service) native_build_disc(disc);
+}
+
+void host_native_discs(const char *const discs[4], unsigned inserted) {
+    unsigned d, same = 1;
+    if (!np.running) return;
+    for (d = 0; d < 4; ++d) same = same && !strcmp(np.discs[d], discs[d] ? discs[d] : "");
+    if (same) return;
+    /* The plan covers the discs it started with. Building again lists the
+     * new ones; what is loaded stays loaded, and the cache hands over the
+     * rest at once. */
+    if (np.service) native_build_stop();
+    np.service = 0;
+    if (set_discs(discs)) start_service(inserted);
 }
 
 int host_native_running(void) { return np.running; }
 
 void host_native_stop(cpu_t *c, int wait) {
     native_build_status_t status;
-    if (!np.running) return;
-    if (wait) native_build_wait(-1);
+    if (np.service) {
+        if (wait) native_build_wait(-1);
+        native_build_status(&status);
+        native_build_stop();
+        np.service = 0;
+        if (np.verbose)
+            fprintf(stderr, "native: %u/%u sets native, %u failed, %u compiled, %u shared, %u from cache; cache %.3f s, "
+                    "first tier %.1f s (%.1f cpu s), done %.1f s (%.1f cpu s); %zu modules registered\n",
+                    status.ready, status.sets, status.failed, status.compiled, status.shared, status.cached, status.cached_seconds,
+                    status.first_tier_seconds, status.first_tier_cpu, status.done_seconds, status.done_cpu, native_modules_registered());
+    }
     dispatch_miss = NULL;
-    native_build_status(&status);
-    native_build_stop();
-    if (np.verbose)
-        fprintf(stderr, "native: %u/%u sets native, %u failed, %u compiled, %u shared, %u from cache; cache %.3f s, "
-                "first tier %.1f s (%.1f cpu s), done %.1f s (%.1f cpu s); %zu modules registered\n",
-                status.ready, status.sets, status.failed, status.compiled, status.shared, status.cached, status.cached_seconds,
-                status.first_tier_seconds, status.first_tier_cpu, status.done_seconds, status.done_cpu, native_modules_registered());
-    native_modules_shutdown(c);
+    if (np.booted) native_modules_shutdown(c);
     native_modules_take_over(0);
-    np.running = 0;
+    np.running = np.booted = 0;
 }
