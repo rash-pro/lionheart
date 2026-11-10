@@ -86,24 +86,13 @@ uint32_t random_word(lh::PyRandom &rng, uint32_t base, int count) {
     auto val = rng.getrandbits(16);
     return imm(op, rs, rt, val);
 }
-void record(lh::Case &t, const O &spec, const std::string &label);
 lh::fs::path emit(lh::Case &t, const O &spec, const std::string &label) {
     auto path = t.temp() / (label + ".json"), out = t.temp() / (label + "-c");
     lh::write_file(path, J(spec).dump());
-    record(t, spec, label);
     t.ok(t.harness("lionheart-gen-spec").args({path, out}).timeout(120));
     return out;
 }
-void record(lh::Case &t, const O &spec, const std::string &label) {
-    std::string key = t.name() + "/" + label;
-    if (const char *dir = std::getenv("LH_GENERATOR_SPECS")) {
-        lh::fs::create_directories(dir);
-        lh::write_file(lh::fs::path(dir) / (lh::sha256(key) + ".json"),
-                       J(O{{"key", key}, {"spec", spec}, {"temporary", t.temp().string()}}).dump());
-    }
-}
 void compare(lh::Case &t, const O &spec, const std::string &label, const lh::fs::path &out) {
-    record(t, spec, label);
     std::string key = t.name() + "/" + label;
     auto cmd = t.host("cmake").args({"-DKEY=" + key, "-DOUTPUT=" + out.string(),
                                      "-DREFERENCE=" + (t.root() / "tests/native/generator_reference.tsv").string()});

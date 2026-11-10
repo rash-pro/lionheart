@@ -77,11 +77,6 @@ LH_TEST(test_pgxp_host_initializes_lazy_hardware_and_keeps_guest_state) {
     dt::Json spec=dt::Json::Object{{"main",dt::Json::Object{{"data",hex},{"base",int64_t(0x80010000u)},{"entry",int64_t(0x80010000u)}}},{"mode","fast"},{"host_mode","precise"}};
     const auto description=t.temp()/"program.json";lh::write_file(description,spec.dump());
     t.ok(t.host((folder/"host/generator/lionheart-gen-spec").string()).args({description,generated}));
-    if(std::getenv("LH_EQUIV_DIR")) {
-        std::vector<lh::fs::path> outputs;for(const auto &entry:lh::fs::recursive_directory_iterator(generated)) if(entry.is_regular_file()) outputs.push_back(entry.path());
-        std::sort(outputs.begin(),outputs.end());
-        for(const auto &path:outputs) {const auto name=lh::fs::relative(path,generated).generic_string(),contents=lh::read_file(path);}
-    }
     // The empty catalog was only for building the generator; reload its emitted sources.
     t.ok(t.host("cmake").args({"-S",t.root(),"-B",folder/"host"}));
     auto binary=lh::host_contract(t,"ff8",true,folder);std::vector<std::string> states;
