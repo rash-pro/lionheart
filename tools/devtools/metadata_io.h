@@ -26,6 +26,10 @@ int metadata_entry_valid(const void *data, size_t size, uint32_t base,
  * configured; 0 with an error when the image does not decide it. */
 uint32_t metadata_effect_base(const void *data, size_t size, const char *name,
                               char *error);
+/* The length of the code that starts a decompressed asset loaded at base, as
+ * the generator discovers it within limit bytes; -1 with an error. */
+int64_t metadata_code_prefix(const void *data, size_t size, uint32_t base,
+                             size_t limit, char *error);
 #ifdef __cplusplus
 }
 #endif

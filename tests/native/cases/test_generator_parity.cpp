@@ -546,22 +546,34 @@ lh::fs::path catalog(lh::Case &t, const std::string &hash, A overlays, A locatio
                                                   .dump());
     return dir;
 }
-// A disc whose IMG holds one uncompressed overlay after its top table, and the
-// full catalog that describes it; overlays.json carries `extra` as well.
+// A disc whose IMG holds one uncompressed overlay after its top table, then one
+// sector per asset, and the full catalog that describes them; overlays.json
+// carries `extra` as well.
+using Assets = std::vector<std::pair<std::string, std::string>>;
 struct OverlayDisc {
     lh::fs::path cue, catalog;
     std::string sha1;
 };
-OverlayDisc overlay_disc(lh::Case &t, const std::string &payload, const O &extra) {
+OverlayDisc overlay_disc(lh::Case &t, const std::string &payload, const O &extra, const Assets &assets = {}) {
     auto data = disc(), exe = valid_exe();
+    int img = int(2 + assets.size()) * 2048;
     auto put = [&](int sector, const std::string &s) {
         for (size_t i = 0; i < s.size(); i += 2048)
             data.replace((sector + i / 2048) * 2352 + 24, std::min<size_t>(2048, s.size() - i), s.substr(i, 2048));
     };
-    put(18, directory_record("SLUS_008.92;1", 20, exe.size()) + directory_record("FF8DISC1.IMG;1", 24, 4096));
+    put(18, directory_record("SLUS_008.92;1", 20, exe.size()) + directory_record("FF8DISC1.IMG;1", 24, img));
     put(20, exe);
     put(24, pack(Words(266, 1)));
     put(25, payload);
+    A entries = {O{{"path", "data/x.ovl"}, {"locator", O{{"table", "battle"}, {"index", 0}}}}};
+    for (size_t at = 0; at < assets.size(); ++at) {
+        put(26 + int(at), assets[at].second);
+        entries.push_back(O{{"path", assets[at].first},
+                            {"sector", num(2 + at)},
+                            {"size", num(assets[at].second.size())},
+                            {"sha1", sha1(assets[at].second)},
+                            {"locator", O{{"table", "battle"}, {"index", num(1 + at)}}}});
+    }
     OverlayDisc out{t.temp() / "ff8 (Disc 1).cue", t.temp() / "catalog", sha1(payload)};
     lh::write_file(t.temp() / "ff8.bin", data);
     lh::write_file(out.cue, "FILE \"ff8.bin\" BINARY\n");
@@ -573,8 +585,8 @@ OverlayDisc overlay_disc(lh::Case &t, const std::string &payload, const O &extra
     auto size = num(payload.size());
     lh::write_file(out.catalog / "files-disc1.json",
                    J(O{{"exe", O{{"name", "SLUS_008.92"}}},
-                       {"image", O{{"lba", 24}, {"size", 4096}}},
-                       {"entries", A{O{{"path", "data/x.ovl"}, {"locator", O{{"table", "battle"}, {"index", 0}}}}}}})
+                       {"image", O{{"lba", 24}, {"size", img}}},
+                       {"entries", entries}})
                        .dump());
     lh::write_file(out.catalog / "overlays-all.json",
                    J(O{{"overlays", A{O{{"name", "x"},
@@ -761,6 +773,99 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
         ov["scan_calls"] = false;
         for (auto mode : {"fast", "trace"})
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
+        return;
+    }
+    if (fn == "test_code_prefixes") {
+        // Stage-like assets: code at the load address, data after it. Two
+        // assets share their code and differ in data; the third differs in one
+        // constant of its entry function. Past the 64-byte limit, data holds a
+        // word shaped like a prologue that discovery must not reach.
+        const uint32_t base = 0x8013e000;
+        auto code = [&](int constant, uint32_t data_word) {
+            Words w = {imm(9, 29, 29, -8), j(3, base + 0x20), 0, imm(15, 0, 2, constant), r(8, 31), imm(9, 29, 29, 8), 0, 0,
+                       imm(9, 29, 29, -8), r(8, 31), imm(9, 29, 29, 8)};
+            w.resize(16, 0);
+            w.push_back(data_word);
+            w.resize(20, 0);
+            w = w + Words{imm(9, 29, 29, -8), r(8, 31), imm(9, 29, 29, 8)};
+            return pack(w);
+        };
+        // A literal-only LZS stream: a flag byte of eight literals per eight bytes.
+        auto lzs = [](const std::string &plain) {
+            std::string body;
+            for (size_t at = 0; at < plain.size(); at += 8)
+                body += char(0xff) + plain.substr(at, 8);
+            std::string header(4, '\0');
+            put32(header, 0, uint32_t(body.size()));
+            return header + body;
+        };
+        Assets assets = {{"data/stage0.x", lzs(code(0x8014, 1))},
+                         {"data/stage1.x", lzs(code(0x8014, 2))},
+                         {"data/stage2.x", lzs(code(0x8015, 1))}};
+        auto first = code(0x8014, 1).substr(0, 44), second = code(0x8015, 1).substr(0, 44);
+        auto record = [&](A variants, int limit = 64) {
+            return O{{"code_prefixes", A{O{{"name", "stage"}, {"load_address", "0x8013e000"}, {"limit", limit}, {"variants", variants}}}}};
+        };
+        auto variant = [](const std::string &digest, int size, A paths) {
+            return O{{"sha1", digest}, {"size", size}, {"paths", paths}};
+        };
+        A variants = {variant(sha1(first), 44, A{"data/stage0.x", "data/stage1.x"}), variant(sha1(second), 44, A{"data/stage2.x"})};
+        auto payload = pack(RET);
+        auto run = [&](const OverlayDisc &d, std::initializer_list<lh::Arg> args) {
+            auto command = t.harness("lionheart-gen").args({"--disc", d.cue, "--catalog", d.catalog});
+            return t.ok(command.args(args).cwd(t.temp()).timeout(120)).out;
+        };
+        auto d = overlay_disc(t, payload, record(variants), assets);
+        // The catalog's one group is set 128, so the record is set 129 and its
+        // second variant 130: two images, one overlay row, one module.
+        run(d, {"-o", t.temp() / "linked"});
+        auto tables = lh::read_file(t.temp() / "linked/dispatch_table.c");
+        LH_CONTAINS(tables, "const size_t generated_overlay_count = 2;");
+        LH_CONTAINS(tables, "{129, 0x8013e000u, 44, {");
+        LH_CONTAINS(tables, "{0x8013e000u, ov129_f_8013e000},\n{0x8013e000u, ov130_f_8013e000},");
+        LH_CONTAINS(tables, "{0x8013e020u, ov129_f_8013e020},");
+        LH_NOT_CONTAINS(tables, "ov130_f_8013e020");
+        LH_NOT_CONTAINS(tables, "ov130_entries");
+        LH_NOT_CONTAINS(tables, "0x8013e050u");
+        auto manifest = J::parse(lh::read_file(t.temp() / "linked/manifest.json"));
+        LH_EQ(manifest["overlays"].size(), 3u);
+        LH_CHECK(manifest["overlays"][2]["row"] == J(129));
+        run(d, {"--shape", "modules", "-o", t.temp() / "modules"});
+        auto module = lh::read_file(t.temp() / "modules/modules/set-129/tables.c");
+        LH_CONTAINS(module, "{0x8013e000u, f_8013e000},\n{0x8013e000u, f_8013e000_1},");
+        LH_CONTAINS(module, "{0x8013e020u, f_8013e020},");
+        LH_NOT_CONTAINS(module, "f_8013e020_1");
+        LH_CHECK(!lh::fs::exists(t.temp() / "modules/modules/set-130"));
+        auto plan = run(d, {"--shape", "modules", "--plan"});
+        LH_CONTAINS(plan, " discs=2 effect=0 base=8013e000 size=44 stage\n");
+        LH_CHECK(plan.find("\n129 ") != std::string::npos);
+        LH_CONTAINS(run(d, {"--shape", "modules", "--emit-set", "129", "-o", t.temp() / "single"}), "129 ");
+        LH_TEXT_EQ(lh::read_file(t.temp() / "single/set-129/tables.c"), module);
+        // Refusals: what the disc does not bear out, and malformed records.
+        auto refuse = [&](const O &extra, const std::string &message, bool planned) {
+            auto bad = overlay_disc(t, payload, extra, assets);
+            LH_CONTAINS(cli(t, {"--disc", bad.cue, "--catalog", bad.catalog, "-o", t.temp() / "refused"}), message);
+            if (planned)
+                LH_CONTAINS(cli(t, {"--disc", bad.cue, "--catalog", bad.catalog, "--shape", "modules", "--plan"}), message);
+        };
+        refuse(record(A{variants[0], variant(sha1(second), 40, A{"data/stage2.x"})}), "data/stage2.x on disc 1 starts with 44 bytes of code with SHA-1 " + sha1(second), false);
+        refuse(record(variants, 128), "data/stage0.x on disc 1 starts with 92 bytes of code", false);
+        refuse(record(A{variants[0], variant(sha1(second), 44, A{"data/stage2.x", "data/stage3.x"})}), "stage: disc 1 holds only some of its assets", true);
+        refuse(record(A{variants[0], variant(sha1(second), 44, A{"data/stage0.x"})}), "code_prefixes: data/stage0.x is listed twice", true);
+        refuse(record(variants, 66), "needs an aligned load address", true);
+        refuse(record(A{variant(sha1(first), 128, A{"data/stage0.x", "data/stage1.x"}), variants[1]}), "needs a SHA-1, an aligned size within the limit", true);
+        // The emitted shape of a shared row, frozen like every other output.
+        auto image_of = [&](const std::string &bytes, int index, bool shares) {
+            auto ov = image(bytes, base);
+            ov["index"] = index;
+            ov["seeds"] = A{num(base), num(base + 0x20)};
+            ov["scan_calls"] = false;
+            ov["shares_row"] = shares;
+            return ov;
+        };
+        for (auto mode : {"fast", "trace"})
+            parity(t, O{{"main", image(pack(RET))}, {"overlays", A{image_of(first, 129, false), image_of(second, 130, true)}}, {"mode", mode}},
+                   std::string("prefix-row-") + mode);
         return;
     }
     if (fn == "test_malformed_inputs_end_with_a_message") {

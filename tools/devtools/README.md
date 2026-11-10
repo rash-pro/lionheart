@@ -86,6 +86,10 @@ build/devtools/ff8files import --upstream /source/ff8-decomp --commit FULL_SHA \
 keyed by a set's catalog SHA-1) to what the generator requires: one catalog set per
 row, ascending addresses spelled `0x` and eight lowercase digits, and an instruction
 of every image the disc loads for that set.
+It also checks `code_prefixes`: each listed asset, decompressed and cut to the code
+the generator discovers within the record's `limit`, must match its variant's size and
+SHA-1. `prefixes CUE` prints the records as that disc bears them out, grouped by
+prefix, to replace them when assets or discovery change.
 
 `--metadata DIR` selects an inventory directory for list/get/verify. Extraction
 supports full paths, overlay names and `@table:index` identities; `--raw`,

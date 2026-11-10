@@ -10,6 +10,15 @@
 #include "locals.h"
 #include "platform.h"
 
+/* Sets as the host counts them: the variants of one code prefix are one. */
+static unsigned long overlay_rows(const lhg_program *program)
+{
+    unsigned long rows = 0;
+    for (size_t index = 0; index < program->overlay_count; index++)
+        rows += !program->overlays[index].shares_row;
+    return rows;
+}
+
 lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *error, size_t error_size)
 {
     lhg_ctx ctx;
@@ -82,7 +91,7 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         if (lhg_output_cache_hit(&arena, options->output_dir, cache_key)) {
             if (summary) {
                 summary->cache_hit = 1;
-                summary->overlay_sets = (unsigned long)program.overlay_count;
+                summary->overlay_sets = overlay_rows(&program);
                 size_t size;
                 uint8_t *data = lhg_read_file(&ctx, lhg_join_path(&arena, options->output_dir, "manifest.json"), &size);
                 const lhg_json *manifest = lhg_json_parse(&arena, (const char *)data, size, "manifest.json");
@@ -125,7 +134,7 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         summary->functions = (unsigned long)result.functions;
         summary->instructions = (unsigned long)result.instructions;
         summary->jump_tables = (unsigned long)result.jump_tables;
-        summary->overlay_sets = (unsigned long)program.overlay_count;
+        summary->overlay_sets = overlay_rows(&program);
         summary->full_catalog = !options->exe_path && !options->legacy_overlays;
     }
     lhg_arena_release(&arena);

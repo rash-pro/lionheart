@@ -4,7 +4,8 @@ lh_harness(loader FLAGS -std=c99 -O1 -Wall -Wextra INCLUDES runtime backends/hos
   SOURCES tests/native/cases/module_loader_host.c LIBS ${CMAKE_DL_LIBS})
 set(module_flags -std=c99 -O1 -Wall -Wextra -DFF8_NATIVE_MODULE "-DLH_MODULE_ABI_ID=\"lionheart-loader-test\"")
 set(module_link -nostdlib -Wl,--no-undefined)
-foreach(variant IN ITEMS main main_code_mismatch overlay overlay_missing_import overlay_other_exe overlay_no_descriptor)
+foreach(variant IN ITEMS main main_code_mismatch overlay overlay_missing_import overlay_other_exe overlay_no_descriptor
+    overlay_shared_address overlay_out_of_order)
   string(TOUPPER "MODULE_${variant}" define)
   set(defines "-D${define}")
   if(variant MATCHES "^main")

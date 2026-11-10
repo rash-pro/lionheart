@@ -267,6 +267,92 @@ inline J coverage(Image &im, const J &entries) {
   return out;
 }
 inline std::string image_hash(Image &im) { return hash(im.read(0, im.size)); }
+// Inventory entries by path; the first of a path is the loader's, as in the
+// generator.
+inline std::map<std::string, J> by_path(const J &inv) {
+  std::map<std::string, J> out;
+  for (auto &e : inv["entries"])
+    out.emplace(text(e["path"]), e);
+  return out;
+}
+// One asset of a code prefix record: its stored bytes checked, decompressed,
+// and cut to the code the generator discovers within the record's limit.
+inline std::pair<std::string, int64_t> code_prefix(Image &im, const J &e,
+                                                   const J &record) {
+  auto raw = im.read(num(e["sector"]), num(e["size"]));
+  require(hash(raw) == text(e["sha1"]), "file SHA-1 mismatch: " + text(e["path"]));
+  auto data = decode(raw);
+  char error[1024] = {};
+  auto length = metadata_code_prefix(
+      data.data(), data.size(),
+      std::stoul(text(record.at("load_address")), nullptr, 16),
+      num(record.at("limit")), error);
+  require(length >= 0, error);
+  return {hash(data.substr(0, length)), length};
+}
+// Each code prefix record of overlays.json recomputed from this disc: every
+// asset it lists, grouped by prefix in path order. A maintainer replaces the
+// records with this when the assets or the discovery rules change.
+inline J prefixes(Image &im, const J &inv, const fs::path &dir) {
+  auto meta = load(dir / "overlays.json");
+  auto paths = by_path(inv);
+  J out = J::array();
+  for (auto &record : meta.value("code_prefixes", J::array())) {
+    std::vector<std::string> all;
+    for (auto &v : record.at("variants"))
+      for (auto &p : v.at("paths"))
+        all.push_back(text(p));
+    std::sort(all.begin(), all.end());
+    J variants = J::array();
+    std::map<std::pair<std::string, int64_t>, size_t> seen;
+    for (auto &p : all) {
+      require(paths.count(p), "no inventory entry for " + p);
+      auto prefix = code_prefix(im, paths.at(p), record);
+      if (!seen.count(prefix)) {
+        seen[prefix] = variants.size();
+        variants.push_back(J{{"sha1", prefix.first},
+                             {"size", prefix.second},
+                             {"paths", J::array()}});
+      }
+      variants[seen[prefix]]["paths"].push_back(p);
+    }
+    J copy = record;
+    copy["variants"] = variants;
+    out.push_back(copy);
+  }
+  return out;
+}
+// The code prefixes this disc holds, held to their records. -1 without the
+// file.
+inline int code_prefixes(Image &im, const J &inv, const fs::path &dir) {
+  if (!fs::exists(dir / "overlays.json"))
+    return -1;
+  auto meta = load(dir / "overlays.json");
+  auto paths = by_path(inv);
+  int count = 0;
+  for (auto &record : meta.value("code_prefixes", J::array())) {
+    auto name = text(record.at("name"));
+    size_t held = 0, total = 0;
+    for (auto &v : record.at("variants"))
+      for (auto &p : v.at("paths")) {
+        ++total;
+        if (!paths.count(text(p)))
+          continue;
+        ++held;
+        auto prefix = code_prefix(im, paths.at(text(p)), record);
+        if (prefix.first != text(v.at("sha1")) ||
+            prefix.second != num(v.at("size")))
+          throw std::runtime_error(
+              name + ": " + text(p) + " starts with " +
+              std::to_string(prefix.second) + " bytes of code with SHA-1 " +
+              prefix.first + ", not the record's");
+        ++count;
+      }
+    require(!held || held == total,
+            name + ": the disc holds only some of its assets");
+  }
+  return count;
+}
 // The per-set entry hints of overlays.json, held to what the generator
 // requires: one catalog set per row, one spelling per address, and an
 // instruction of every image this disc loads for that set. -1 without the file.
@@ -379,6 +465,7 @@ inline void verify(Image &im, const J &inv, const fs::path &dir) {
       }
   require(seen.size() == entries.size(), "overlay catalog coverage mismatch");
   int hints = set_hints(im, entries, catalog, dir);
+  int prefix_assets = code_prefixes(im, inv, dir);
   require(coverage(im, inv["entries"]) == inv["padding"],
           "IMG padding coverage mismatch");
   require(image_hash(im) == text(inv["image"]["sha1"]),
@@ -391,6 +478,9 @@ inline void verify(Image &im, const J &inv, const fs::path &dir) {
   if (hints >= 0)
     std::cout << "disc " << im.number << ": verified " << hints
               << " set entry points\n";
+  if (prefix_assets >= 0)
+    std::cout << "disc " << im.number << ": verified " << prefix_assets
+              << " code prefix assets\n";
 }
 inline void scan(Image &im, const J &inv, const fs::path &cue,
                  const fs::path &dir) {

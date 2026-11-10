@@ -82,3 +82,16 @@ LH_TEST(refuses_libraries_without_a_descriptor_or_file) {
     LH_CONTAINS(out, "unreadable ");
     LH_CONTAINS(out, kNothing);
 }
+
+LH_TEST(accepts_entries_that_share_an_address) {
+    Loader loader(t);
+    LH_TEXT_EQ(loader.run({loader.module("main"), loader.module("overlay_shared_address")}),
+               "ok \nok \nregistered 2 main 1 overlays 1\nr2 42 stop overlay 7\nafter shutdown 0\n");
+}
+
+LH_TEST(refuses_entries_out_of_order) {
+    Loader loader(t);
+    const auto out = loader.run({loader.module("main"), loader.module("overlay_out_of_order")});
+    LH_CONTAINS(out, "bad-tables entries out of order at 80100000");
+    LH_CONTAINS(out, "registered 1 main 1 overlays 0\n");
+}

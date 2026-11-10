@@ -119,3 +119,37 @@ uint32_t metadata_effect_base(const void *data, size_t size, const char *name,
   free(arena);
   return base;
 }
+int64_t metadata_code_prefix(const void *data, size_t size, uint32_t base,
+                             size_t limit, char *error) {
+  // Failure cleanup must outlive setjmp's automatic-variable rules.
+  lhg_ctx *ctx = calloc(1, sizeof *ctx);
+  lhg_arena *arena = calloc(1, sizeof *arena);
+  if (!ctx || !arena) {
+    strcpy(error, "out of memory");
+    free(ctx);
+    free(arena);
+    return -1;
+  }
+  lhg_ctx_init(ctx);
+  if (setjmp(ctx->bail)) {
+    strcpy(error, ctx->error);
+    lhg_ctx_release(ctx);
+    free(ctx);
+    free(arena);
+    return -1;
+  }
+  lhg_arena_init(arena, ctx);
+  lhg_image image;
+  memset(&image, 0, sizeof image);
+  image.data = data;
+  image.size = size;
+  image.base = base;
+  image.entry = base;
+  lhg_functions functions;
+  int64_t length = (int64_t)lhg_code_prefix(arena, &image, limit, &functions);
+  lhg_arena_release(arena);
+  lhg_ctx_release(ctx);
+  free(ctx);
+  free(arena);
+  return length;
+}

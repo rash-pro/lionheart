@@ -435,3 +435,22 @@ uint32_t *lhg_prologue_seeds(lhg_arena *arena, const uint8_t *data, size_t size,
     *count = used;
     return seeds;
 }
+
+size_t lhg_code_prefix(lhg_arena *arena, lhg_image *image, size_t limit, lhg_functions *functions)
+{
+    if (image->size > limit)
+        image->size = limit;
+    size_t count;
+    uint32_t *seeds = lhg_prologue_seeds(arena, image->data, image->size, image->base, &count);
+    lhg_discover(arena, image, seeds, count, 0, functions);
+    uint64_t end = image->base;
+    for (size_t row = 0; row < functions->count; row++) {
+        const lhg_function *f = &functions->items[row];
+        if (f->insn_count && (uint64_t)f->insns[f->insn_count - 1].pc + 4 > end)
+            end = (uint64_t)f->insns[f->insn_count - 1].pc + 4;
+        if (f->table_word_count && (uint64_t)f->table_words[f->table_word_count - 1] + 4 > end)
+            end = (uint64_t)f->table_words[f->table_word_count - 1] + 4;
+    }
+    image->size = (size_t)(end - image->base);
+    return image->size;
+}

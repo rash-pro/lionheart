@@ -200,7 +200,8 @@ static native_module_status_t check_tables(const lh_module_descriptor_t *d, char
     for (i = 0; i < d->entry_count; ++i) {
         const code_region_t *region = d->regions[i];
         size_t s;
-        if (i && d->entries[i - 1].pc >= d->entries[i].pc)
+        /* Equal addresses are the variants of one code prefix, tried in order. */
+        if (i && d->entries[i - 1].pc > d->entries[i].pc)
             return refuse(NATIVE_MODULE_BAD_TABLES, error, size, "entries out of order at %08" PRIx32, d->entries[i].pc);
         if (!d->entries[i].fn || !region || !region->count || !region->spans)
             return refuse(NATIVE_MODULE_BAD_TABLES, error, size, "incomplete entry at %08" PRIx32, d->entries[i].pc);

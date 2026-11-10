@@ -81,4 +81,11 @@ const lhg_jump_table *lhg_function_table(const lhg_function *function, int64_t p
 /* Prologues and entry tables anchor traversal, never calls decoded from image pixels. */
 uint32_t *lhg_prologue_seeds(lhg_arena *arena, const uint8_t *data, size_t size, uint32_t base, size_t *count);
 
+/* Code stored ahead of data in one asset. Discovery starts at the entry and the
+ * prologues within the first `limit` bytes and never leaves them; the image is
+ * then cut to the code it found, which ends with the last instruction or jump
+ * table word, and that length is returned. Data past the code can hold words
+ * shaped like prologues, so the bound is the catalog's, not the asset's. */
+size_t lhg_code_prefix(lhg_arena *arena, lhg_image *image, size_t limit, lhg_functions *functions);
+
 #endif

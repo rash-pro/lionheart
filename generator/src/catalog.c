@@ -175,6 +175,7 @@ static int compare_set(const void *a, const void *b)
 static lhg_overlay_set *append_overlay(lhg_ctx *ctx, lhg_overlay_set **list, size_t *count, size_t *capacity)
 {
     *list = lhg_grow(ctx, *list, capacity, *count, sizeof **list);
+    memset(&(*list)[*count], 0, sizeof **list);
     return &(*list)[(*count)++];
 }
 
@@ -555,9 +556,10 @@ static const lhg_json *set_hints(lhg_ctx *ctx, const lhg_json *metadata, const l
 /* Which sets the present discs give, and their loader indices, from metadata
  * alone. Within a group, images with the same loaded bytes are one set held by
  * the last location listing them; set numbers below 128 stay the original
- * top-table overlays, and the rest are numbered in catalog order. */
-static void plan_groups(lhg_arena *arena, const lhg_json *metadata, const lhg_json *catalog, const int present[5],
-                        const path_index indexes[5], int strict, lhg_plan_row **out, size_t *out_count)
+ * top-table overlays, and the rest are numbered in catalog order. Returns the
+ * next free number, or -1 when a set has no inventory entry. */
+static int plan_groups(lhg_arena *arena, const lhg_json *metadata, const lhg_json *catalog, const int present[5],
+                       const path_index indexes[5], int strict, lhg_plan_row **out, size_t *out_count)
 {
     lhg_ctx *ctx = arena->ctx;
     lhg_plan_row *rows = NULL;
@@ -602,7 +604,7 @@ static void plan_groups(lhg_arena *arena, const lhg_json *metadata, const lhg_js
                 item->missing = 1;
                 *out = rows;
                 *out_count = slot + 1;
-                return;
+                return -1;
             }
             const lhg_json *locator = lhg_json_require(ctx, inventory_entry, "locator", "inventory entry");
             int has_top = !strcmp(lhg_json_str(ctx, lhg_json_require(ctx, locator, "table", "locator"), "table"), "top");
@@ -620,10 +622,237 @@ static void plan_groups(lhg_arena *arena, const lhg_json *metadata, const lhg_js
     }
     *out = rows;
     *out_count = count;
+    return extra;
+}
+
+/* Code prefixes: assets whose first bytes are code, loaded at one address,
+ * with data after it (battle stages). A record lists each distinct prefix as a
+ * variant: its SHA-1, its length and the assets that start with it. Lengths
+ * come from bounded discovery within the record's limit, so the generator and
+ * ff8files verify can both recompute them from the disc. */
+static int is_sha1_text(const char *text)
+{
+    size_t length = strlen(text);
+    if (length != 40)
+        return 0;
+    for (size_t at = 0; at < length; at++)
+        if (!((text[at] >= '0' && text[at] <= '9') || (text[at] >= 'a' && text[at] <= 'f')))
+            return 0;
+    return 1;
+}
+
+static void check_code_prefixes(lhg_ctx *ctx, const lhg_json *metadata)
+{
+    const lhg_json *records = lhg_json_find(metadata, "code_prefixes");
+    if (!records)
+        return;
+    lhg_json_list(ctx, records, "code_prefixes");
+    for (size_t at = 0; at < records->as.array.count; at++) {
+        const lhg_json *record = records->as.array.items[at];
+        const char *name = lhg_json_str(ctx, lhg_json_require(ctx, record, "name", "code_prefixes"), "name");
+        if (!*name || strlen(name) >= sizeof ((lhg_set_info *)0)->name)
+            lhg_fail(ctx, "code_prefixes: a record name must have 1 to 31 characters");
+        const char *address = lhg_json_str(ctx, lhg_json_require(ctx, record, "load_address", name), "load_address");
+        uint32_t base = parse_hex32(ctx, address, "load_address");
+        char spelled[16];
+        snprintf(spelled, sizeof spelled, "0x%08lx", (unsigned long)base);
+        int64_t limit = lhg_json_int(ctx, lhg_json_require(ctx, record, "limit", name), "limit");
+        if (strcmp(address, spelled) || base & 3 || limit <= 0 || limit % 4 || limit > 0x100000)
+            lhg_fail(ctx, "code_prefixes: %s needs an aligned load address spelled 0x%%08x and a limit of 4 bytes to 1 MiB", name);
+        const lhg_json *variants = lhg_json_list(ctx, lhg_json_require(ctx, record, "variants", name), "variants");
+        if (!variants->as.array.count)
+            lhg_fail(ctx, "code_prefixes: %s lists no variants", name);
+        for (size_t row = 0; row < variants->as.array.count; row++) {
+            const lhg_json *variant = variants->as.array.items[row];
+            const char *sha1 = lhg_json_str(ctx, lhg_json_require(ctx, variant, "sha1", name), "sha1");
+            int64_t size = lhg_json_int(ctx, lhg_json_require(ctx, variant, "size", name), "size");
+            const lhg_json *paths = lhg_json_list(ctx, lhg_json_require(ctx, variant, "paths", name), "paths");
+            if (!is_sha1_text(sha1) || size <= 0 || size % 4 || size > limit || !paths->as.array.count)
+                lhg_fail(ctx, "code_prefixes: %s variant %lu needs a SHA-1, an aligned size within the limit and its paths", name,
+                         (unsigned long)row);
+            for (size_t path = 0; path < paths->as.array.count; path++) {
+                const char *text = lhg_json_str(ctx, paths->as.array.items[path], "paths");
+                /* An asset starts with one prefix, so it belongs to one variant of one record. */
+                for (size_t other_record = 0; other_record <= at; other_record++) {
+                    const lhg_json *others = lhg_json_require(ctx, records->as.array.items[other_record], "variants", "code_prefixes");
+                    size_t rows = other_record == at ? row + 1 : others->as.array.count;
+                    for (size_t other_row = 0; other_row < rows; other_row++) {
+                        const lhg_json *other_paths = lhg_json_require(ctx, others->as.array.items[other_row], "paths", "code_prefixes");
+                        size_t stop = other_record == at && other_row == row ? path : other_paths->as.array.count;
+                        for (size_t other = 0; other < stop; other++)
+                            if (!strcmp(text, lhg_json_str(ctx, other_paths->as.array.items[other], "paths")))
+                                lhg_fail(ctx, "code_prefixes: %s is listed twice", text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* One row per record whose assets the present discs hold, after every catalog
+ * group. The row takes the number of its first variant and the later variants
+ * the numbers after it, so no two images share a set index. An asset may differ
+ * between discs after its code; the code itself is checked on every disc. */
+static void plan_prefixes(lhg_ctx *ctx, const lhg_json *metadata, const int present[5], const path_index indexes[5],
+                          lhg_plan_row **rows, size_t *count, size_t *capacity, int extra)
+{
+    const lhg_json *records = lhg_json_find(metadata, "code_prefixes");
+    if (!records)
+        return;
+    for (size_t at = 0; at < records->as.array.count; at++) {
+        const lhg_json *record = records->as.array.items[at];
+        const char *name = lhg_json_str(ctx, lhg_json_require(ctx, record, "name", "code_prefixes"), "name");
+        const lhg_json *variants = lhg_json_require(ctx, record, "variants", name);
+        unsigned discs = 0;
+        int first = 0;
+        for (int disc = 1; disc <= 4; disc++) {
+            if (!present[disc])
+                continue;
+            size_t held = 0, total = 0;
+            for (size_t row = 0; row < variants->as.array.count; row++) {
+                const lhg_json *paths = lhg_json_require(ctx, variants->as.array.items[row], "paths", name);
+                for (size_t path = 0; path < paths->as.array.count; path++, total++) {
+                    const char *text = lhg_json_str(ctx, paths->as.array.items[path], "paths");
+                    if (path_index_find(&indexes[disc], text))
+                        held++;
+                }
+            }
+            if (held && held != total)
+                lhg_fail(ctx, "%s: disc %d holds only some of its assets", name, disc);
+            if (held) {
+                discs |= 1u << disc;
+                if (!first)
+                    first = disc;
+            }
+        }
+        if (!discs)
+            continue;
+        *rows = lhg_grow(ctx, *rows, capacity, *count, sizeof **rows);
+        lhg_plan_row *item = &(*rows)[(*count)++];
+        memset(item, 0, sizeof *item);
+        item->group_name = name;
+        item->prefix = record;
+        item->index = extra;
+        item->disc = first;
+        item->discs = discs;
+        item->top = -1;
+        extra += (int)variants->as.array.count;
+    }
+}
+
+/* Verifies every asset of a prefix row on every present disc and discovers
+ * each variant once, as consecutive sets that share the row's overlay row. */
+static void compile_prefix(lhg_arena *arena, const lhg_plan_row *row, lhg_ff8_image discs[5], const path_index indexes[5],
+                           const char *assets_dir, lhg_overlay_set **result, size_t *count, size_t *capacity)
+{
+    lhg_ctx *ctx = arena->ctx;
+    const lhg_json *record = row->prefix;
+    const char *name = row->group_name;
+    uint32_t base = parse_hex32(ctx, lhg_json_str(ctx, lhg_json_require(ctx, record, "load_address", name), "load_address"), "load_address");
+    size_t limit = (size_t)lhg_json_int(ctx, lhg_json_require(ctx, record, "limit", name), "limit");
+    const lhg_json *variants = lhg_json_require(ctx, record, "variants", name);
+    lhg_json *names = lhg_json_new_array(arena);
+    lhg_json_append(arena, names, lhg_json_new_str(arena, name));
+    for (size_t row_index = 0; row_index < variants->as.array.count; row_index++) {
+        const lhg_json *variant = variants->as.array.items[row_index];
+        const char *sha1 = lhg_json_str(ctx, lhg_json_require(ctx, variant, "sha1", name), "sha1");
+        int64_t size = lhg_json_int(ctx, lhg_json_require(ctx, variant, "size", name), "size");
+        const lhg_json *paths = lhg_json_require(ctx, variant, "paths", name);
+        lhg_image *image = NULL;
+        lhg_functions functions;
+        memset(&functions, 0, sizeof functions);
+        for (size_t at = 0; at < paths->as.array.count * 4; at++) {
+            size_t path = at / 4;
+            int number = (int)(at % 4) + 1;
+            if (!(row->discs & (1u << number)))
+                continue;
+            lhg_ff8_image *disc = &discs[number];
+            const char *text = lhg_json_str(ctx, paths->as.array.items[path], "paths");
+            const lhg_json *entry = path_index_find(&indexes[number], text);
+            int64_t sector = lhg_json_int(ctx, lhg_json_require(ctx, entry, "sector", text), "sector");
+            int64_t stored = lhg_json_int(ctx, lhg_json_require(ctx, entry, "size", text), "size");
+            uint8_t *raw = lhg_ff8_image_read(disc, sector, stored);
+            char digest[41];
+            lhg_sha1_hex(raw, (size_t)stored, digest);
+            if (strcmp(digest, lhg_json_str(ctx, lhg_json_require(ctx, entry, "sha1", text), "sha1")))
+                lhg_fail(ctx, "catalog bytes disagree: %s disc %d", text, number);
+            size_t decoded_size;
+            uint8_t *decoded = lhg_lzs_decompress(ctx, raw, (size_t)stored, &decoded_size);
+            lhg_free(ctx, raw);
+            lhg_image candidate;
+            memset(&candidate, 0, sizeof candidate);
+            candidate.data = decoded;
+            candidate.size = decoded_size;
+            candidate.base = base;
+            candidate.entry = base;
+            lhg_functions found;
+            size_t length = lhg_code_prefix(arena, &candidate, limit, &found);
+            lhg_sha1_hex(decoded, length, digest);
+            if ((int64_t)length != size || strcmp(digest, sha1))
+                lhg_fail(ctx, "%s: %s on disc %d starts with %lu bytes of code with SHA-1 %s, not the catalog's %lld bytes with %s", name,
+                         text, number, (unsigned long)length, digest, (long long)size, sha1);
+            if (!image) {
+                uint8_t *bytes = lhg_arena_alloc(arena, length);
+                memcpy(bytes, decoded, length);
+                image = lhg_arena_alloc(arena, sizeof *image);
+                *image = candidate;
+                image->data = bytes;
+                functions = found;
+            }
+            lhg_free(ctx, decoded);
+        }
+        lhg_image_meta *meta = lhg_arena_alloc(arena, sizeof *meta);
+        memset(meta, 0, sizeof *meta);
+        meta->name = name;
+        meta->names = names;
+        meta->paths = paths;
+        for (int number = 1; number <= 4; number++)
+            if (row->discs & (1u << number))
+                meta->discs[meta->disc_count++] = number;
+        meta->catalog_sha1 = sha1;
+        meta->catalog_size = size;
+        meta->has_disc = meta->disc_count == 1;
+        meta->disc = row->disc;
+        image->meta = meta;
+        lhg_overlay_set *set = append_overlay(ctx, result, count, capacity);
+        memset(set, 0, sizeof *set);
+        set->index = row->index + (int)row_index;
+        set->image = image;
+        set->functions = functions;
+        set->shares_row = row_index > 0;
+        if (assets_dir)
+            lhg_write_file(ctx, lhg_fmt(arena, "%s/set%d.bin", assets_dir, set->index), image->data, image->size);
+    }
+}
+
+/* What a prefix row's code comes from: the load address, the discovery bound
+ * and each variant's bytes and length, in the order that numbers the variants. */
+static void prefix_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65])
+{
+    lhg_sha256 hash;
+    char line[160];
+    lhg_sha256_init(&hash);
+    lhg_sha256_add(&hash, "lionheart-prefix-1\n", 19);
+    snprintf(line, sizeof line, "%s\n%s\n%lld\n", row->group_name,
+             lhg_json_str(ctx, lhg_json_require(ctx, row->prefix, "load_address", row->group_name), "load_address"),
+             (long long)lhg_json_int(ctx, lhg_json_require(ctx, row->prefix, "limit", row->group_name), "limit"));
+    lhg_sha256_add(&hash, line, strlen(line));
+    const lhg_json *variants = lhg_json_require(ctx, row->prefix, "variants", row->group_name);
+    for (size_t at = 0; at < variants->as.array.count; at++) {
+        const lhg_json *variant = variants->as.array.items[at];
+        snprintf(line, sizeof line, "%s %lld\n", lhg_json_str(ctx, lhg_json_require(ctx, variant, "sha1", row->group_name), "sha1"),
+                 (long long)lhg_json_int(ctx, lhg_json_require(ctx, variant, "size", row->group_name), "size"));
+        lhg_sha256_add(&hash, line, strlen(line));
+    }
+    lhg_sha256_finish(&hash, hex);
 }
 
 void lhg_plan_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65])
 {
+    if (row->prefix) {
+        prefix_identity(ctx, row, hex);
+        return;
+    }
     const lhg_json *load_address = lhg_json_require(ctx, row->location, "load_address", "location");
     lhg_sha256 hash;
     char number[64];
@@ -652,8 +881,25 @@ void lhg_plan_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65])
 
 uint32_t lhg_plan_base(lhg_ctx *ctx, const lhg_plan_row *row)
 {
+    if (row->prefix)
+        return parse_hex32(ctx, lhg_json_str(ctx, lhg_json_require(ctx, row->prefix, "load_address", row->group_name), "load_address"),
+                           "load_address");
     const lhg_json *load_address = lhg_json_require(ctx, row->location, "load_address", "location");
     return lhg_json_truth(load_address) ? parse_hex32(ctx, lhg_json_str(ctx, load_address, "load_address"), "load_address") : 0;
+}
+
+uint32_t lhg_plan_size(lhg_ctx *ctx, const lhg_plan_row *row)
+{
+    if (!row->prefix)
+        return (uint32_t)lhg_json_int(ctx, lhg_json_require(ctx, row->location, "loaded_size", "location"), "loaded_size");
+    const lhg_json *variants = lhg_json_require(ctx, row->prefix, "variants", row->group_name);
+    int64_t longest = 0;
+    for (size_t at = 0; at < variants->as.array.count; at++) {
+        int64_t size = lhg_json_int(ctx, lhg_json_require(ctx, variants->as.array.items[at], "size", row->group_name), "size");
+        if (size > longest)
+            longest = size;
+    }
+    return (uint32_t)longest;
 }
 
 void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_mask, lhg_plan_row **rows, size_t *count)
@@ -673,7 +919,10 @@ void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_m
         present[number] = 1;
     }
     check_set_hints(ctx, metadata, catalog);
-    plan_groups(arena, metadata, catalog, present, indexes, 1, rows, count);
+    check_code_prefixes(ctx, metadata);
+    int extra = plan_groups(arena, metadata, catalog, present, indexes, 1, rows, count);
+    size_t capacity = *count;
+    plan_prefixes(ctx, metadata, present, indexes, rows, count, &capacity, extra);
 }
 
 void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
@@ -724,7 +973,12 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
     lhg_plan_row *plan;
     size_t plan_count, plan_next = 0;
     check_set_hints(ctx, metadata, catalog);
-    plan_groups(arena, metadata, catalog, present, indexes, 0, &plan, &plan_count);
+    check_code_prefixes(ctx, metadata);
+    int extra = plan_groups(arena, metadata, catalog, present, indexes, 0, &plan, &plan_count);
+    if (extra >= 0) {
+        size_t capacity = plan_count;
+        plan_prefixes(ctx, metadata, present, indexes, &plan, &plan_count, &capacity, extra);
+    }
     lhg_json *evidence = lhg_json_new_object(arena);
     lhg_overlay_set *result = NULL;
     size_t result_count = 0, result_capacity = 0;
@@ -900,6 +1154,12 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
         lhg_free(ctx, decoded);
         lhg_free(ctx, verified);
         lhg_free(ctx, chosen);
+    }
+
+    /* Code prefixes follow every group in the plan. */
+    while (plan_next < plan_count && plan[plan_next].prefix) {
+        const lhg_plan_row *row = &plan[plan_next++];
+        compile_prefix(arena, row, discs, indexes, assets_dir, &result, &result_count, &result_capacity);
     }
 
     for (size_t index = 0; index < result_count; index++)

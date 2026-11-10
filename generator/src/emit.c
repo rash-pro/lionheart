@@ -15,6 +15,8 @@ typedef struct {
     const lhg_functions *functions;
     int has_index, index;
     int poll_forward, direct_memory;
+    /* Joins the overlay row of the set before it. */
+    int shares_row;
     uint32_t *owners;
     lhg_span_list *spans;
 } emit_set;
@@ -443,6 +445,124 @@ static void emit_map_regions(lhg_text *tables, lhg_arena *scratch, const lhg_ent
     lhg_arena_reset(scratch);
 }
 
+/* One resume point of a group of sets that share an overlay row. */
+typedef struct {
+    uint32_t pc, entry, sequence;
+    const emit_set *owner;
+} group_entry;
+
+typedef struct {
+    group_entry *items;
+    size_t count, capacity;
+} group_entries;
+
+static void group_add(lhg_ctx *ctx, group_entries *list, const lhg_entry_pair *pairs, size_t count, const emit_set *sets, const emit_set *set)
+{
+    for (size_t index = 0; index < count; index++) {
+        list->items = lhg_grow(ctx, list->items, &list->capacity, list->count, sizeof *list->items);
+        group_entry *item = &list->items[list->count];
+        item->pc = pairs[index].pc;
+        item->entry = pairs[index].owner;
+        item->owner = owner_of(sets, set, set->functions, pairs[index].owner);
+        item->sequence = (uint32_t)list->count++;
+    }
+}
+
+static int compare_group_entry(const void *a, const void *b)
+{
+    const group_entry *x = a, *y = b;
+    if (x->pc != y->pc)
+        return x->pc < y->pc ? -1 : 1;
+    return x->sequence < y->sequence ? -1 : x->sequence > y->sequence;
+}
+
+/* By address, then in set order; a body that several sets own once appears once.
+ * Where the sets differ, one address keeps an entry per body, which the precise
+ * host tries in turn until a fingerprint holds. */
+static void group_sort(group_entries *list)
+{
+    if (!list->count)
+        return;
+    qsort(list->items, list->count, sizeof *list->items, compare_group_entry);
+    size_t unique = 0;
+    for (size_t at = 0; at < list->count; at++) {
+        size_t seen = unique;
+        while (seen > 0 && list->items[seen - 1].pc == list->items[at].pc &&
+               (list->items[seen - 1].owner != list->items[at].owner || list->items[seen - 1].entry != list->items[at].entry))
+            seen--;
+        if (seen > 0 && list->items[seen - 1].pc == list->items[at].pc)
+            continue;
+        list->items[unique++] = list->items[at];
+    }
+    list->count = unique;
+}
+
+static int same_group_entries(const group_entries *a, const group_entries *b)
+{
+    if (a->count != b->count)
+        return 0;
+    for (size_t at = 0; at < a->count; at++)
+        if (a->items[at].pc != b->items[at].pc || a->items[at].owner != b->items[at].owner || a->items[at].entry != b->items[at].entry)
+            return 0;
+    return 1;
+}
+
+static void emit_group_list(lhg_text *tables, lhg_arena *scratch, const group_entries *list, int regions)
+{
+    for (size_t at = 0; at < list->count; at++) {
+        const group_entry *item = &list->items[at];
+        if (regions)
+            lhg_text_addf(tables, scratch, "&%scode_%X,\n", item->owner->prefix, item->entry);
+        else
+            lhg_text_addf(tables, scratch, "{%U, %sf_%X},\n", item->pc, item->owner->prefix, item->entry);
+    }
+    lhg_arena_reset(scratch);
+}
+
+/* A row's image digest; a row of several images has none of its own, so it
+ * takes the digest of all of them in set order. */
+static void row_digest(lhg_ctx *ctx, const emit_set *sets, size_t count, uint8_t digest[20])
+{
+    if (count == 1) {
+        lhg_sha1(sets[0].image->data, sets[0].image->size, digest);
+        return;
+    }
+    size_t bytes = 0;
+    for (size_t at = 0; at < count; at++)
+        bytes += sets[at].image->size;
+    uint8_t *joined = lhg_alloc(ctx, bytes + 1);
+    bytes = 0;
+    for (size_t at = 0; at < count; at++) {
+        memcpy(joined + bytes, sets[at].image->data, sets[at].image->size);
+        bytes += sets[at].image->size;
+    }
+    lhg_sha1(joined, bytes, digest);
+    lhg_free(ctx, joined);
+}
+
+static void emit_group_tables(lhg_text *tables, lhg_arena *scratch, const char *prefix, group_entries *dispatch, group_entries *compact)
+{
+    group_sort(dispatch);
+    group_sort(compact);
+    int same_maps = same_group_entries(dispatch, compact);
+    for (int regions = 0; regions < 2; regions++) {
+        if (regions)
+            lhg_text_addf(tables, scratch, "const code_region_t *const %sregions[] = {\n", prefix);
+        else
+            lhg_text_addf(tables, scratch, "const entry_t %sentries[] = {\n", prefix);
+        if (!same_maps) {
+            add_line(tables, "#if defined(FF8_COMPACT)");
+            emit_group_list(tables, scratch, compact, regions);
+            add_line(tables, "#else");
+        }
+        emit_group_list(tables, scratch, dispatch, regions);
+        if (!same_maps)
+            add_line(tables, "#endif");
+        add_line(tables, "};");
+    }
+    dispatch->count = compact->count = 0;
+}
+
 typedef struct {
     const char **names;
     size_t count, capacity;
@@ -510,7 +630,7 @@ static void emit_function_text(lhg_arena *arena, const lhg_function *f, const lh
     }
     lhg_text_adds(raw, "#else\n");
     if (options->host_mode == LHG_HOST_PRECISE)
-        lhg_emit_precise(arena, &analysis, raw);
+        lhg_emit_precise(arena, &analysis, "", raw);
     else
         lhg_emit_fast_variant(arena, &analysis, available, 0, 0, 0, 0, raw);
     lhg_text_adds(raw, "#endif\n");
@@ -539,6 +659,7 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
         set->functions = &overlays[index].functions;
         set->has_index = 1;
         set->index = overlays[index].index;
+        set->shares_row = overlays[index].shares_row;
         const lhg_image_meta *meta = overlays[index].image->meta;
         int top_forward = set->index % 32 == 0 || set->index % 32 == 1;
         set->poll_forward = meta ? meta->poll_forward : top_forward;
@@ -565,6 +686,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     unsigned profile_lines = 0;
     string_set used_forward;
     string_set_init(&used_forward, &json_arena);
+    size_t row_start = 0;
+    group_entries group_dispatch = {0}, group_compact = {0};
 
     for (size_t set_index = 0; set_index < set_count; set_index++) {
         emit_set *set = &sets[set_index];
@@ -673,32 +796,42 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
             lhg_arena_reset(&function_arena);
             lhg_arena_reset(&unit_arena);
         }
-        const char *table_name = set->has_index ? lhg_fmt(arena, "%sentries", set->prefix) : "generated_entries";
-        const char *region_name = set->has_index ? lhg_fmt(arena, "%sregions", set->prefix) : "generated_regions";
-        lhg_text_addf(&tables, &unit_arena, "const entry_t %s[] = {\n", table_name);
         lhg_entry_pair *dispatch_pairs, *compact_pairs;
         size_t dispatch_count = lhg_build_entry_map(ctx, set->functions, &function_arena, 0, &dispatch_pairs);
         size_t compact_count = lhg_build_entry_map(ctx, set->functions, &function_arena, 1, &compact_pairs);
-        int same_maps = same_entry_maps(dispatch_pairs, dispatch_count, compact_pairs, compact_count);
-        if (!same_maps) {
-            add_line(&tables, "#if defined(FF8_COMPACT)");
-            emit_map_entries(&tables, &unit_arena, compact_pairs, compact_count, sets, set, functions);
-            add_line(&tables, "#else");
+        int last_of_row = set_index + 1 == set_count || !sets[set_index + 1].shares_row;
+        if (!set->shares_row)
+            row_start = set_index;
+        if (set->shares_row || !last_of_row) {
+            group_add(ctx, &group_dispatch, dispatch_pairs, dispatch_count, sets, set);
+            group_add(ctx, &group_compact, compact_pairs, compact_count, sets, set);
+            if (last_of_row)
+                emit_group_tables(&tables, &unit_arena, sets[row_start].prefix, &group_dispatch, &group_compact);
+        } else {
+            const char *table_name = set->has_index ? lhg_fmt(arena, "%sentries", set->prefix) : "generated_entries";
+            const char *region_name = set->has_index ? lhg_fmt(arena, "%sregions", set->prefix) : "generated_regions";
+            lhg_text_addf(&tables, &unit_arena, "const entry_t %s[] = {\n", table_name);
+            int same_maps = same_entry_maps(dispatch_pairs, dispatch_count, compact_pairs, compact_count);
+            if (!same_maps) {
+                add_line(&tables, "#if defined(FF8_COMPACT)");
+                emit_map_entries(&tables, &unit_arena, compact_pairs, compact_count, sets, set, functions);
+                add_line(&tables, "#else");
+            }
+            emit_map_entries(&tables, &unit_arena, dispatch_pairs, dispatch_count, sets, set, functions);
+            if (!same_maps)
+                add_line(&tables, "#endif");
+            add_line(&tables, "};");
+            lhg_text_addf(&tables, &unit_arena, "const code_region_t *const %s[] = {\n", region_name);
+            if (!same_maps) {
+                add_line(&tables, "#if defined(FF8_COMPACT)");
+                emit_map_regions(&tables, &unit_arena, compact_pairs, compact_count, sets, set);
+                add_line(&tables, "#else");
+            }
+            emit_map_regions(&tables, &unit_arena, dispatch_pairs, dispatch_count, sets, set);
+            if (!same_maps)
+                add_line(&tables, "#endif");
+            add_line(&tables, "};");
         }
-        emit_map_entries(&tables, &unit_arena, dispatch_pairs, dispatch_count, sets, set, functions);
-        if (!same_maps)
-            add_line(&tables, "#endif");
-        add_line(&tables, "};");
-        lhg_text_addf(&tables, &unit_arena, "const code_region_t *const %s[] = {\n", region_name);
-        if (!same_maps) {
-            add_line(&tables, "#if defined(FF8_COMPACT)");
-            emit_map_regions(&tables, &unit_arena, compact_pairs, compact_count, sets, set);
-            add_line(&tables, "#else");
-        }
-        emit_map_regions(&tables, &unit_arena, dispatch_pairs, dispatch_count, sets, set);
-        if (!same_maps)
-            add_line(&tables, "#endif");
-        add_line(&tables, "};");
         lhg_arena_reset(&unit_arena);
 
         size_t all_instructions = count_unique_pcs(ctx, all_items, set->functions->count, NULL);
@@ -712,6 +845,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
             lhg_sha1_hex(set->image->data, set->image->size, sha1);
             lhg_json *row = lhg_json_new_object(&json_arena);
             lhg_json_set(&json_arena, row, "index", lhg_json_new_int(&json_arena, set->index));
+            if (set->shares_row)
+                lhg_json_set(&json_arena, row, "row", lhg_json_new_int(&json_arena, sets[row_start].index));
             lhg_json_set(&json_arena, row, "base", lhg_json_new_str(&json_arena, lhg_fmt(&json_arena, "%H", (uint64_t)set->image->base)));
             lhg_json_set(&json_arena, row, "size", lhg_json_new_int(&json_arena, (int64_t)set->image->size));
             lhg_json_set(&json_arena, row, "sha1", lhg_json_new_str(&json_arena, sha1));
@@ -777,11 +912,21 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     }
 
     add_line(&tables, "const overlay_t generated_overlays[] = {");
+    size_t rows = 0;
     for (size_t index = 1; index < set_count; index++) {
         const emit_set *set = &sets[index];
+        if (set->shares_row)
+            continue;
+        size_t members = 1, size = set->image->size;
+        while (index + members < set_count && sets[index + members].shares_row) {
+            if (sets[index + members].image->size > size)
+                size = sets[index + members].image->size;
+            members++;
+        }
         uint8_t digest[20];
-        lhg_sha1(set->image->data, set->image->size, digest);
-        lhg_text_addf(&tables, &unit_arena, "{%d, %U, %D, {", set->index, set->image->base, (int64_t)set->image->size);
+        row_digest(ctx, sets + index, members, digest);
+        lhg_text_addf(&tables, &unit_arena, "{%d, %U, %D, {", set->index, set->image->base, (int64_t)size);
+        rows++;
         for (int byte = 0; byte < 20; byte++) {
             if (byte)
                 lhg_text_add(&tables, ",", 1);
@@ -792,7 +937,7 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     if (set_count == 1)
         add_line(&tables, "{0, 0, 0, {0}, NULL, 0, NULL},");
     add_line(&tables, "};");
-    lhg_text_addf(&tables, &unit_arena, "const size_t generated_overlay_count = %D;\n", (int64_t)overlay_count);
+    lhg_text_addf(&tables, &unit_arena, "const size_t generated_overlay_count = %D;\n", (int64_t)rows);
 
     lhg_text generated;
     lhg_text_init(&generated, ctx);
@@ -912,5 +1057,7 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
     lhg_arena_release(&unit_arena);
     lhg_arena_release(&function_arena);
     lhg_arena_release(&json_arena);
+    lhg_free(ctx, group_dispatch.items);
+    lhg_free(ctx, group_compact.items);
     lhg_free(ctx, sets);
 }

@@ -18,7 +18,9 @@ struct lhg_session {
     lhg_program program;
     lhg_functions main_functions;
     lhg_set_info *sets;
+    /* Per row: its first overlay set and how many it has; a code prefix has one per variant. */
     const lhg_overlay_set **overlays;
+    size_t *members;
     size_t count;
 };
 
@@ -59,7 +61,7 @@ static void row_info(lhg_ctx *ctx, const lhg_plan_row *row, lhg_set_info *info)
     info->discs = row->discs;
     info->effect = !strncmp(row->group_name, "effect", 6);
     info->base = lhg_plan_base(ctx, row);
-    info->size = (unsigned long)lhg_json_int(ctx, lhg_json_require(ctx, row->location, "loaded_size", "location"), "loaded_size");
+    info->size = lhg_plan_size(ctx, row);
     snprintf(info->name, sizeof info->name, "%s", row->group_name);
     lhg_plan_identity(ctx, row, info->identity);
 }
@@ -147,9 +149,10 @@ lhg_status lhg_session_open(const lhg_options *options, lhg_session **result, ch
     lhg_discover(&session->arena, session->program.main, NULL, 0, 1, &session->main_functions);
 
     const lhg_program *program = &session->program;
-    session->count = program->overlay_count + 1;
-    session->sets = lhg_alloc(ctx, session->count * sizeof *session->sets);
-    session->overlays = lhg_zalloc(ctx, session->count, sizeof *session->overlays);
+    session->sets = lhg_alloc(ctx, (program->overlay_count + 1) * sizeof *session->sets);
+    session->overlays = lhg_zalloc(ctx, program->overlay_count + 1, sizeof *session->overlays);
+    session->members = lhg_zalloc(ctx, program->overlay_count + 1, sizeof *session->members);
+    session->count = 1;
     unsigned discs = 0;
     for (size_t row = 0; row < program->plan_count; row++)
         discs |= program->plan[row].discs;
@@ -157,17 +160,25 @@ lhg_status lhg_session_open(const lhg_options *options, lhg_session **result, ch
     session->sets[0].instructions = instructions(&session->main_functions);
     for (size_t set = 0; set < program->overlay_count; set++) {
         const lhg_overlay_set *overlay = &program->overlays[set];
+        if (overlay->shares_row) {
+            session->members[session->count - 1]++;
+            session->sets[session->count - 1].instructions += instructions(&overlay->functions);
+            continue;
+        }
         const lhg_plan_row *row = NULL;
         for (size_t at = 0; at < program->plan_count && !row; at++)
             if (program->plan[at].index == overlay->index)
                 row = &program->plan[at];
         if (!row)
             lhg_fail(ctx, "set %d is missing from the catalog plan", overlay->index);
-        row_info(ctx, row, &session->sets[set + 1]);
+        lhg_set_info *info = &session->sets[session->count];
+        row_info(ctx, row, info);
         /* Now that the bytes are known, an inferred load address is too. */
-        session->sets[set + 1].base = overlay->image->base;
-        session->sets[set + 1].instructions = instructions(&overlay->functions);
-        session->overlays[set + 1] = overlay;
+        info->base = overlay->image->base;
+        info->instructions = instructions(&overlay->functions);
+        session->overlays[session->count] = overlay;
+        session->members[session->count] = 1;
+        session->count++;
     }
     *result = session;
     report(ctx, error, error_size);
@@ -196,11 +207,18 @@ lhg_status lhg_session_emit(lhg_session *session, size_t set, const char *direct
     if (set >= session->count)
         lhg_fail(&ctx, "no set %lu in this session", (unsigned long)set);
     const lhg_image *exe = session->program.main;
-    if (!set)
-        lhg_emit_module_set(&arena, exe, LHG_MAIN_SET, exe, &session->main_functions, directory, key);
-    else
-        lhg_emit_module_set(&arena, exe, session->overlays[set]->index, session->overlays[set]->image, &session->overlays[set]->functions,
-                            directory, key);
+    if (!set) {
+        lhg_module_part part = {exe, &session->main_functions};
+        lhg_emit_module_set(&arena, exe, LHG_MAIN_SET, &part, 1, directory, key);
+    } else {
+        size_t count = session->members[set];
+        lhg_module_part *parts = lhg_arena_alloc(&arena, count * sizeof *parts);
+        for (size_t at = 0; at < count; at++) {
+            parts[at].image = session->overlays[set][at].image;
+            parts[at].functions = &session->overlays[set][at].functions;
+        }
+        lhg_emit_module_set(&arena, exe, session->overlays[set]->index, parts, count, directory, key);
+    }
     lhg_ctx_release(&ctx);
     report(&ctx, error, error_size);
     return LHG_OK;
@@ -210,11 +228,16 @@ int lhg_session_contains(const lhg_session *session, size_t set, unsigned long p
 {
     if (set >= session->count)
         return 0;
-    const lhg_image *image = set ? session->overlays[set]->image : session->program.main;
-    unsigned long base = (unsigned long)image->base;
-    if (pc < base || pc - base > image->size || size > image->size - (pc - base))
-        return 0;
-    return !memcmp(image->data + (pc - base), bytes, size);
+    size_t count = set ? session->members[set] : 1;
+    for (size_t at = 0; at < count; at++) {
+        const lhg_image *image = set ? session->overlays[set][at].image : session->program.main;
+        unsigned long base = (unsigned long)image->base;
+        if (pc < base || pc - base > image->size || size > image->size - (pc - base))
+            continue;
+        if (!memcmp(image->data + (pc - base), bytes, size))
+            return 1;
+    }
+    return 0;
 }
 
 void lhg_session_close(lhg_session *session)

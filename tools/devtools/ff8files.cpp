@@ -8,12 +8,13 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
       std::string s = argv[i];
       if (s == "--help" || s == "-h") {
-        std::cout << "Usage: ff8files {import,list,get,verify}\nimport "
+        std::cout << "Usage: ff8files {import,list,get,verify,prefixes}\nimport "
                      "--upstream DIR [--commit SHA] [--output DIR] "
                      "[--inventory-only] [--unverified-cache] CUE...\nlist CUE "
                      "[PATTERN] [--overlays] [--json] [--metadata DIR]\nget "
                      "CUE QUERY OUT [--raw|--loaded|--decompress] [--metadata "
-                     "DIR]\nverify CUE [--scan-disc1 CUE] [--metadata DIR]\n";
+                     "DIR]\nverify CUE [--scan-disc1 CUE] [--metadata DIR]\nprefixes CUE "
+                     "[--metadata DIR]\n";
         return 0;
       }
       auto eq = s.find('=');
@@ -43,8 +44,9 @@ int main(int argc, char **argv) {
                                              ? fs::path(options["--metadata"])
                                              : root / "games/ff8-usa";
     if (pos.empty() || (pos[0] != "import" && pos[0] != "list" &&
-                        pos[0] != "get" && pos[0] != "verify")) {
-      std::cerr << "ff8files: expected import, list, get or verify\n";
+                        pos[0] != "get" && pos[0] != "verify" &&
+                        pos[0] != "prefixes")) {
+      std::cerr << "ff8files: expected import, list, get, verify or prefixes\n";
       return 2;
     }
     auto command = pos[0];
@@ -60,7 +62,7 @@ int main(int argc, char **argv) {
     }
     if (pos.size() < 2 || (command == "get" && pos.size() != 4) ||
         (command == "list" && pos.size() > 3) ||
-        (command == "verify" && pos.size() != 2))
+        ((command == "verify" || command == "prefixes") && pos.size() != 2))
       return 2;
     Image im(pos[1]);
     auto inv = inventory(im, dir);
@@ -78,6 +80,8 @@ int main(int argc, char **argv) {
           std::cout << std::setw(7) << num(e["sector"]) << ' ' << std::setw(9)
                     << num(e["size"]) << ' ' << text(e["sha1"]) << ' '
                     << text(e["path"]) << '\n';
+    } else if (command == "prefixes") {
+      std::cout << prefixes(im, inv, dir).dump(2, ' ', true) << '\n';
     } else if (command == "verify") {
       verify(im, inv, dir);
       if (options.count("--scan-disc1"))
