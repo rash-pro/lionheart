@@ -79,8 +79,16 @@ LH_TEST(png_oracle_vectors_from_the_python_check) {
     if (!lh::fs::exists(vectors)) return;
     for (const auto &entry : lh::fs::directory_iterator(vectors)) {
         if (entry.path().extension() != ".png") continue;
-        const auto image = lh::oracle::read_png(lh::read_file(entry.path()));
+        const bool up = entry.path().stem().string().find("-up") != std::string::npos;
+        const auto image = lh::oracle::read_png(lh::read_file(entry.path()), up);
         const std::string expected = lh::read_file(lh::fs::path(entry.path()).replace_extension(".expected"));
         LH_EQ(lh::str(image.width, " ", image.height, " ", lh::sha256(image.rgb)), expected);
     }
 }
+
+#include "vulkan.h"
+LH_TEST(vulkan_fixture_preserves_loader_selection) { LH_CHECK(lh::fs::is_regular_file(lh::vulkan_replay(t))); }
+
+#include "rendering_oracle_checks.h"
+
+#include "player_probe_checks.h"

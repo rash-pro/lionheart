@@ -1,6 +1,8 @@
 // Synthetic IROS, timestamp decoding, compositing and guest-read contracts.
-#include "lh_test.h"
+#include "vulkan.h"
+#include "rendering.h"
 #include "../../../tools/devtools/iro_extract.h"
+namespace {
 static void archive(const lh::fs::path &path, std::string name="CRF\\movies\\disc00_00h.avi", unsigned flags=0) {
     std::string data="IROS";
     auto put=[&](uint64_t v,int n) { for(int i=0;i<n;++i) data+=char(v>>(8*i)); };
@@ -33,13 +35,28 @@ LH_TEST(test_iro_rejects_unknown_compression_before_extracting) {
     caught=false; try { iro::directory(source); } catch(const std::runtime_error &e) { caught=true; LH_CONTAINS(e.what(),"beyond"); }
     LH_CHECK(caught);
 }
-static const char *uploads[]={"0-1-1","1-1-1","0-4-1","1-4-1","0-4-4","1-4-4"};
+struct Upload { const char *id; int rgb24,scale,msaa; };
+static const Upload uploads[]={{"0-1-1",0,1,1},{"1-1-1",1,1,1},{"0-4-1",0,4,1},{"1-4-1",1,4,1},{"0-4-4",0,4,4},{"1-4-4",1,4,4}};
+static lh::fs::path movie_contract(lh::Case &t) {
+    lh::vulkan_replay(t);return lh::host_contract(t,"movie_contract");
+}
 LH_TEST_P(test_hd_upload_keeps_native_reads_and_draw_order,uploads) {
-    (void)p; lh::skip("needs native Vulkan fixture and separately built movie_contract target");
+    auto tool=movie_contract(t);
+    t.ok(t.host("ffmpeg").args({"-nostdin","-v","error","-f","lavfi","-i","color=0x00ff00:size=640x448:rate=30",
+        "-t","1","-an","-vf","scale=out_color_matrix=bt709","-colorspace","bt709","-c:v","ffv1","-f","matroska",t.temp()/"disc00_00h.avi"}).timeout(30));
+    auto run=t.ok(t.host(tool.string()).args({t.temp(),p.rgb24,t.temp()/"stats.csv",p.scale,p.msaa}).timeout(60));
+    LH_CHECK(lh::json_boolean(run.out,"native_reads_exact"));LH_CONTAINS(lh::read_file(t.temp()/"stats.csv"),"ready");
 }
 LH_TEST(test_missing_hd_asset_leaves_original_available) {
-    lh::skip("needs native Vulkan fixture and separately built movie_contract target");
+    auto tool=movie_contract(t);
+    auto run=t.ok(t.host(tool.string()).args({t.temp(),"2",t.temp()/"stats.csv"}).timeout(30));
+    LH_CHECK(lh::json_boolean(run.out,"missing_falls_back"));LH_CONTAINS(lh::read_file(t.temp()/"stats.csv"),"missing");
 }
 LH_TEST(test_missing_leading_source_frame_uses_original) {
-    lh::skip("needs native Vulkan fixture, movie_contract target and FFmpeg synthetic clip");
+    auto tool=movie_contract(t);
+    t.ok(t.host("ffmpeg").args({"-nostdin","-v","error","-f","lavfi","-i","color=green:size=640x448:rate=30",
+        "-t","1","-an","-c:v","ffv1",t.temp()/"disc01_00h.avi"}).timeout(30));
+    auto run=t.ok(t.host(tool.string()).args({t.temp(),"3",t.temp()/"stats.csv"}).timeout(30));
+    LH_CHECK(lh::json_boolean(run.out,"negative_offset_fallback"));LH_CONTAINS(lh::read_file(t.temp()/"stats.csv"),"missing");
 }
+} // namespace

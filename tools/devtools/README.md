@@ -16,10 +16,20 @@ Unknown compression, overlapping/truncated records, unsafe paths, duplicate
 basenames and symlink escapes fail before unsafe extraction. Existing files are
 compared before reuse; replacement uses an exclusively created `.part` file.
 
-The five IROS identities in `test_movie_hd` are native. Its other eight
-identities explicitly skip until a native Vulkan fixture exposes the separately
-built `movie_contract` target and synthetic FFmpeg clips. Those skips differ from
-the passing baseline; this file has not reached full parity.
+All 13 `test_movie_hd` identities are native. The eight presentation cases use
+an isolated Vulkan build, its `movie_contract` target and synthetic FFmpeg clips.
+
+`build/devtools/render-quality` accepts the original `render_quality.py` options:
+
+```sh
+build/devtools/render-quality --off build/off --on build/on --scene battle \
+  --output build/quality.json --max-crack-pixels 8
+```
+
+It compares completed frames 11 through 20, writes the same JSON and stdout,
+and returns 0 or 1 according to the crack budget. `render_quality.h` shares the
+independent count equations with `test_pgxp`. `movie_frames.h` supplies native
+per-tile movie comparisons, RGB15 rounding and stereo anchor checks.
 
 Summarize exact diagnostic boundaries with:
 
@@ -48,8 +58,10 @@ a frozen synthetic host before checking sampler lifetime and exact counters.
 
 ## Migration status
 
-The migration is partial. Keep the original scripts and pytest files until all
-contracts and baseline dispositions match.
+All retained developer tools have native implementations, and every test file in
+`tests/native/identities.tsv` has a complete native port. The newer
+`test_dispatch_index.py` still needs a port and inventory rows. Keep the original
+scripts and pytest files until that final contract is ported and verified.
 
 | Original module | Native status | Evidence |
 |---|---|---|
@@ -61,23 +73,19 @@ contracts and baseline dispositions match.
 | `frame_bench.py` | Ported as `frame-bench` | Four native identities; deterministic receipt fields and decimal text match |
 | `gte_trace.py` | Ported as `gte-trace` | 18 native identities; exact/play replay stdout and recorded trace bytes match |
 | `mdec_trace.py` | Ported as `mdec-trace` | Existing 32 native identities also verify the native instrumentation transform |
-| `render_quality.py` | Pending | Imported by `tests/test_pgxp.py` |
+| `render_quality.py` | Ported as `render-quality` | All three scene reports and both budget outcomes match stdout, JSON bytes and exit status |
 | `spu_audio_compare.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
 | `map_movies.py` | Proposed for removal | No callers, documentation or tests found outside its own file |
 
 The last two proposals are evidence from repository reference searches, not
 permission to delete. No original script or pytest file has been removed.
 
-Validation used synthetic archives, logs and a compiled synthetic host; no
-owned-game run was performed. The selected five pytest files pass all 23 cases.
-Native registration matches their 23 inventory identities: 15 pass and the eight
-HD presentation cases skip for the explicit prerequisites described above.
-Each file detected a seeded incorrect expectation; all mutations were reverted.
-The standalone tools and full native test project configure and build without
-Python on PATH. The standard/infra selection has 233 passes and eight skips.
-This does not establish complete migration parity or game/realtime readiness.
+The earlier developer-tool validation used synthetic archives, logs and a
+compiled synthetic host. Rendering validation also uses synthetic images,
+clips and an original two-instruction EXE. No owned-game readiness is implied.
+The original scripts and pytest files remain unchanged.
 
-Remaining test migrations include `test_pgxp`, `test_perf_stats` and `test_movie_frames`.
+All test files referenced by these tools now have native ports.
 No dependency was added, and no runtime, backend or generator source was changed.
 
 `frame-bench` retains the alternating copied-card runs, checkpoint warmup,
@@ -107,10 +115,8 @@ independently generated CMake source. The transform, trace bytes and record/repl
 text match the original on a frozen host running the compiled runtime. A seeded
 calendar mismatch fails with `compare=0` and was reverted.
 
-For these three tools, unchanged pytest passes all 54 identities and native CTest
-passes the same 54. Both standalone projects configure and build with Python
-absent from PATH. The broader standard/infra run has 463 passes, eight existing
-HD skips and one missing-player failure in `test_gui_shell` because
-`FF8_PLAYER_HOST` is unset. This is not a complete baseline pass. No game run or
-performance claim is part of this validation. Original scripts and pytest files
+All 54 identities for these three tools have native ports alongside the unchanged
+pytest cases. The merged suite also includes the HD movie presentation, PGXP and
+movie frame checks. The native runner takes `FF8_PLAYER_HOST` from a separate
+top-level build so player-dependent cases run. Original scripts and pytest files
 remain in place, and no dependency was added.
