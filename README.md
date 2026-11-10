@@ -29,7 +29,7 @@ There are no prebuilt releases yet.
 ### Linux
 
 You need:
-- a C99/C++ compiler, CMake 3.16+, Python 3.13+ and pkg-config;
+- a C99/C++ compiler, CMake 3.21+ and pkg-config;
 - development files for SDL2 2.0.14+, libcurl 8+, D-Bus, Vulkan, zlib and FFmpeg (libavformat, libavcodec, libavutil,
   libswscale);
 - for Vulkan rendering, your GPU's Vulkan driver.
@@ -171,7 +171,7 @@ The repository contains everything: the recompiler, the runtime, the host and th
 recompiled build from their own discs with one command:
 
 ```sh
-python tools/setup.py --disc1 /path/to/disc1.cue
+cmake -P tools/setup.cmake -- --disc1 /path/to/disc1.cue
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and the rules, [ARCHITECTURE.md](ARCHITECTURE.md) for how

@@ -255,8 +255,8 @@ struct Harness {
 
 // The session-scoped `compiled` fixture. With the shared cache one compile
 // serves every case of a variant, in every process.
-inline Compiled compiled_library(lh::Case &t, const std::string &variant) {
-    const CaseTable &tables = table();
+inline Compiled compiled_library(lh::Case &t, const std::string &variant, const CaseTable &tables = table(),
+                                 const std::function<void(Program &, Build &)> &configure = {}) {
     Program program{Image(tables.data, BASE, BASE)};
     for (const std::string &name : tables.order) if (name != "fallback_entry") program.seeds.push_back(tables.pcs.at(name));
     for (int index : {0, 1, 32, 64}) {
@@ -269,6 +269,7 @@ inline Compiled compiled_library(lh::Case &t, const std::string &variant) {
     program.mode = (variant == "compact" || variant == "precise") ? "fast" : variant;
     program.host_mode = (variant == "precise" || variant == "compact") ? "precise" : "fast";
     Build build(t);
+    if (configure) configure(program, build);
     build.program(std::move(program))
         .source("tests/harness.c")
         .flags({"-std=c99", "-DFF8_STATS", "-O1", "-g", "-Wall", "-Wextra",
@@ -339,8 +340,8 @@ private:
     void *c_;
 };
 
-inline Outcome run(const Harness &h, const std::string &name, const Pairs &registers, const Pairs &memory, unsigned interpret, uint32_t start) {
-    const CaseTable &tables = table();
+inline Outcome run(const Harness &h, const std::string &name, const Pairs &registers, const Pairs &memory, unsigned interpret,
+                   uint32_t start, const CaseTable &tables = table()) {
     Cpu cpu(h);
     h.test_image(cpu.get(), BASE, tables.data.data(), tables.data.size());
     const Pairs initial = dict_update({{8, 0xAABBCCDD}, {9, 0x11111111}, {20, DATA}, {21, tables.pcs.at("callee")}}, registers);
@@ -362,9 +363,9 @@ inline Outcome run(const Harness &h, const std::string &name, const Pairs &regis
 // diff() runs both engines and asserts equivalence; a failure lists the state
 // words that differ, as the Python message does.
 inline Outcome diff(lh::Case &t, const Harness &h, const std::string &name, const Pairs &registers = {},
-             const Pairs &memory = {}, uint32_t start = 0) {
-    Outcome a = run(h, name, registers, memory, 0, start);
-    Outcome b = run(h, name, registers, memory, 1, start);
+             const Pairs &memory = {}, uint32_t start = 0, const CaseTable &tables = table()) {
+    Outcome a = run(h, name, registers, memory, 0, start, tables);
+    Outcome b = run(h, name, registers, memory, 1, start, tables);
     if (a.state != b.state) {
         std::string differs;
         for (size_t index = 0; index < a.state.size(); ++index) {

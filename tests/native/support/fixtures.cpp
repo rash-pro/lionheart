@@ -335,7 +335,7 @@ fs::path owned_path(const std::string &relative) {
         return path;
     }
     fs::path path = build_info().root / "build/generated/extracted" / relative;
-    if (!fs::is_regular_file(path)) LH_FAIL("run python tools/setup.py --disc1 DISC before owned-game tests");
+    if (!fs::is_regular_file(path)) LH_FAIL("run cmake -P tools/setup.cmake -- --disc1 DISC before owned-game tests");
     return path;
 }
 

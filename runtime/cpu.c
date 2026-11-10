@@ -26,9 +26,16 @@ static int precise_host(void) {
 #endif
 }
 
+typedef struct {
+    dispatch_cache_t *slot;
+    unsigned first, skip, complete;
+    int recordable;
+} dispatch_builder_t;
+static int dispatch_check(cpu_t *c, dispatch_builder_t *index, const entry_t *entry, const code_region_t *region);
+
 static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t count,
                                    const code_region_t *const *regions, const source_bounds_t *bounds,
-                                   uint32_t pc, int *registered) {
+                                   uint32_t pc, int *registered, dispatch_builder_t *index) {
     size_t lo = 0, hi = count;
     const code_region_t *previous = NULL;
     if (!regions || (bounds && (pc < bounds->first || pc >= bounds->end))) return NULL;
@@ -43,7 +50,7 @@ static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t cou
         previous = r;
         for (i = 0; i < r->count; ++i) if (pc >= r->spans[i].address && pc - r->spans[i].address < r->spans[i].size) {
             if (registered) *registered = 1;
-            if (code_valid(c, r)) return entries[lo].fn;
+            if (dispatch_check(c, index, &entries[lo], r)) return entries[lo].fn;
             break;
         }
     }
@@ -419,53 +426,223 @@ static const entry_t *find_entry(const entry_t *entries, size_t count, uint32_t 
     return lo < count && entries[lo].pc == pc ? &entries[lo] : NULL;
 }
 
-static recompiled_fn lookup_source(cpu_t *c, uint32_t pc, int *registered) {
+static const source_bounds_t *catalog_bounds(cpu_t *c, unsigned source) {
+    if (!c->source_bounds_ready[source]) {
+        const overlay_t *o = source ? &c->overlays[source - 1] : NULL;
+        c->source_bounds[source] = source_bounds(o ? o->regions : c->entry_regions,
+                                                 o ? o->count : c->entry_count);
+        c->source_bounds_ready[source] = 1;
+    }
+    return &c->source_bounds[source];
+}
+
+static recompiled_fn lookup_source(cpu_t *c, uint32_t pc, int *registered, dispatch_builder_t *index) {
     const entry_t *entry;
     size_t i;
     entry = find_entry(c->entries, c->entry_count, pc);
     if (entry && registered) *registered = 1;
-    if (entry && (c->entry_regions ? code_valid(c, c->entry_regions[entry - c->entries]) : !c->load_reg)) return entry->fn;
+    if (entry && (c->entry_regions ? dispatch_check(c, index, entry, c->entry_regions[entry - c->entries]) : !c->load_reg)) return entry->fn;
     for (i = 0; i < c->overlay_count && i < CODE_OVERLAYS; ++i) {
         const overlay_t *o = &c->overlays[i];
         if (pc < o->base || pc - o->base >= o->size) continue;
         entry = find_entry(o->entries, o->count, pc);
         if (entry && registered) *registered = 1;
-        if (entry && code_valid(c, o->regions[entry - o->entries])) return entry->fn;
+        if (entry && dispatch_check(c, index, entry, o->regions[entry - o->entries])) return entry->fn;
         if (precise_host()) {
             recompiled_fn fn = precise_source(c, o->entries, o->count, o->regions,
-                                             c->entry_regions ? &c->source_bounds[i + 1] : NULL, pc, registered);
+                                             c->entry_regions ? catalog_bounds(c, (unsigned)i + 1) : NULL, pc, registered, index);
             if (fn) return fn;
         }
     }
-    if (precise_host()) return precise_source(c, c->entries, c->entry_count, c->entry_regions,
-                                            &c->source_bounds[0], pc, registered);
+    if (precise_host()) {
+        recompiled_fn fn = precise_source(c, c->entries, c->entry_count, c->entry_regions,
+                                         c->entry_regions ? catalog_bounds(c, 0) : NULL, pc, registered, index);
+        if (fn) return fn;
+    }
+    if (index) index->complete = 1;
+    return NULL;
+}
+
+static void dispatch_reset(cpu_t *c) {
+    memset(c->dispatch_cache, 0, sizeof(c->dispatch_cache));
+    memset(c->source_bounds_ready, 0, sizeof(c->source_bounds_ready));
+    c->dispatch_candidate_count = 0; c->dispatch_generation = 1;
+    c->dispatch_entries = c->entries; c->dispatch_overlays = c->overlays;
+    c->dispatch_entry_regions = c->entry_regions;
+    c->dispatch_entry_count = c->entry_count; c->dispatch_overlay_count = c->overlay_count;
+}
+
+/* Registry owners call this before replacing an in-place catalog. Pointer and
+ * count changes are also recognized by lookup, including removal of all sets. */
+void dispatch_invalidate(cpu_t *c) {
+    dispatch_reset(c);
+    /* An unloaded catalog's storage may be reused for different fingerprints. */
+    memset(c->code_cache, 0, sizeof(c->code_cache));
+    c->recent_region = NULL;
+}
+
+#define DISPATCH_COMPLETE (1u << 31)
+
+static void dispatch_recycle(cpu_t *c) {
+    c->dispatch_candidate_count = 0;
+    if (!++c->dispatch_generation) {
+        unsigned i;
+        for (i = 0; i < CODE_CACHE_SIZE; ++i) c->dispatch_cache[i].generation = 0;
+        c->dispatch_generation = 1;
+    }
+}
+
+static unsigned dispatch_dependencies(dispatch_cache_t *slot, const code_region_t *r) {
+    size_t i;
+    unsigned source = 0, single = 1;
+    if (!r) return 0;
+    for (i = 0; i < r->count; ++i) {
+        const code_span_t *s = &r->spans[i];
+        uint32_t first = (s->address & (RAM_SIZE - 1)) >> CODE_PAGE_SHIFT;
+        uint32_t last = ((s->address & (RAM_SIZE - 1)) + s->size - 1) >> CODE_PAGE_SHIFT;
+        if (!s->size) continue;
+        if (first != last || (source && source != first + 1)) single = 0;
+        if (!source) source = first + 1;
+        for (; first <= last; ++first) slot->pages[first / 64] |= UINT64_C(1) << (first % 64);
+    }
+    return single ? source : 0;
+}
+
+static uint64_t dispatch_version(const cpu_t *c, const dispatch_cache_t *slot) {
+    uint64_t version = 1;
+    unsigned i;
+    for (i = 0; i < CODE_PAGES / 64; ++i) {
+        uint64_t bits = slot->pages[i];
+        while (bits) {
+            unsigned page = i * 64 + (unsigned)__builtin_ctzll(bits);
+            if (c->code_pages[page] > version) version = c->code_pages[page];
+            bits &= bits - 1;
+        }
+    }
+    return version;
+}
+
+/* Record only the walk's consulted prefix. Its unvisited tail can be huge
+ * even when the very first exact entry supplies the answer. */
+static int dispatch_check(cpu_t *c, dispatch_builder_t *index, const entry_t *entry, const code_region_t *region) {
+    if (index) {
+        if (index->skip) { --index->skip; return 0; }
+        if (index->recordable) {
+            if (c->dispatch_candidate_count == DISPATCH_CANDIDATES) {
+                unsigned count = c->dispatch_candidate_count - index->first;
+                if (index->first) memmove(c->dispatch_candidates, c->dispatch_candidates + index->first,
+                                          count * sizeof(*c->dispatch_candidates));
+                dispatch_recycle(c); index->first = 0;
+                if (count == DISPATCH_CANDIDATES) index->recordable = 0;
+                else c->dispatch_candidate_count = count;
+            }
+            if (index->recordable) {
+                dispatch_candidate_t *candidate = &c->dispatch_candidates[c->dispatch_candidate_count++];
+                candidate->entry = entry; candidate->region = region;
+                /* A NULL interior function ends only its own set's search.
+                 * Such a walk need not be a prefix of all possible owners. */
+                if (!entry->fn) index->recordable = 0;
+            }
+        }
+    }
+    {
+        int valid = code_valid(c, region);
+        if (index) {
+            unsigned source = dispatch_dependencies(index->slot, region);
+            /* Most owners occupy one page. Retain that immutable shortcut
+             * beside the candidate instead of revisiting its spans. */
+            if (index->recordable) c->dispatch_candidates[c->dispatch_candidate_count - 1].source = source;
+        }
+        return valid;
+    }
+}
+
+static recompiled_fn dispatch_resolve(cpu_t *c, dispatch_cache_t *slot, int *found) {
+    unsigned i, count = slot->count & ~DISPATCH_COMPLETE;
+    for (i = 0; i < count; ++i) {
+        const entry_t *entry = c->dispatch_candidates[slot->first + i].entry;
+        const code_region_t *region = c->dispatch_candidates[slot->first + i].region;
+        unsigned source = c->dispatch_candidates[slot->first + i].source;
+        int valid = code_valid(c, region);
+        /* Watching later candidates could fence deferred writes too early. */
+        if (source) slot->pages[(source - 1) / 64] |= UINT64_C(1) << ((source - 1) % 64);
+        else (void)dispatch_dependencies(slot, region);
+        if (valid) { *found = 1; return entry->fn; }
+    }
+    *found = (slot->count & DISPATCH_COMPLETE) != 0;
     return NULL;
 }
 
 recompiled_fn lookup(cpu_t *c, uint32_t pc) {
     dispatch_cache_t *slot;
+    dispatch_builder_t index;
     recompiled_fn fn;
-    int registered = 0;
+    uint64_t epoch;
+    int registered = 0, found = 0;
     if (c->interpreter_only) return NULL;
     /* Native HLE entries still depend on the incoming delayed-load tag. */
-    if (!c->entry_regions) return lookup_source(c, pc, NULL);
+    if (!c->entry_regions) return lookup_source(c, pc, NULL, NULL);
     if (c->dispatch_entries != c->entries || c->dispatch_overlays != c->overlays ||
         c->dispatch_entry_regions != c->entry_regions ||
         c->dispatch_entry_count != c->entry_count || c->dispatch_overlay_count != c->overlay_count) {
-        memset(c->dispatch_cache, 0, sizeof(c->dispatch_cache));
-        c->dispatch_entries = c->entries; c->dispatch_overlays = c->overlays;
-        c->dispatch_entry_regions = c->entry_regions;
-        c->dispatch_entry_count = c->entry_count; c->dispatch_overlay_count = c->overlay_count;
-        /* Catalog spans are immutable until the registry changes. Rejecting
-         * addresses outside their extent avoids a backward scan of every
-         * main function for an instruction in an uncatalogued effect. */
-        c->source_bounds[0] = source_bounds(c->entry_regions, c->entry_count);
-        for (size_t i = 0; i < c->overlay_count && i < CODE_OVERLAYS; ++i)
-            c->source_bounds[i + 1] = source_bounds(c->overlays[i].regions, c->overlays[i].count);
+        dispatch_reset(c);
     }
     slot = &c->dispatch_cache[(pc >> 2) % CODE_CACHE_SIZE];
-    if ((slot->epoch == c->code_epoch || slot->epoch == UINT64_MAX) && slot->pc == pc) return slot->fn;
-    fn = lookup_source(c, pc, &registered);
+    if (slot->pc != pc) {
+        dispatch_cache_t *other = &c->dispatch_cache[((pc >> 2) ^ (pc >> 14)) % CODE_CACHE_SIZE];
+        uint64_t age = slot->epoch == UINT64_MAX ? slot->version : slot->epoch;
+        uint64_t other_age = other->epoch == UINT64_MAX ? other->version : other->epoch;
+        /* Keep the common direct hit cheap, but let colliding hot PCs retain
+         * their catalog prefixes. The write epoch supplies a coarse age. */
+        if (other->pc == pc || other_age < age) slot = other;
+    }
+    if ((slot->epoch == c->code_epoch || slot->epoch == UINT64_MAX) && slot->pc == pc) {
+        if (slot->epoch == UINT64_MAX) slot->version = c->code_epoch;
+        return slot->fn;
+    }
+    /* An epoch miss must still complete deferred writes before trusting RAM. */
+    if (slot->pc == pc && slot->epoch && c->ram_top == 0x800000u &&
+        slot->epoch < c->code_epoch && slot->version <= slot->epoch &&
+        slot->version == dispatch_version(c, slot)) {
+        slot->epoch = c->code_epoch;
+        return slot->fn;
+    }
+    epoch = c->code_epoch;
+    memset(slot->pages, 0, sizeof(slot->pages));
+    index = (dispatch_builder_t){slot, c->dispatch_candidate_count, 0, 0, 1};
+    if (slot->pc == pc && slot->generation == c->dispatch_generation) {
+        fn = dispatch_resolve(c, slot, &found);
+        registered = (slot->count & ~DISPATCH_COMPLETE) != 0;
+        if (found) goto resolved;
+        index.skip = slot->count & ~DISPATCH_COMPLETE;
+        /* Resume after the already rejected prefix without validating it twice.
+         * Move its records if another PC has appended since it was built. */
+        if (DISPATCH_CANDIDATES - c->dispatch_candidate_count < index.skip) {
+            memmove(c->dispatch_candidates, c->dispatch_candidates + slot->first,
+                    index.skip * sizeof(*c->dispatch_candidates));
+            dispatch_recycle(c); index.first = 0;
+        } else {
+            memmove(c->dispatch_candidates + index.first, c->dispatch_candidates + slot->first,
+                    index.skip * sizeof(*c->dispatch_candidates));
+        }
+        c->dispatch_candidate_count = index.first + index.skip;
+    }
+    fn = lookup_source(c, pc, &registered, &index);
+    if (index.recordable) {
+        slot->first = index.first;
+        slot->count = c->dispatch_candidate_count - index.first;
+        if (index.complete) slot->count |= DISPATCH_COMPLETE;
+        slot->generation = c->dispatch_generation;
+    } else {
+        c->dispatch_candidate_count = index.first;
+        slot->generation = 0;
+    }
+resolved:
+    /* A later source's device fence can change an earlier rejected source.
+     * Preserve this walk's answer for its epoch, but reconsider it next time
+     * the epoch moves even if no further dependency page has changed. */
+    slot->version = !registered ? c->code_epoch :
+        epoch == c->code_epoch ? dispatch_version(c, slot) : UINT64_MAX;
     slot->pc = pc; slot->epoch = registered ? c->code_epoch : UINT64_MAX; slot->fn = fn;
     return fn;
 }

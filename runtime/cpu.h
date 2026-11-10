@@ -18,6 +18,7 @@
 #define CODE_PAGES (RAM_SIZE >> CODE_PAGE_SHIFT)
 #define CODE_CACHE_SIZE 4096
 #define CODE_OVERLAYS 512
+#define DISPATCH_CANDIDATES 65536
 #ifdef FF8_STATS
 #define C_STATS(expression) (expression)
 #else
@@ -47,7 +48,18 @@ typedef struct {
     uint64_t epoch, version;
     int valid;
 } code_cache_t;
-typedef struct { uint32_t pc; uint64_t epoch; recompiled_fn fn; } dispatch_cache_t;
+typedef struct {
+    uint32_t pc;
+    uint64_t epoch;
+    recompiled_fn fn;
+    uint64_t version, pages[CODE_PAGES / 64];
+    unsigned first, count, generation;
+} dispatch_cache_t;
+typedef struct {
+    const entry_t *entry;
+    const code_region_t *region;
+    unsigned source;
+} dispatch_candidate_t;
 typedef struct { uint32_t first; uint64_t end; } source_bounds_t;
 typedef struct { uint32_t pc, ret; } frame_t;
 typedef struct {
@@ -123,7 +135,10 @@ struct cpu {
     const code_region_t *const *dispatch_entry_regions;
     size_t dispatch_entry_count, dispatch_overlay_count;
     dispatch_cache_t dispatch_cache[CODE_CACHE_SIZE];
+    dispatch_candidate_t dispatch_candidates[DISPATCH_CANDIDATES];
+    unsigned dispatch_candidate_count, dispatch_generation;
     source_bounds_t source_bounds[CODE_OVERLAYS + 1];
+    uint8_t source_bounds_ready[CODE_OVERLAYS + 1];
     /* RAM accesses at or above ram_top take the timed slow path, which keeps
      * them ordered with deferred device RAM traffic (see hw_reschedule). */
     uint32_t ram_top;
@@ -134,6 +149,7 @@ struct cpu {
 };
 
 void cpu_init(cpu_t *c);
+void dispatch_invalidate(cpu_t *c);
 void cpu_log(cpu_t *c, const char *format, ...);
 void cpu_stop(cpu_t *c, const char *format, ...);
 void cpu_exception(cpu_t *c, unsigned code, uint32_t bad_address);

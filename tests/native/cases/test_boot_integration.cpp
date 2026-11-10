@@ -13,7 +13,7 @@ struct RealHost {
 
 RealHost real_host(lh::Case &t) {
     RealHost host{lh::owned_disc(1), lh::owned_path("SLUS_008.92"), t.root() / "build/dev/ff8", t.root() / "build/integration"};
-    LH_CHECK_MSG(lh::fs::is_regular_file(host.binary), "run python tools/setup.py --disc1 DISC first");
+    LH_CHECK_MSG(lh::fs::is_regular_file(host.binary), "run cmake -P tools/setup.cmake -- --disc1 DISC first");
     return host;
 }
 

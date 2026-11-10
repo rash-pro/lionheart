@@ -308,10 +308,18 @@ run on Linux hosts; a Windows target is built by a cross configure that passes `
 
 ## What can be ported next
 
-| Group | Files | Needs beyond this guide |
-|---|---|---|
-| synthetic catalogs | `test_startup`, `test_host_player` | synthetic catalogs and player/startup command-line contracts |
-| timing policies | `test_timing_policy` (292), `test_timing_boundaries` (28), `test_timing_regions` (28), `test_timing_partial_irq` (16) | exercise timing policies and register-cache combinations through the generator fixture |
+Every file represented in `identities.tsv` has a complete native case file.
+`tests/test_dispatch_index.py` is the only pytest file without a native port;
+it was added after the inventory and has no inventory rows yet.
 
 Before adding a helper under `support/`, look for one that already does the job.
-All other files in `identities.tsv` have complete native case files.
+
+For experimental timing, set `program.timing = "block"` or `"loose"` and optionally
+`program.register_cache = RegisterCache{8, {"f_80010000"}, std::nullopt}`. The last member is the optional
+`fuse_forward` list; an omitted selection uses the same catalog policy as Python. These options enter the
+compile-cache key and the generator-input comparison. `image.timing_entry_points` carries timing-only metadata;
+pass those points as seeds explicitly when porting `main_functions(image, timing)`.
+`generate(t, program, directory)` emits without compiling for manifest and source assertions.
+`program.discover_functions = false` represents `emit(image, {}, ...)`.
+`Build::header_prefix(text)` reproduces fixtures that prepend feature defines to `generated.h`, without changing
+the compiler flags of runtime sources.

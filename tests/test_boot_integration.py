@@ -19,7 +19,7 @@ def real_host():
     from conftest import owned_disc, owned_path
     disc, exe = owned_disc(1), owned_path("SLUS_008.92")
     binary = ROOT / "build/dev/ff8"
-    assert binary.is_file(), "run python tools/setup.py --disc1 DISC first"
+    assert binary.is_file(), "run cmake -P tools/setup.cmake -- --disc1 DISC first"
     host = ROOT / "build/integration"
     host.mkdir(parents=True, exist_ok=True)
     return disc, exe, binary, host

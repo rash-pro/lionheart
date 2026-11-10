@@ -58,8 +58,10 @@ a frozen synthetic host before checking sampler lifetime and exact counters.
 
 ## Migration status
 
-All retained developer tools have native implementations. Keep the original scripts
-and pytest files until the remaining test contracts and baseline dispositions match.
+All retained developer tools have native implementations, and every test file in
+`tests/native/identities.tsv` has a complete native port. The newer
+`test_dispatch_index.py` still needs a port and inventory rows. Keep the original
+scripts and pytest files until that final contract is ported and verified.
 
 | Original module | Native status | Evidence |
 |---|---|---|

@@ -1,0 +1,18 @@
+# Invalid arguments must fail before bootstrap creates a build directory.
+function(check expected)
+  execute_process(COMMAND "${CMAKE_COMMAND}" -P "${SETUP}" -- ${ARGN}
+    RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(expected STREQUAL "pass")
+    if(NOT result STREQUAL "0" OR NOT "${out}${err}" MATCHES "usage:.*--disc1")
+      message(FATAL_ERROR "Help failed: ${out}${err}")
+    endif()
+  elseif(result STREQUAL "0" OR NOT "${out}${err}" MATCHES "${expected}")
+    message(FATAL_ERROR "Expected ${expected}: ${out}${err}")
+  endif()
+endfunction()
+check(pass --help)
+check("--disc1 is required")
+check("--jobs must be" --disc1 unused --jobs 0)
+check("--jobs must be" --disc1 unused --jobs=9)
+check("--disc1 needs a value" --disc1)
+check("unknown argument" --unsupported)

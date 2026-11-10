@@ -1,7 +1,6 @@
 # Native test suite: a host-side case runner plus the C and C++ harnesses it
 # drives. Kept as its own project so that configuring it needs nothing from the
-# game build: the top-level project still runs Python for three generated
-# headers, and its add_compile_definitions(FF8_PLAYER) must not reach harnesses.
+# game build: its add_compile_definitions(FF8_PLAYER) must not reach harnesses.
 #
 #   cmake -S tests/native -B build/native-tests
 #   cmake --build build/native-tests -j6 -- -k
