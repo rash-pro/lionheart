@@ -39,6 +39,8 @@ static struct {
      * installation that finished setup before that step existed. */
     host_gui_native_t native; host_gui_failure_t failures[6]; unsigned failure_count;
     int native_offered,native_only,native_seen,native_local,after_browser;
+    /* Setup has a compiler step: no compiler was there when the player started. */
+    int native_step;
     char crash_log[512],native_archive[512];
 } gui;
 
@@ -128,6 +130,7 @@ int host_gui_configure(host_options_t *options,const char *data,const host_gui_s
     { int last=gui.input; gui_state_load(gui.data,gui.last_folder,sizeof(gui.last_folder),&last,&gui.native_offered); gui.input=(host_gui_input_t)last; }
     if (gui.services.native) gui.services.native(gui.services.context,&gui.native);
     gui.native_seen=(int)gui.native.compiler;
+    gui.native_step=gui.services.native && gui.native.compiler!=HOST_GUI_COMPILER_READY;
     if (!gui_media_start()) return 0;
     gui.configured=1;
     for (unsigned i=0;i<4;++i) if (*options->discs[i]) {
@@ -390,7 +393,7 @@ static void setup_next(void) {
         if (gui.discs[0].state==GUI_DISC_VERIFIED) { gui.setup_step=1; request_focus(); if (!*gui.options->cards[0]) new_card(0); }
     } else if (gui.setup_step==1) {
         if (!*gui.options->cards[0]) return;
-        if (has_native()) { gui.setup_step=2; request_focus(); }
+        if (gui.native_step) { gui.setup_step=2; request_focus(); }
         else finish_setup();
     } else finish_setup();
 }
@@ -556,6 +559,8 @@ void gui_native_summary(const host_gui_native_t *n,char *out,size_t capacity,int
     } else if (n->compiler==HOST_GUI_COMPILER_FAILED) {
         *alert=1; snprintf(out,capacity,"%s",S(gui_native_reason_id(n->reason)));
     } else if (n->compiler==HOST_GUI_COMPILER_MISSING) snprintf(out,capacity,"%s",S("native.missing"));
+    else if ((n->build==HOST_GUI_BUILD_OFF || !n->sets) && n->system)
+        snprintf(out,capacity,S(n->system==HOST_GUI_SYSTEM_GCC ? "native.gcc" : "native.clang"),n->version);
     else if (n->build==HOST_GUI_BUILD_OFF || !n->sets) snprintf(out,capacity,"%s",S("native.ready"));
     else {
         snprintf(out,capacity,S("native.count"),n->ready,n->sets);
@@ -655,7 +660,7 @@ static void open_log(void) {
 static void draw_setup(void) {
     float x=(gui.width-800)/2;
     gui_ui_emblem(R(48,24,44,44)); label("app.name",106,30,200,GUI_TITLE,GUI_TEXT);
-    if (has_native()) {
+    if (gui.native_step) {
         label("setup.step1",gui.width-480,38,120,GUI_SUB,gui.setup_step==0 ? GUI_TEXT : GUI_MUTED);
         label("setup.step2",gui.width-340,38,150,GUI_SUB,gui.setup_step==1 ? GUI_TEXT : GUI_MUTED);
         label("setup.step3",gui.width-170,38,130,GUI_SUB,gui.setup_step==2 ? GUI_TEXT : GUI_MUTED);
@@ -695,7 +700,7 @@ static void draw_setup(void) {
         card_status(0,x+18,404,764);
         if (*gui.options->cards[0]) text("card.1.path",base_name(gui.options->cards[0]),x+18,440,764,GUI_MONO,GUI_DIM);
         if (button("btn.back",48,gui.height-124,120,0)) { gui.setup_step=0; request_focus(); }
-        const char *next=has_native() ? "btn.continue" : "btn.finish";
+        const char *next=gui.native_step ? "btn.continue" : "btn.finish";
         if (button(next,gui.width-198,gui.height-124,150,*gui.options->cards[0] ? GUI_PRIMARY : GUI_DISABLED)) setup_next();
         if (gui.first_focus) gui_ui_focus(*gui.options->cards[0] ? next : "setup.card.new");
     }

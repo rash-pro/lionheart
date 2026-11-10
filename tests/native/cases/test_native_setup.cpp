@@ -73,11 +73,13 @@ public:
 
 struct Setup {
     lh::Case &t;
-    lh::fs::path binary, media, disc, archive, manifest, ini, data, shots;
+    lh::fs::path binary, media, disc, archive, manifest, ini, data, shots, bin;
     std::string bytes;
     explicit Setup(lh::Case &c) : t(c), binary(synthetic::player(c)), media(c.temp() / "media"), ini(c.temp() / "lionheart.ini"),
-                                  data(c.temp() / "data") {
+                                  data(c.temp() / "data"), bin(c.temp() / "bin") {
         lh::fs::create_directories(media);
+        // The player's PATH: no compiler unless a case puts one there.
+        lh::fs::create_directories(bin);
         disc = synthetic::disc(media / "disc1.bin");
         // As the Linux player's pinned archive is packed: tar in xz.
         bytes = tar_xz::xz(tar_xz::tar({tar_xz::member({"zig-test/zig", '0', lh::read_file(t.harness("fake_zig").program())})}));
@@ -110,13 +112,24 @@ struct Setup {
         auto command = lh::dummy(t.target(binary)).args({"--config", ini, "--gui-test", script, "--present-size", "1280x720"})
                            .cwd(t.temp()).env("SDL_RENDER_DRIVER", "software").env("HOME", t.temp().string())
                            .env("XDG_DATA_HOME", data.string()).env("XDG_CONFIG_HOME", (t.temp() / "config").string())
-                           .timeout(120);
+                           .env("PATH", bin.string()).timeout(120);
         if (!pinned) command.env("LIONHEART_TOOLCHAIN_TEST_MANIFEST", manifest.string());
         auto result = t.run(command);
         lh::write_file(t.temp() / (name + ".log"), result.out + result.err);
         LH_CHECK_MSG(result.rc == 0 && !result.timed_out, result.out + result.err);
         LH_CONTAINS(result.err, "GUI test complete:");
         return result;
+    }
+    // A C compiler from this machine on the player's PATH, with the tools it
+    // runs; its name for the hub row, as the player shows it.
+    std::string system_compiler() {
+        for (const auto &[name, shown] : {std::pair<std::string, std::string>{"clang", "Clang "}, {"gcc", "GCC "}}) {
+            if (!lh::fs::exists("/usr/bin/" + name)) continue;
+            for (const char *tool : {"as", "ld"}) if (lh::fs::exists(std::string("/usr/bin/") + tool)) lh::fs::create_symlink(std::string("/usr/bin/") + tool, bin / tool);
+            lh::fs::create_symlink("/usr/bin/" + name, bin / name);
+            return shown;
+        }
+        lh::skip("no clang or gcc in /usr/bin");
     }
     lh::fs::path folder() const { return data / "lionheart"; }
     bool installed() const { return lh::fs::exists(folder() / "toolchain/test-1/receipt"); }
@@ -140,7 +153,7 @@ const char *const kPlayFromHub = "wait 3\nassert-focus btn.play\nselect\nwait 30
 // The hub row and the reasons the installer gives, in the words of the player.
 namespace {
 struct NativeRow { std::string id; std::vector<std::string> args; std::string expected; };
-// compiler step done total build sets ready failed seconds_left -> alert, second line of the hub row
+// compiler step done total build sets ready failed seconds_left [system version] -> alert, second line of the hub row
 static std::vector<NativeRow> native_rows() {
     return {{"missing",{"0","0","0","0","0","0","0","0","-1"},"0 Compiler not installed"},
             {"downloading",{"1","0","12582912","59586314","0","0","0","0","-1"},"0 Downloading · 12 of 57 MB"},
@@ -153,7 +166,11 @@ static std::vector<NativeRow> native_rows() {
             {"building-hours",{"3","0","0","0","1","428","20","0","4000"},"0 20 of 428 ready · about 1 h 10 min left"},
             {"done",{"3","0","0","0","2","428","428","0","0"},"0 428 of 428 ready"},
             {"done-with-failures",{"3","0","0","0","2","428","426","2","0"},"1 426 of 428 ready · 2 failed"},
-            {"stopped",{"3","0","0","0","3","428","40","0","-1"},"1 40 of 428 ready · stopped"}};
+            {"stopped",{"3","0","0","0","3","428","40","0","-1"},"1 40 of 428 ready · stopped"},
+            // ... system version: a compiler the system has, named until the build counts.
+            {"system-gcc-before-the-game",{"3","0","0","0","0","0","0","0","-1","1","16.2.1"},"0 GCC 16.2.1"},
+            {"system-clang-before-the-game",{"3","0","0","0","0","0","0","0","-1","2","23.1.3"},"0 Clang 23.1.3"},
+            {"system-building",{"3","0","0","0","1","428","12","0","-1","1","16.2.1"},"0 12 of 428 ready"}};
 }
 }
 LH_TEST_P(test_native_row_copy, native_rows()) {
@@ -277,7 +294,7 @@ LH_TEST(test_a_killed_session_is_reported_with_its_log) {
     lh::write_file(s.folder() / "gui-state.ini", "last-folder=\nlast-input=keyboard\nnative-offered=1\n");
     // The game runs until the case gives up on it and kills it.
     auto killed = synthetic::play(t, {"--config", s.ini, "--fast", "--mute", "--max-vblanks", "0", "--log", "/dev/null"}, false, s.binary)
-                      .env("XDG_DATA_HOME", s.data.string()).timeout(3);
+                      .env("XDG_DATA_HOME", s.data.string()).env("PATH", s.bin.string()).timeout(3);
     // A timeout here is the point, so the runner's own rule does not apply.
     const auto first = lh::internal::run_process(killed);
     LH_CHECK_MSG(first.timed_out, first.out + first.err);
@@ -286,4 +303,69 @@ LH_TEST(test_a_killed_session_is_reported_with_its_log) {
     LH_CONTAINS(r.err, "GUI test: open file://" + (s.folder() / "logs/lionheart.1.log").string());
     // That session ended as it meant to: the next one starts straight in.
     s.run("at 30\nopen\nwait 3\nclose\nquit\n", "clean");
+}
+
+LH_TEST(test_a_working_system_compiler_leaves_setup_nothing_to_ask) {
+    Setup s(t);
+    const auto shown = s.system_compiler();
+    // What the compiler says its version is, asked here the way it is asked
+    // for its predefined macros, not through the player.
+    const auto probe = t.temp() / "version.c";
+    lh::write_file(probe, "#ifdef __clang__\n__clang_version__\n#else\n__VERSION__\n#endif\n");
+    auto said = t.ok(t.host((s.bin / (shown == "Clang " ? "clang" : "gcc")).string()).args({"-E", "-P", probe})).out;
+    said = said.substr(said.find('"') + 1);
+    const auto version = said.substr(0, said.find_first_of(" \""));
+    Archive server(s.bytes, Serve::whole);
+    s.address(server.url);
+    // The card is the last step; the hub names the compiler before the game.
+    const auto r = s.run("wait 10\ndrop \"" + s.disc.string() + "\"\n"
+        "wait-text disc.1.status \"SLUS-00892 · verified\" 600\nassert-focus btn.continue\nselect\nwait 3\n"
+        "assert-text setup.card.title \"Memory card\"\nassert-focus btn.finish\nshot card-last-step\nselect\nwait 3\n"
+        "assert-text hub.native.sub \"" + shown + version + "\"\nshot hub-system-compiler\n" + std::string(kPlayFromHub) +
+        "wait 30\nquit\n");
+    LH_CONTAINS(r.err, "Compiler found: " + (s.bin / "").string());
+    LH_EQ(server.requests.load(), 0u);
+    LH_CHECK(!s.installed());
+    // These discs are not ones it can build from, which it says: with a
+    // compiler there, it set out to.
+    LH_CONTAINS(r.err, "native: building stopped:");
+    LH_CONTAINS(lh::read_file(s.folder() / "gui-state.ini"), "native-offered=1\n");
+}
+
+LH_TEST(test_a_compiler_is_tried_once_and_asked_for_again_when_it_is_gone) {
+    Setup s(t);
+    const auto shown = s.system_compiler();
+    // Each run of the compiler leaves a line.
+    const auto name = s.bin / (shown == "Clang " ? "clang" : "gcc");
+    const auto real = lh::fs::read_symlink(name);
+    const auto calls = t.temp() / "calls.log";
+    lh::fs::remove(name);
+    lh::write_file(name, "#!/bin/sh\necho \"$*\" >> '" + calls.string() + "'\nexec '" + real.string() + "' \"$@\"\n");
+    lh::fs::permissions(name, lh::fs::perms::owner_all);
+    lh::write_file(s.ini, "disc1=" + s.disc.string() + "\n");
+    lh::fs::create_directories(s.folder());
+    lh::write_file(s.folder() / "gui-state.ini", "last-folder=\nlast-input=keyboard\nnative-offered=1\n");
+    // Straight into the game, as test_an_existing_installation_is_offered_the_step_once explains.
+    const auto first = s.run("at 30\nopen\nwait 3\nclose\nquit\n", "tried");
+    LH_CONTAINS(first.err, "Compiler found: " + name.string());
+    const auto tried = lh::read_file(calls);
+    LH_CHECK(!tried.empty());
+    const auto second = s.run("at 30\nopen\nwait 3\nclose\nquit\n", "known");
+    LH_TEXT_EQ(lh::read_file(calls), tried);
+    LH_NOT_CONTAINS(second.err, "Compiler found:");
+    // Without it the player is as one that never had a compiler.
+    lh::fs::remove_all(s.bin);
+    lh::fs::create_directories(s.bin);
+    const auto gone = s.run("at 30\nopen\nwait 3\nassert-text hub.native.sub \"Compiler not installed\"\nclose\nquit\n", "gone");
+    LH_NOT_CONTAINS(gone.err, "native: building");
+}
+
+LH_TEST(test_a_system_compiler_that_builds_no_module_is_not_used) {
+    Setup s(t);
+    // Says it is GCC when asked, and writes a few bytes for every output.
+    lh::fs::copy_file(t.harness("fake_zig").program(), s.bin / "gcc");
+    const auto r = s.run(to_compiler_step(s) + "assert-focus setup.native.archive\nquit\n");
+    LH_CONTAINS(r.err, "Compiler not used: " + (s.bin / "gcc").string());
+    LH_CHECK(!lh::fs::exists(s.folder() / "native/compiler"));
+    LH_CHECK(!lh::fs::exists(s.folder() / "native/check"));
 }

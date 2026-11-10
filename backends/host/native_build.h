@@ -23,9 +23,13 @@
 extern "C" {
 #endif
 
-/* Names how modules are compiled and linked; part of the cache folder's
- * identity, so changing any compiler option must change it. */
-#define NATIVE_BUILD_RECIPE "zig cc -O2 -mcpu=baseline -fPIC, -shared -nostdlib; 1"
+/* Compilers whose options the build knows. Zig is the one the player
+ * downloads; GCC and Clang are taken from the system when they work. */
+typedef enum { NATIVE_BUILD_ZIG = 0, NATIVE_BUILD_GCC, NATIVE_BUILD_CLANG } native_build_family_t;
+
+/* Names how a family compiles and links modules; part of the cache folder's
+ * identity, so changing any of its options must change it. */
+const char *native_build_recipe(native_build_family_t family);
 
 typedef enum {
     NATIVE_BUILD_OFF = 0,
@@ -101,6 +105,8 @@ typedef struct {
     const char *compiler;
     const char *const *driver;
     size_t driver_count;
+    native_build_family_t family;
+    /* Zig only: the others build for the system they run on. */
     const char *target;
     int windows;
     const char *abi_id;
@@ -144,6 +150,18 @@ typedef struct {
  * failed sets, which may be more. Reads the cache: for a screen on demand,
  * not for every frame. */
 size_t native_build_failures(native_build_failure_t *rows, size_t capacity);
+
+/* Builds one module as the service builds each of them, but at once and from
+ * source text, to learn whether a compiler works before choosing it. Reads
+ * root, compiler, driver, family, target, windows, abi_id and files from
+ * config; works in <root>/check, which it removes again, one player at a
+ * time. check opens the module; returns 1 once it has accepted it. */
+int native_build_try(const native_build_config_t *config, const char *source,
+                     int (*check)(void *user, const char *module, char *error, size_t size), void *user, char *error, size_t size);
+/* What a compiler says it is: preprocesses source with `compiler -E -P` in
+ * <root>/check and returns the text after the first line's marker, which is
+ * the compiler's own predefined macros where source names them. */
+int native_build_identify(const char *root, const char *compiler, const char *source, const char *marker, char *out, size_t size);
 
 #ifdef __cplusplus
 }

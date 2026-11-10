@@ -39,7 +39,8 @@ libraries and their distribution's licence/source packages.
 The RetroAchievements transport uses system libcurl on Linux and the Windows WinHTTP system API on Windows.
 The badge decoder uses the existing zlib dependency; no additional image library is shipped.
 
-The player does not contain a compiler. To build the game's native code it downloads, when the user starts that
-step, the official Zig 0.17.1 archive from [ziglang.org](https://ziglang.org/download/) and installs
+The player does not contain a compiler. To build the game's native code it uses a C compiler the system already
+has (Clang or GCC on Linux) when one works; nothing of it is copied or shipped. Otherwise, when the user starts that
+step, it downloads the official Zig 0.17.1 archive from [ziglang.org](https://ziglang.org/download/) and installs
 only the files it needs in the user's data folder. Zig is MIT-licensed and includes LLVM under Apache-2.0 with LLVM
 exceptions; both licence texts (`LICENSE` and `lib/libcxx/LICENSE.TXT`) are among the installed files.

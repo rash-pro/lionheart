@@ -14,11 +14,15 @@ typedef enum { HOST_GUI_KEYBOARD, HOST_GUI_MOUSE, HOST_GUI_PAD } host_gui_input_
 typedef enum { HOST_GUI_COMPILER_MISSING, HOST_GUI_COMPILER_INSTALLING, HOST_GUI_COMPILER_FAILED, HOST_GUI_COMPILER_READY } host_gui_compiler_t;
 typedef enum { HOST_GUI_BUILD_OFF, HOST_GUI_BUILD_RUNNING, HOST_GUI_BUILD_DONE, HOST_GUI_BUILD_STOPPED } host_gui_build_t;
 typedef enum { HOST_GUI_STEP_DOWNLOAD, HOST_GUI_STEP_VERIFY, HOST_GUI_STEP_EXTRACT, HOST_GUI_STEP_CHECK, HOST_GUI_STEP_INSTALL } host_gui_step_t;
+/* A compiler the system has, which leaves setup nothing to ask. */
+typedef enum { HOST_GUI_SYSTEM_NONE, HOST_GUI_SYSTEM_GCC, HOST_GUI_SYSTEM_CLANG } host_gui_system_t;
 typedef struct {
     host_gui_compiler_t compiler;
     /* While installing: the step and how far it is, in bytes or entries. */
     host_gui_step_t step;
     unsigned long long done,total;
+    host_gui_system_t system;
+    char version[32];
     /* The download: its size, whether this build has an address for it, the
      * archive's kind ("zip", "tar.xz") and its file name when the address
      * gives one. */

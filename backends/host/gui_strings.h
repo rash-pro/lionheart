@@ -393,6 +393,8 @@ static const gui_string_t gui_strings[] = {
     {"nav.native", "Native code"},
     {"native.missing", "Compiler not installed"},
     {"native.ready", "Compiler installed"},
+    {"native.gcc", "GCC %s"},
+    {"native.clang", "Clang %s"},
     {"native.count", "%u of %u ready"},
     {"native.part.left", "about %s left"},
     {"native.part.failed", "%u failed"},
