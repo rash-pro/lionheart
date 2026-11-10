@@ -68,3 +68,36 @@ Receipts include work hashes and summary distributions.
 and relinks it before the frozen runtime archive. `--runtime DIR` selects a frozen runtime.
 `mdec-trace record --trace build/capture.mdec -- COMMAND` records observations; `replay` checks them.
 Traces must remain under `build/`.
+
+## Disc metadata maintenance
+
+`build/devtools/ff8files` provides `import`, `list`, `get` and `verify`:
+
+```sh
+build/devtools/ff8files list disc1.cue --overlays
+build/devtools/ff8files list disc1.cue field --json
+build/devtools/ff8files get disc1.cue field /scratch/field.bin --loaded
+build/devtools/ff8files verify disc2.cue --scan-disc1 disc1.cue
+build/devtools/ff8files import --upstream /source/ff8-decomp --commit FULL_SHA \
+  --output /scratch/metadata disc1.cue disc2.cue disc3.cue disc4.cue
+```
+
+`--metadata DIR` selects an inventory directory for list/get/verify. Extraction
+supports full paths, overlay names and `@table:index` identities; `--raw`,
+`--loaded` and `--decompress` are mutually exclusive. Extraction inside the
+checkout is restricted to `work/` and `build/`.
+
+The tool links the generator's CUE/ISO, bounded IMG, LZS and SHA-1 readers.
+The YAML reader supports block mappings, block sequences (including indentless
+sequences), quoted/plain scalars, hexadecimal integers, comments and single-line
+flow collections. These cover the upstream lock and binary configuration; tags,
+anchors and multiline scalars fail explicitly. No YAML dependency is needed.
+Ordered JSON uses the vendored MIT-licensed JSON for Modern C++ header so key
+order and ASCII escaping are preserved.
+
+Import calls `git rev-parse HEAD` unless `--commit` is supplied.
+`--inventory-only` records skipped symbol conversion; `--unverified-cache` also
+requires inventory-only and records an unknown source commit. Use these modes
+only when the upstream symbol inputs or source identity are unavailable.
+`test_metadata_tool` uses a synthetic raw-sector ISO and exercises the YAML
+subset, list output, extraction and verification of corrupt metadata.

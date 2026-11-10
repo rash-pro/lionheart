@@ -24,3 +24,12 @@ target_compile_definitions(gte-trace PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
 add_executable(mdec-trace mdec_trace.cpp)
 target_compile_features(mdec-trace PRIVATE cxx_std_17)
 target_compile_definitions(mdec-trace PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
+enable_language(C)
+add_library(metadata-io STATIC metadata_io.c
+  ../../generator/src/base.c ../../generator/src/platform.c
+  ../../generator/src/disc.c ../../generator/src/lzs.c ../../generator/src/sha1.c)
+target_include_directories(metadata-io PRIVATE ../../generator/src ../../generator/include)
+add_executable(ff8files ff8files.cpp)
+target_compile_features(ff8files PRIVATE cxx_std_17)
+target_compile_definitions(ff8files PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
+target_link_libraries(ff8files PRIVATE metadata-io)
