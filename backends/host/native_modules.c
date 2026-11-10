@@ -18,6 +18,7 @@ struct native_module {
     native_module_t *next;
     void *handle;
     const lh_module_descriptor_t *descriptor;
+    int32_t index;
     int registered;
     /* Host copies of the tables, made only when some entry was redirected to
      * an identical body that an earlier module already registered. */
@@ -44,8 +45,11 @@ static const lh_module_api host_api = {
 static const lh_module_traits host_traits = LH_MODULE_TRAITS_INIT;
 static const char host_magic[8] = LH_MODULE_MAGIC;
 
+/* Lookups with no executable module would bypass the dispatch cache. */
+static const code_region_t *const no_regions[1] = {NULL};
+
 static struct {
-    int configured;
+    int configured, take_over;
     uint32_t fnv, base, size;
     uint8_t *text;
     native_module_t *main_module;
@@ -294,7 +298,7 @@ native_module_status_t native_module_open(const char *path, native_module_t **mo
     if (!(result = calloc(1, sizeof(*result)))) {
         library_close(handle); return refuse(NATIVE_MODULE_LOAD_FAILED, error, error_size, "out of memory");
     }
-    result->handle = handle; result->descriptor = d;
+    result->handle = handle; result->descriptor = d; result->index = d->set_index;
     if (module) *module = result;
     else native_module_close(result);
     return NATIVE_MODULE_OK;
@@ -383,6 +387,13 @@ static void share_bodies(native_module_t *module, const entry_t **entries, const
 
 static void commit_at_boundary(cpu_t *c) { native_modules_commit(c); }
 
+void native_module_publish_as(native_module_t *module, int32_t index) {
+    if (module->descriptor->set_index != LH_MODULE_MAIN_SET && index >= 0) module->index = index;
+    native_module_publish(module);
+}
+
+void native_modules_take_over(int enabled) { state.take_over = enabled; }
+
 void native_module_publish(native_module_t *module) {
     native_module_t *head = __atomic_load_n(&state.pending, __ATOMIC_RELAXED);
     do module->next = head;
@@ -408,14 +419,14 @@ static void register_module(cpu_t *c, native_module_t *module) {
     }
     if (state.count == CODE_OVERLAYS) { native_module_close(module); return; }
     for (i = 0; i < state.count; ++i) {
-        if (state.overlays[i].index == (uint32_t)d->set_index) { already = 1; break; }
-        if (state.overlays[i].index > (uint32_t)d->set_index) break;
+        if (state.overlays[i].index == (uint32_t)module->index) { already = 1; break; }
+        if (state.overlays[i].index > (uint32_t)module->index) break;
     }
     if (already) { native_module_close(module); return; }
     share_bodies(module, &entries, &regions);
     memmove(&state.overlays[i + 1], &state.overlays[i], (state.count - i) * sizeof(*state.overlays));
     memmove(&state.modules[i + 1], &state.modules[i], (state.count - i) * sizeof(*state.modules));
-    state.overlays[i] = (overlay_t){(uint32_t)d->set_index, d->base, d->size, {0}, entries, d->entry_count, regions};
+    state.overlays[i] = (overlay_t){(uint32_t)module->index, d->base, d->size, {0}, entries, d->entry_count, regions};
     memcpy(state.overlays[i].sha1, d->image_sha1, sizeof(d->image_sha1));
     state.modules[i] = module;
     state.count++;
@@ -438,6 +449,10 @@ void native_modules_commit(cpu_t *c) {
     }
     c->overlays = state.overlays;
     c->overlay_count = state.count;
+    if (state.take_over && native_modules_registered()) {
+        if (!c->entry_regions) c->entry_regions = no_regions;
+        c->interpreter_only = 0;
+    }
     dispatch_invalidate(c);
 }
 
@@ -447,6 +462,7 @@ void native_modules_shutdown(cpu_t *c) {
     size_t i;
     native_module_t *module = __atomic_exchange_n(&state.pending, NULL, __ATOMIC_ACQUIRE);
     if (c) {
+        if (state.take_over) c->interpreter_only = 1;
         c->entries = NULL; c->entry_count = 0; c->entry_regions = NULL;
         c->overlays = NULL; c->overlay_count = 0;
         dispatch_invalidate(c);

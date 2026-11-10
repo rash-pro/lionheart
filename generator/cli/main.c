@@ -5,6 +5,11 @@
 
 #include "lionheart_generator.h"
 
+#ifndef _WIN32
+#include <errno.h>
+#include <sys/stat.h>
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 
@@ -38,7 +43,8 @@ static void usage(FILE *to)
             "usage: lionheart-gen [EXE] [--disc CUE ...] [--catalog DIR] [--assets-dir DIR]\n"
             "                     [-o DIR] [--mode trace|fast] [--timing exact|block|loose]\n"
             "                     [--host-mode precise|fast] [--legacy-overlays] [--shape linked|modules]\n"
-            "                     [--cache] [--fingerprint]\n");
+            "                     [--cache] [--fingerprint]\n"
+            "       lionheart-gen --disc CUE ... --shape modules --plan | --emit-set INDEX|all [-o DIR]\n");
 }
 
 static const char *value_of(int argc, char **argv, int *index, const char *arg, const char *flag)
@@ -59,6 +65,19 @@ static int matches_flag(const char *arg, const char *flag)
     return !strncmp(arg, flag, size) && (arg[size] == 0 || arg[size] == '=');
 }
 
+static int make_directory(const char *path)
+{
+#ifdef _WIN32
+    int count = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    wchar_t *wide = count > 0 ? malloc((size_t)count * sizeof *wide) : NULL;
+    int ok = wide && MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, count) && (CreateDirectoryW(wide, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+    free(wide);
+    return ok;
+#else
+    return !mkdir(path, 0777) || errno == EEXIST;
+#endif
+}
+
 static int progress(void *user, const char *stage, unsigned long done, unsigned long total)
 {
     (void)user;
@@ -69,6 +88,74 @@ static int progress(void *user, const char *stage, unsigned long done, unsigned 
         fflush(stdout);
     }
     return 0;
+}
+
+/* Developer view of what a player builds: the plan from metadata, or modules
+ * emitted one set at a time through a session, each printed with its key. */
+static int single_sets(const lhg_options *options, int plan, const char *which)
+{
+    char error[1024];
+    if (plan) {
+        unsigned mask = 0;
+        lhg_set_info *sets;
+        size_t count;
+        for (int disc = 0; disc < options->disc_count; disc++) {
+            const char *path = options->disc_paths[disc];
+            const char *digit = strstr(path, "Disc ");
+            /* Plans need disc numbers only; the session verifies the images themselves. */
+            if (!digit || digit[5] < '1' || digit[5] > '4') {
+                fprintf(stderr, "lionheart-gen: --plan needs disc numbers in the image names\n");
+                return 2;
+            }
+            mask |= 1u << (digit[5] - '0');
+        }
+        if (lhg_plan_sets(options, mask, &sets, &count, error, sizeof error) != LHG_OK) {
+            fprintf(stderr, "lionheart-gen: %s\n", error);
+            return 1;
+        }
+        for (size_t set = 0; set < count; set++)
+            printf("%d %s discs=%x effect=%d base=%08lx size=%lu %s\n", sets[set].index, sets[set].identity, sets[set].discs, sets[set].effect,
+                   sets[set].base, sets[set].size, sets[set].name);
+        free(sets);
+        return 0;
+    }
+    lhg_session *session;
+    if (lhg_session_open(options, &session, error, sizeof error) != LHG_OK) {
+        fprintf(stderr, "lionheart-gen: %s\n", error);
+        return 1;
+    }
+    const lhg_set_info *sets;
+    size_t count = lhg_session_sets(session, &sets);
+    int all = !strcmp(which, "all"), found = 0;
+    for (size_t set = 0; set < count; set++) {
+        if (!all && atoi(which) != sets[set].index)
+            continue;
+        char directory[4096], key[65];
+        found = 1;
+        if (sets[set].index == LHG_MAIN_SET)
+            snprintf(directory, sizeof directory, "%s/main", options->output_dir);
+        else
+            snprintf(directory, sizeof directory, "%s/set-%d", options->output_dir, sets[set].index);
+        /* A key-only pass first: the key must not depend on whether files are written. */
+        char quiet[65];
+        if (lhg_session_emit(session, set, NULL, quiet, error, sizeof error) != LHG_OK ||
+            !make_directory(options->output_dir) || !make_directory(directory) ||
+            lhg_session_emit(session, set, directory, key, error, sizeof error) != LHG_OK) {
+            fprintf(stderr, "lionheart-gen: %s\n", *error ? error : "cannot create the output directory");
+            lhg_session_close(session);
+            return 1;
+        }
+        if (strcmp(quiet, key)) {
+            fprintf(stderr, "lionheart-gen: set %d key changed when writing\n", sets[set].index);
+            lhg_session_close(session);
+            return 1;
+        }
+        printf("%d %s %s\n", sets[set].index, sets[set].identity, key);
+    }
+    lhg_session_close(session);
+    if (!found)
+        fprintf(stderr, "lionheart-gen: no set %s for these discs\n", which);
+    return found ? 0 : 1;
 }
 
 int main(int argc, char **argv)
@@ -85,7 +172,8 @@ int main(int argc, char **argv)
     memset(&options, 0, sizeof options);
     options.catalog_dir = "games/ff8-usa";
     options.output_dir = "build/gen";
-    int have_exe = 0;
+    int have_exe = 0, plan = 0;
+    const char *emit_set = NULL;
     for (int index = 1; index < argc; index++) {
         const char *arg = argv[index];
         if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
@@ -170,6 +258,11 @@ int main(int argc, char **argv)
                 fprintf(stderr, "lionheart-gen: unknown --shape %s\n", value);
                 return 2;
             }
+        } else if (!strcmp(arg, "--plan")) {
+            plan = 1;
+        } else if (matches_flag(arg, "--emit-set")) {
+            if (!(emit_set = value_of(argc, argv, &index, arg, "--emit-set")))
+                return 2;
         } else if (!strcmp(arg, "--legacy-overlays")) {
             options.legacy_overlays = 1;
         } else if (arg[0] == '-' && arg[1]) {
@@ -193,6 +286,8 @@ int main(int argc, char **argv)
         usage(stderr);
         return 2;
     }
+    if (plan || emit_set)
+        return single_sets(&options, plan, emit_set);
     lhg_summary summary;
     if (options.use_cache)
         options.progress = progress;

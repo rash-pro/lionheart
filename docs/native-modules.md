@@ -1,8 +1,9 @@
 # Load recompiled code as modules
 
 A player gets native code by compiling it on its own machine and loading it while the game runs, one module per
-overlay set plus one for the main executable. Until a module arrives, the interpreter runs that code. This page is
-the developer path to exercise that mechanism without the player's own build orchestration.
+overlay set plus one for the main executable. Until a module arrives, the interpreter runs that code. The first part
+of this page is the developer path to exercise that mechanism by hand; [the player's own build](#the-players-own-build)
+describes what the release player does.
 
 ```sh
 build/generator/lionheart-gen --disc disc1.cue --disc disc2.cue --disc disc3.cue --disc disc4.cue \
@@ -40,3 +41,55 @@ when it runs, by the same fingerprints the linked build uses. A module is regist
 dispatch loop, where nothing holds a registry pointer; registered modules stay loaded until shutdown, and must:
 a function that several sets contain is compiled into each of their modules, and the host points every set's
 entries at the copy registered first, as the linked build shares one body between sets.
+
+## The player's own build
+
+With the compiler installed under `<data>/toolchain/<version>/`, the release player starts a build service
+(`backends/host/native_build.h`) right after it boots the executable. The game starts on the interpreter as before;
+each module is registered at a dispatch boundary as it arrives, and the first registration switches the guest off
+interpreter-only mode. Without the compiler nothing starts and the player behaves as it always did.
+
+The service lists the sets of the discs the player knows from the catalog alone (`lhg_plan_sets`, no disc read),
+hands over every module the cache already has, and only then, if anything is missing, reads the discs once
+(`lhg_session_open`) and emits one set at a time (`lhg_session_emit`) into a build folder. Worker threads compile
+the units with `zig cc` at lower priority, link the module, publish it and delete the sources and objects. Workers
+are the processor count less two (one when there are fewer than four), and no more than available memory over
+1.1 GiB. Order: the executable; sets whose code the guest has just entered without a native body; the inserted
+disc's game sets (field, menus, world, battle and the rest of the non-effects); its battle effects; everything else.
+
+```
+<data>/native/<cache id>/in-use              held shared by every player using this folder
+<data>/native/<cache id>/<exe id>/lock        held by the one player that builds
+                                  include/    the runtime headers modules compile against
+                                  modules/KEY.so (.dll) and KEY.ok, the receipt written after it
+                                  sets/IDENTITY   the KEY that serves a set
+                                  failed/IDENTITY attempts, KEY, the end of the compiler's diagnostics
+                                  work/KEY/   a build in progress, kept to resume after a quit or crash
+```
+
+The cache id is a SHA-256 of the module ABI id, the generator fingerprint, the embedded catalog, the pinned compiler
+and the compile recipe: whatever changes generated code starts a new folder, and a folder no running player holds is
+removed by the next builder. The executable id hashes the booted text. A set's IDENTITY hashes the catalog facts its
+code comes from; a module's KEY hashes the code itself without the descriptor fields that name a set, so an overlay
+whose code is the same on four discs, or under two catalog names, is compiled once and registered once.
+
+A module is valid only with its receipt, and the receipt only if the file still has the recorded size. Publication
+links the finished file into `modules/` without replacing anything, then writes the receipt and the set receipts by
+rename. A compiled object counts only once the compiler has finished and it has been renamed into place, so a builder
+starting up keeps `work/KEY/` folders of unpublished modules and resumes them; it removes anything else in `work/`,
+any module without a receipt and any leftover temporary file, none of which has ever been loaded. `work/` is emptied
+once everything is built. A second player on the same data folder loads published modules, checks for new ones
+every two seconds, and becomes the builder when the first one exits. A set whose module fails to compile or is
+refused by the loader is recorded in `failed/` with the end of the diagnostics (compiled without carets, so no
+source text, and with build paths removed), retried once on a later launch, and then left interpreted. A failure
+that is not the set's own (the discs, the disk, the compiler missing) stops building for that run and records
+nothing against any set.
+
+Save states record the precise host but not which code is native: the bit in the state's mode word that once meant
+"interpreter only" is always set by the player, as it always was, so a state saved before a module arrived loads
+after it and the other way round.
+
+Hidden options drive the service headless: `--native-status` prints progress and a summary, `--native-workers N`,
+`--native-off` keeps the interpreter, `--native-wait` lets the build finish after the guest stops,
+`--native-build-only` builds without running the game, and `--native-compiler PATH` replaces the compiler driver.
+`lionheart-gen --plan` and `lionheart-gen --emit-set INDEX|all` show the same plan and per-set keys.

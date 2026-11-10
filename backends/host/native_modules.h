@@ -34,6 +34,13 @@ native_module_status_t native_module_open(const char *path, native_module_t **mo
 void native_module_close(native_module_t *module);
 /* Queues an opened module; it takes effect at the next dispatch boundary. */
 void native_module_publish(native_module_t *module);
+/* The same, registered as overlay set `index` whatever set the descriptor
+ * names: one module may serve several sets with identical code, and set
+ * numbers differ between disc combinations. */
+void native_module_publish_as(native_module_t *module, int32_t index);
+/* Once anything is registered, the guest stops being interpreter-only. For a
+ * host that starts on the interpreter and switches as modules arrive. */
+void native_modules_take_over(int enabled);
 /* Registers everything queued. Only call while no guest code or lookup is running. */
 void native_modules_commit(cpu_t *c);
 size_t native_modules_registered(void);

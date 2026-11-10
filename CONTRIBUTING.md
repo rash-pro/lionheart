@@ -1,8 +1,8 @@
 # Contributing to Lionheart
 
 Lionheart is the whole port: the recompiler, the portable runtime, the host, the per-version metadata and the tests.
-The recompiled C is generated on your machine from your own discs; it is never committed. Release players use only
-the interpreter.
+The recompiled C is generated on your machine from your own discs; it is never committed. Release players start on
+the interpreter and build the same code for themselves in the background once their compiler is installed.
 
 ## Set up from your discs
 

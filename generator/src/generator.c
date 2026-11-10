@@ -18,6 +18,8 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
         memset(summary, 0, sizeof *summary);
     ctx.progress = options->progress;
     ctx.progress_user = options->progress_user;
+    ctx.catalog_files = options->catalog_files;
+    ctx.catalog_file_count = options->catalog_file_count;
     /* Declared before setjmp and assigned once; never read after the longjmp path. */
     lhg_arena arena;
     if (setjmp(ctx.bail)) {
@@ -28,7 +30,7 @@ lhg_status lhg_generate(const lhg_options *options, lhg_summary *summary, char *
     }
     lhg_arena_init(&arena, &ctx);
 
-    if (!options->output_dir || !options->catalog_dir)
+    if (!options->output_dir || (!options->catalog_dir && !options->catalog_file_count))
         lhg_fail(&ctx, "output directory and catalog directory are required");
     if ((options->exe_path != NULL) == (options->disc_count > 0))
         lhg_fail(&ctx, "give either an EXE or discs, not both or neither");

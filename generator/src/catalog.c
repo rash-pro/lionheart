@@ -6,6 +6,7 @@
 #include "disc.h"
 #include "platform.h"
 #include "sha1.h"
+#include "sha256.h"
 
 /* Loader entry points of the overlays the executable launches. */
 static uint32_t entry_for_top(int top, uint32_t base)
@@ -38,6 +39,15 @@ static uint32_t read_u32(const uint8_t *at)
 
 static const lhg_json *load_json(lhg_arena *arena, const char *directory, const char *name)
 {
+    lhg_ctx *ctx = arena->ctx;
+    for (size_t index = 0; index < ctx->catalog_file_count; index++)
+        if (!strcmp(ctx->catalog_files[index].name, name)) {
+            /* The parser keeps pointers into its text, so it gets an arena copy. */
+            char *copy = lhg_arena_strdup(arena, (const char *)ctx->catalog_files[index].data, ctx->catalog_files[index].size);
+            return lhg_json_parse(arena, copy, ctx->catalog_files[index].size, name);
+        }
+    if (ctx->catalog_file_count)
+        lhg_fail(ctx, "the embedded catalog has no %s", name);
     const char *path = lhg_join_path(arena, directory, name);
     size_t size;
     char *data = (char *)lhg_read_file(arena->ctx, path, &size);
@@ -483,11 +493,125 @@ static const lhg_json *path_index_find(const path_index *index, const char *path
     return NULL;
 }
 
+/* Which sets the present discs give, and their loader indices, from metadata
+ * alone. Within a group, images with the same loaded bytes are one set held by
+ * the last location listing them; set numbers below 128 stay the original
+ * top-table overlays, and the rest are numbered in catalog order. */
+static void plan_groups(lhg_arena *arena, const lhg_json *catalog, const int present[5], const path_index indexes[5],
+                        int strict, lhg_plan_row **out, size_t *out_count)
+{
+    lhg_ctx *ctx = arena->ctx;
+    lhg_plan_row *rows = NULL;
+    size_t count = 0, capacity = 0;
+    int extra = 128;
+    for (size_t group_index = 0; group_index < catalog->as.array.count; group_index++) {
+        const lhg_json *group = catalog->as.array.items[group_index];
+        const char *group_name = lhg_json_str(ctx, lhg_json_require(ctx, group, "name", "catalog group"), "name");
+        const lhg_json *locations = lhg_json_list(ctx, lhg_json_require(ctx, group, "locations", group_name), "locations");
+        size_t first = count;
+        for (size_t row = 0; row < locations->as.array.count; row++) {
+            const lhg_json *location = locations->as.array.items[row];
+            int64_t disc = lhg_json_int(ctx, lhg_json_require(ctx, location, "disc", "location"), "disc");
+            if (disc < 1 || disc > 4 || !present[disc])
+                continue;
+            const char *loaded = lhg_json_str(ctx, lhg_json_require(ctx, location, "loaded_sha1", "location"), "loaded_sha1");
+            size_t slot = first;
+            while (slot < count && strcmp(rows[slot].loaded_sha1, loaded))
+                slot++;
+            if (slot == count) {
+                rows = lhg_grow(ctx, rows, &capacity, count, sizeof *rows);
+                memset(&rows[count++], 0, sizeof *rows);
+            }
+            rows[slot].group = group_index;
+            rows[slot].group_json = group;
+            rows[slot].group_name = group_name;
+            rows[slot].loaded_sha1 = loaded;
+            rows[slot].location = location;
+            rows[slot].disc = (int)disc;
+            rows[slot].discs |= 1u << disc;
+        }
+        for (size_t slot = first; slot < count; slot++) {
+            lhg_plan_row *item = &rows[slot];
+            const char *path = lhg_json_str(ctx, lhg_json_require(ctx, item->location, "path", "location"), "path");
+            const lhg_json *inventory_entry = path_index_find(&indexes[item->disc], path);
+            if (!inventory_entry && strict)
+                lhg_fail(ctx, "%s has no inventory entry on disc %d", path, item->disc);
+            /* A loader reports it where it always did: after the bytes were checked. */
+            if (!inventory_entry) {
+                item->missing = 1;
+                *out = rows;
+                *out_count = slot + 1;
+                return;
+            }
+            const lhg_json *locator = lhg_json_require(ctx, inventory_entry, "locator", "inventory entry");
+            int has_top = !strcmp(lhg_json_str(ctx, lhg_json_require(ctx, locator, "table", "locator"), "table"), "top");
+            int64_t raw_top = has_top ? lhg_json_int(ctx, lhg_json_require(ctx, locator, "index", "locator"), "index") : -1;
+            /* Anything outside a top table's slots is simply not a known loader index. */
+            int top = raw_top >= 0 && raw_top < 256 ? (int)raw_top : -1;
+            int index = has_top && is_legacy_top(top) ? (item->disc - 1) * 32 + top : extra;
+            /* Comparing the result rather than the path mirrors how indices were assigned. */
+            if (index == extra)
+                extra++;
+            item->index = index;
+            item->has_top = has_top;
+            item->top = top;
+        }
+    }
+    *out = rows;
+    *out_count = count;
+}
+
+void lhg_plan_identity(lhg_ctx *ctx, const lhg_plan_row *row, char hex[65])
+{
+    const lhg_json *load_address = lhg_json_require(ctx, row->location, "load_address", "location");
+    lhg_sha256 hash;
+    char number[64];
+    lhg_sha256_init(&hash);
+    lhg_sha256_add(&hash, "lionheart-set-1\n", 16);
+    const char *parts[3] = {lhg_json_str(ctx, lhg_json_require(ctx, row->group_json, "sha1", row->group_name), "sha1"), row->loaded_sha1,
+                            lhg_json_truth(load_address) ? lhg_json_str(ctx, load_address, "load_address") : "inferred"};
+    for (int part = 0; part < 3; part++) {
+        lhg_sha256_add(&hash, parts[part], strlen(parts[part]));
+        lhg_sha256_add(&hash, "\n", 1);
+    }
+    snprintf(number, sizeof number, "%lld %d %d\n",
+             (long long)lhg_json_int(ctx, lhg_json_require(ctx, row->location, "loaded_size", "location"), "loaded_size"), row->has_top,
+             row->top);
+    lhg_sha256_add(&hash, number, strlen(number));
+    lhg_sha256_finish(&hash, hex);
+}
+
+uint32_t lhg_plan_base(lhg_ctx *ctx, const lhg_plan_row *row)
+{
+    const lhg_json *load_address = lhg_json_require(ctx, row->location, "load_address", "location");
+    return lhg_json_truth(load_address) ? parse_hex32(ctx, lhg_json_str(ctx, load_address, "load_address"), "load_address") : 0;
+}
+
+void lhg_plan_catalog(lhg_arena *arena, const char *catalog_dir, unsigned disc_mask, lhg_plan_row **rows, size_t *count)
+{
+    lhg_ctx *ctx = arena->ctx;
+    const lhg_json *catalog_root = load_json(arena, catalog_dir, "overlays-all.json");
+    const lhg_json *catalog = lhg_json_list(ctx, lhg_json_require(ctx, catalog_root, "overlays", "overlays-all.json"), "overlays");
+    int present[5] = {0};
+    path_index indexes[5];
+    memset(indexes, 0, sizeof indexes);
+    for (int number = 1; number <= 4; number++) {
+        if (!(disc_mask & (1u << number)))
+            continue;
+        const lhg_json *inventory = load_json(arena, catalog_dir, lhg_fmt(arena, "files-disc%d.json", number));
+        path_index_build(arena, &indexes[number], lhg_json_list(ctx, lhg_json_require(ctx, inventory, "entries", "inventory"), "entries"));
+        present[number] = 1;
+    }
+    plan_groups(arena, catalog, present, indexes, 1, rows, count);
+}
+
 void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *const *cues, int cue_count,
                          const char *assets_dir, lhg_program *program)
 {
     lhg_ctx *ctx = arena->ctx;
-    lhg_make_directories(ctx, assets_dir);
+    /* A host emitting modules itself keeps every image in memory. */
+    if (assets_dir)
+        lhg_make_directories(ctx, assets_dir);
     const lhg_json *metadata = load_json(arena, catalog_dir, "overlays.json");
     const lhg_json *catalog_root = load_json(arena, catalog_dir, "overlays-all.json");
     const lhg_json *catalog = lhg_json_list(ctx, lhg_json_require(ctx, catalog_root, "overlays", "overlays-all.json"), "overlays");
@@ -517,7 +641,8 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
         uint8_t *exe = lhg_disc_read(&discs[image.number].disc, row->record.lba, (int64_t)exe_size);
         if (previous_exe && (previous_size != exe_size || memcmp(previous_exe, exe, exe_size)))
             lhg_fail(ctx, "disc EXEs differ");
-        lhg_write_file(ctx, lhg_fmt(arena, "%s/SLUS_008.92", assets_dir), exe, exe_size);
+        if (assets_dir)
+            lhg_write_file(ctx, lhg_fmt(arena, "%s/SLUS_008.92", assets_dir), exe, exe_size);
         main_image = parse_exe(arena, exe, exe_size);
         apply_exe_metadata(arena, main_image, metadata, exe, exe_size);
         previous_exe = exe;
@@ -525,11 +650,12 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
         lhg_progress(ctx, "discs", (unsigned long)(cue + 1), (unsigned long)cue_count);
     }
 
+    lhg_plan_row *plan;
+    size_t plan_count, plan_next = 0;
+    plan_groups(arena, catalog, present, indexes, 0, &plan, &plan_count);
     lhg_json *evidence = lhg_json_new_object(arena);
     lhg_overlay_set *result = NULL;
     size_t result_count = 0, result_capacity = 0;
-    /* Set numbers below 128 stay the original top-table overlays. */
-    int extra = 128;
     for (size_t group_index = 0; group_index < catalog->as.array.count; group_index++) {
         const lhg_json *group = catalog->as.array.items[group_index];
         const char *group_name = lhg_json_str(ctx, lhg_json_require(ctx, group, "name", "catalog group"), "name");
@@ -639,19 +765,14 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
                 base = lhg_infer_effect_base(arena, item->data, item->data_size, group_name, proof);
                 lhg_json_set(arena, evidence, group_sha1, proof);
             }
-            const char *path = lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path");
-            const lhg_json *inventory_entry = path_index_find(&indexes[disc], path);
-            if (!inventory_entry)
-                lhg_fail(ctx, "%s has no inventory entry on disc %d", path, disc);
-            const lhg_json *locator = lhg_json_require(ctx, inventory_entry, "locator", "inventory entry");
-            int has_top = !strcmp(lhg_json_str(ctx, lhg_json_require(ctx, locator, "table", "locator"), "table"), "top");
-            int64_t raw_top = has_top ? lhg_json_int(ctx, lhg_json_require(ctx, locator, "index", "locator"), "index") : -1;
-            /* Anything outside a top table's slots is simply not a known loader index. */
-            int top = raw_top >= 0 && raw_top < 256 ? (int)raw_top : -1;
-            int index = has_top && is_legacy_top(top) ? (disc - 1) * 32 + top : extra;
-            /* Comparing the result rather than the path mirrors how indices were assigned. */
-            if (index == extra)
-                extra++;
+            /* The plan walked the same groups and locations in the same order. */
+            const lhg_plan_row *planned = plan_next < plan_count ? &plan[plan_next++] : NULL;
+            if (planned && planned->missing)
+                lhg_fail(ctx, "%s has no inventory entry on disc %d",
+                         lhg_json_str(ctx, lhg_json_require(ctx, location, "path", "location"), "path"), disc);
+            if (!planned || planned->group != group_index || planned->location != location || strcmp(planned->loaded_sha1, item->loaded_sha1))
+                lhg_fail(ctx, "%s: catalog plan disagrees with the verified images", group_name);
+            int has_top = planned->has_top, top = planned->top, index = planned->index;
             lhg_image *image = lhg_arena_alloc(arena, sizeof *image);
             memset(image, 0, sizeof *image);
             image->data = item->loaded;
@@ -680,7 +801,8 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
             /* Effect callbacks also appear as absolute pointers in data tables.
              * Requiring a function prologue keeps embedded pixels out of traversal. */
             lhg_discover(arena, image, seeds, seed_count, 0, &set->functions);
-            lhg_write_file(ctx, lhg_fmt(arena, "%s/set%d.bin", assets_dir, index), item->loaded, item->loaded_size);
+            if (assets_dir)
+                lhg_write_file(ctx, lhg_fmt(arena, "%s/set%d.bin", assets_dir, index), item->loaded, item->loaded_size);
             item->owner->loaded_retained = 1;
             lhg_progress(ctx, "catalog", (unsigned long)result_count, (unsigned long)catalog->as.array.count);
         }
@@ -701,20 +823,26 @@ void lhg_compile_catalog(lhg_arena *arena, const char *catalog_dir, const char *
             if (result[index].index == result[other].index)
                 lhg_fail(ctx, "catalog set index collision");
 
-    lhg_text text;
-    lhg_text_init(&text, ctx);
-    lhg_json_dump(&text, evidence);
-    lhg_text_adds(&text, "\n");
-    lhg_write_file(ctx, lhg_fmt(arena, "%s/load-address-evidence.json", assets_dir), text.data, text.size);
-    lhg_text_free(&text);
+    if (assets_dir) {
+        lhg_text text;
+        lhg_text_init(&text, ctx);
+        lhg_json_dump(&text, evidence);
+        lhg_text_adds(&text, "\n");
+        lhg_write_file(ctx, lhg_fmt(arena, "%s/load-address-evidence.json", assets_dir), text.data, text.size);
+        lhg_text_free(&text);
+    }
 
     for (int number = 1; number <= 4; number++)
         if (present[number])
             lhg_ff8_image_close(&discs[number]);
+    if (plan_next != plan_count)
+        lhg_fail(ctx, "catalog plan lists images that were not verified");
     if (result_count)
         qsort(result, result_count, sizeof *result, compare_set);
     memset(program, 0, sizeof *program);
     program->main = main_image;
     program->overlays = result;
     program->overlay_count = result_count;
+    program->plan = plan;
+    program->plan_count = plan_count;
 }

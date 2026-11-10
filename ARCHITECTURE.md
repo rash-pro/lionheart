@@ -3,7 +3,8 @@
 Lionheart statically recompiles the original PlayStation executable and overlays into C99.
 The portable runtime provides the guest CPU, memory and hardware model.
 The SDL2 host supplies input, audio, storage and presentation.
-The distributable player uses that runtime's interpreter and an empty catalog.
+The distributable player starts on that runtime's interpreter with an empty catalog, and builds its own native
+code from the player's discs once a compiler is installed (docs/native-modules.md).
 No game-derived code or data is committed or distributed.
 
 ## Disc to native executable

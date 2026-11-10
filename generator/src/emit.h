@@ -87,5 +87,8 @@ void lhg_emit(lhg_arena *arena, const lhg_image *image, const lhg_functions *fun
 /* The module shape: one self-contained, separately loadable tree per set. */
 void lhg_emit_modules(lhg_arena *arena, const lhg_image *image, const lhg_functions *functions, const char *output,
                       const lhg_overlay_set *overlays, size_t overlay_count, lhg_emit_result *result);
+/* One set of that shape, into directory (NULL: nowhere), with its content key; see lhg_session_emit. */
+void lhg_emit_module_set(lhg_arena *arena, const lhg_image *exe, int index, const lhg_image *image, const lhg_functions *functions,
+                         const char *directory, char key[65]);
 
 #endif
