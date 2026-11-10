@@ -22,6 +22,13 @@ LH_TEST(test_desktop_entry_validates) {
     auto available=t.run(t.host("sh").args({"-c","command -v desktop-file-validate"}));
     if(available.rc) lh::skip("desktop-file-validate is not installed (desktop-file-utils)");
     t.ok(t.host("desktop-file-validate").arg(t.root()/"packaging/linux/lionheart.desktop"));
+    auto staging=t.temp()/"stage", applications=staging/"usr/share/applications";
+    lh::fs::create_directories(applications);
+    lh::fs::copy_file(t.root()/"packaging/linux/lionheart.desktop",applications/"lionheart.desktop");
+    t.ok(t.host("cmake").args({"-DCMAKE_INSTALL_PREFIX=/usr","-P",
+        t.root()/"packaging/linux/update-desktop-cache.cmake"}).env("DESTDIR",staging));
+    LH_CONTAINS(lh::read_file(applications/"mimeinfo.cache"),"application/x-cue=lionheart.desktop;");
+    LH_CHECK(!lh::fs::exists(applications/"mimeapps.list"));
 }
 LH_TEST(test_desktop_single_local_path_reaches_game) {
     auto path=cue(t,"Disco é #1 ; $ prueba");
