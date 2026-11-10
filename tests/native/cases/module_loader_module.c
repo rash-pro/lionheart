@@ -45,6 +45,19 @@ static void f_80100000(cpu_t *c) {
 }
 static const entry_t module_entries[] = {{0x80100000u, f_80100000}};
 static const code_region_t *const module_regions[] = {&code_80100000};
+/* Never run. It names every runtime entry point a generated body can reach, so
+ * a header change that leaves one out of the call table fails this link. */
+LH_MODULE_EXPORT void lh_module_probe(cpu_t *c);
+void lh_module_probe(cpu_t *c) {
+    gte_rtps(c, 0, 0); gte_nclip(c); gte_op(c, 0, 0); gte_dpcs(c, 0, 0); gte_intpl(c, 0, 0);
+    gte_mvmva(c, 0, 0, 0, 0, 0); gte_ncds(c, 0, 0); gte_cdp(c, 0, 0); gte_ncdt(c, 0, 0); gte_nccs(c, 0, 0);
+    gte_cc(c, 0, 0); gte_ncs(c, 0, 0); gte_nct(c, 0, 0); gte_sqr(c, 0, 0); gte_dcpl(c, 0, 0); gte_dpct(c, 0, 0);
+    gte_avsz3(c); gte_avsz4(c); gte_rtpt(c, 0, 0); gte_gpf(c, 0, 0); gte_gpl(c, 0, 0); gte_ncct(c, 0, 0);
+    gte_cmd(c, 0); gte_write(c, 0, gte_read(c, 0, 0), 0); bios_syscall(c); interp_step(c);
+    cpu_exception(c, 0, 0); c_candidate(c, 0, 0); c_profile_count(c, 0, 0, 0); code_invalidate(c, 0, 0);
+    c_tick_slow(c); hw_event(c); hw_sr_changed(c); (void)code_valid(c, &code_80100000);
+    mem_slow_write(c, 0, 4, mem_slow_read(c, 0, 4));
+}
 #define SET_INDEX 5
 #define SET_BASE 0x80100000u
 #define SET_SIZE 0x100u

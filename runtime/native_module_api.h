@@ -1,6 +1,7 @@
 /* The runtime services that recompiled code reaches through the module boundary.
  * Everything else a body needs is inlined from cpu.h and never crosses it, so
- * the list stays short; the order here is part of the module ABI. */
+ * the list stays short; the order here is part of the module ABI. Every GTE
+ * command the generator can name is listed, not only those today's discs use. */
 #ifndef FF8_NATIVE_MODULE_API_H
 #define FF8_NATIVE_MODULE_API_H
 
@@ -13,14 +14,23 @@
     X(c_tick_slow, (cpu_t *c), (c)) \
     X(gte_avsz3, (cpu_t *c), (c)) \
     X(gte_avsz4, (cpu_t *c), (c)) \
+    X(gte_cc, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
+    X(gte_cdp, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
+    X(gte_cmd, (cpu_t *c, uint32_t opcode), (c, opcode)) \
+    X(gte_dcpl, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_dpcs, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_dpct, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_gpf, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_gpl, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_intpl, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_mvmva, (cpu_t *c, unsigned shift, int lm, unsigned mx, unsigned vs, unsigned cv), (c, shift, lm, mx, vs, cv)) \
+    X(gte_nccs, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_ncct, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
+    X(gte_ncds, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
+    X(gte_ncdt, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_nclip, (cpu_t *c), (c)) \
+    X(gte_ncs, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
+    X(gte_nct, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_op, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_rtps, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
     X(gte_rtpt, (cpu_t *c, unsigned shift, int lm), (c, shift, lm)) \
@@ -74,14 +84,23 @@ LH_MODULE_VALUE_CALLS(LHM_VALUE_FORWARD)
 #define c_tick_slow lhm_c_tick_slow
 #define gte_avsz3 lhm_gte_avsz3
 #define gte_avsz4 lhm_gte_avsz4
+#define gte_cc lhm_gte_cc
+#define gte_cdp lhm_gte_cdp
+#define gte_cmd lhm_gte_cmd
+#define gte_dcpl lhm_gte_dcpl
 #define gte_dpcs lhm_gte_dpcs
 #define gte_dpct lhm_gte_dpct
 #define gte_gpf lhm_gte_gpf
 #define gte_gpl lhm_gte_gpl
 #define gte_intpl lhm_gte_intpl
 #define gte_mvmva lhm_gte_mvmva
+#define gte_nccs lhm_gte_nccs
 #define gte_ncct lhm_gte_ncct
+#define gte_ncds lhm_gte_ncds
+#define gte_ncdt lhm_gte_ncdt
 #define gte_nclip lhm_gte_nclip
+#define gte_ncs lhm_gte_ncs
+#define gte_nct lhm_gte_nct
 #define gte_op lhm_gte_op
 #define gte_rtps lhm_gte_rtps
 #define gte_rtpt lhm_gte_rtpt

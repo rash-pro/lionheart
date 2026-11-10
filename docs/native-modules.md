@@ -26,8 +26,8 @@ builder takes `LH_ONLY=main;set-2` to build a subset.
 `runtime/native_module.h` is the whole binary contract. Each module exports one symbol, `lh_module_descriptor`:
 its set index (`-1` for the executable), the base, size and SHA-1 of the image it was generated from, the
 identity of the executable that image belongs to, its entry and region tables, and the main-owned functions it
-imports. It reaches the runtime only through `lh_api`, a table of the 29 runtime functions generated code calls,
-which the host fills while binding; everything else a body needs is inlined from `cpu.h`. Modules link nothing,
+imports. It reaches the runtime only through `lh_api`, a table of the 38 runtime functions generated code can call
+(every GTE command the generator can name, used or not), which the host fills while binding; everything else a body needs is inlined from `cpu.h`. Modules link nothing,
 so a module that needs any other symbol fails to link instead of failing to load.
 
 The ABI identity is a SHA-256 of the headers module code is compiled against and of the settings that shape them
