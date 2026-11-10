@@ -22,9 +22,49 @@ it runs.
 
 Rendering defaults to the original software output.
 
-## Build
+## Install
 
-There are no prebuilt releases yet.
+Packages are on the [releases page](https://github.com/rash-pro/lionheart/releases), with a `SHA256SUMS` file to
+check them against (`sha256sum -c SHA256SUMS --ignore-missing`). They are not code-signed. Neither contains game
+code or a compiler.
+
+### Linux
+
+`Lionheart-VERSION-x86_64.AppImage` is the whole program in one file. Make it executable and run it:
+
+```sh
+chmod +x Lionheart-*-x86_64.AppImage
+./Lionheart-*-x86_64.AppImage
+```
+
+It runs on x86-64 distributions with glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36 and newer). It
+brings SDL2, FFmpeg, libcurl and zlib, and uses these from the system: the C and C++ runtimes, OpenSSL 3, D-Bus,
+your audio and display libraries, and your GPU's Vulkan driver. To mount itself it needs `libfuse.so.2`
+(`libfuse2` on Debian and Ubuntu, `fuse-libs` on Fedora); without it, run it with `--appimage-extract-and-run`.
+
+The AppImage installs nothing. To get a menu entry, use an AppImage integration tool such as AppImageLauncher or
+Gear Lever, which reads the entry and icon inside it.
+
+### Windows
+
+Unzip `Lionheart-VERSION-windows-x86_64.zip` and run `Lionheart\Lionheart.exe`. Keep the folder together. As the
+program is not signed, SmartScreen may ask first: choose **More info**, then **Run anyway**.
+
+### Upgrade and roll back
+
+Your discs, memory cards, settings and save states live in your data folder (see
+[Configuration and files](#configuration-and-files)), never in the package, so a new or older version finds them
+as they were.
+- **Linux:** replace the AppImage with the new file. To roll back, run the older one.
+- **Windows:** unzip the new zip where you unzipped the old one, so that its `Lionheart` folder lands on yours,
+  and replace the files when asked. A portable folder keeps its data: the zip holds only program files, none named
+  like your data. To roll back, do the same with the older zip.
+
+Save states load only in the build that made them, as before; in-game memory card saves always carry over. The
+native code Lionheart compiled is reused when the new version would compile the same code, and otherwise built
+again in the background while you play, as on the first run; the old copy is removed once no Lionheart uses it.
+
+## Build
 
 ### Linux
 
@@ -189,7 +229,6 @@ it fits together, and [docs/debugging.md](docs/debugging.md) for tracking down r
 ## Roadmap
 
 - Smoother battles: fewer frame-time spikes, and interpolated 60 fps presentation.
-- Packaged Linux and Windows releases.
 
 ## Legal
 
