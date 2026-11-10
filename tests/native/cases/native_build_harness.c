@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -245,6 +247,8 @@ int main(int argc, char **argv) {
     int i, child = 0, with_extra = 0;
 #ifdef _WIN32
     InitializeCriticalSection(&output_guard);
+    /* Cases compare lines byte for byte. */
+    _setmode(_fileno(stdout), _O_BINARY);
 #endif
     memset(&config, 0, sizeof(config));
     config.cache_id = "cache-a"; config.exe_id = "exe";

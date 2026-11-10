@@ -388,8 +388,10 @@ static int run(const char *const *argv, const char *const *env, const char *log,
     size_t length = 1, i;
     wchar_t *line, *block = NULL, *w;
     char *text;
-    STARTUPINFOW si;
+    STARTUPINFOEXW si;
     PROCESS_INFORMATION pi;
+    SIZE_T attributes_size = 0;
+    LPPROC_THREAD_ATTRIBUTE_LIST attributes = NULL;
     SECURITY_ATTRIBUTES inherit = {sizeof(inherit), NULL, TRUE};
     HANDLE out;
     DWORD exit_code = 1;
@@ -438,21 +440,35 @@ static int run(const char *const *argv, const char *const *env, const char *log,
         FreeEnvironmentStringsW(current);
     }
     w = wide(log);
-    out = w ? CreateFileW(w, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
+    out = w ? CreateFileW(w, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+            : INVALID_HANDLE_VALUE;
     free(w);
     memset(&si, 0, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = NULL; si.hStdOutput = out; si.hStdError = out;
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput = NULL; si.StartupInfo.hStdOutput = out; si.StartupInfo.hStdError = out;
+    /* Only this log: a child inheriting every open handle would keep other
+     * workers' build folders from being removed until it exits. */
+    InitializeProcThreadAttributeList(NULL, 1, 0, &attributes_size);
+    attributes = attributes_size ? malloc(attributes_size) : NULL;
+    if (attributes && (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributes_size) ||
+                       !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &out, sizeof(out), NULL, NULL))) {
+        free(attributes); attributes = NULL;
+    }
+    si.lpAttributeList = attributes;
     lock(guard);
-    if (child->active < 0 || !block || out == INVALID_HANDLE_VALUE ||
-        !CreateProcessW(NULL, line, NULL, NULL, TRUE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | BELOW_NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED,
-                        block, NULL, &si, &pi)) {
+    if (child->active < 0 || !block || !attributes || out == INVALID_HANDLE_VALUE ||
+        !CreateProcessW(NULL, line, NULL, NULL, TRUE,
+                        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | BELOW_NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+                        block, NULL, &si.StartupInfo, &pi)) {
         unlock(guard);
         free(line); free(block);
+        if (attributes) { DeleteProcThreadAttributeList(attributes); free(attributes); }
         if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
         return -1;
     }
+    DeleteProcThreadAttributeList(attributes);
+    free(attributes);
     {
         extern HANDLE native_build_job;
         if (native_build_job) AssignProcessToJobObject(native_build_job, pi.hProcess);
