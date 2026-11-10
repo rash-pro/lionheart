@@ -89,8 +89,9 @@ This accepts current output. Review the entire manifest diff before committing i
 `test_setup_cache` drives the cache through the real disc loader and generator with
 synthetic discs and versioned identity metadata. It checks disc rejection, a hit
 with no generation or emission progress, source fingerprint changes (by rebuilding
-a temporary source copy), input and output invalidation, and cancellation after
-the first emitted unit, both before and after a successful run. Cancellation uses
+a temporary source copy), input and output invalidation, cancellation after
+the first emitted unit, and late output write failures, both before and after a
+successful run. Cancellation uses
 the existing library callback; the shipped CLI has no cancellation test switch.
 Real-game identity validation is unchanged. The same standard-tier cases run the
 standalone cache unit executable and setup CLI argument checks in routine Linux CI.

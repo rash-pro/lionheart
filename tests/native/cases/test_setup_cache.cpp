@@ -149,3 +149,21 @@ LH_TEST(source_fingerprint) {
     LH_CONTAINS(t.ok(cmd).out, "cache hit");
     f.good(false);
 }
+
+LH_TEST_P(write_failure, std::vector<std::string>({"fresh", "previous"})) {
+    Fixture f(t);
+    if (p == "previous") f.good(false);
+    auto blocked = f.out / "dispatch_table.c";
+    lh::fs::remove(blocked);
+    lh::fs::create_directories(blocked);
+    // A directory at a late output path fails even when tests run as root.
+    auto result = f.run();
+    LH_EQ(result.rc, 1);
+    LH_CONTAINS(result.out, "emit 1/");
+    LH_CONTAINS(result.err, "dispatch_table.c");
+    LH_CHECK(lh::fs::exists(f.out / "functions_000.c"));
+    LH_CHECK(!lh::fs::exists(f.out / "setup-cache.native"));
+    lh::fs::remove(blocked);
+    f.good(false);
+    f.good(true);
+}
