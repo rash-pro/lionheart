@@ -60,7 +60,7 @@ file(GLOB_RECURSE files LIST_DIRECTORIES FALSE RELATIVE "${root}" "${root}/*" "$
 list(SORT files)
 if(kind STREQUAL "appimage")
   set(allowed "^(AppRun|lionheart[.]desktop|lionheart[.]png|[.]DirIcon|usr/bin/lionheart|usr/lib/lib[^/]+[.]so[.][0-9.]+"
-    "|usr/share/applications/lionheart[.]desktop|usr/share/icons/hicolor/[0-9]+x[0-9]+/apps/lionheart[.]png"
+    "|usr/share/applications/(lionheart[.]desktop|mimeinfo[.]cache)|usr/share/icons/hicolor/[0-9]+x[0-9]+/apps/lionheart[.]png"
     "|usr/share/doc/lionheart/dependencies[.]json|usr/share/doc/lionheart/licences/[^/]+)$")
 else()
   set(allowed "^(Lionheart[.]exe|[^/]+[.]dll|dependencies[.]json|licences/[^/]+)$")
@@ -91,13 +91,14 @@ set(components
   "Dear ImGui@MIT@@Dear-ImGui-MIT.txt"
   "nativefiledialog-extended@zlib@@nativefiledialog-zlib.txt"
   "Chakra Petch@OFL-1.1@@Chakra-Petch-OFL.txt"
+  "XZ Embedded@0BSD@@xz-embedded-0BSD.txt"
   "zlib@zlib@@zlib.txt"
   "SDL2@zlib@^(usr/lib/libSDL2-2[.]0[.]so[.]0|SDL2[.]dll)$@SDL2-zlib.txt"
   "FFmpeg@LGPL-2.1-or-later@^(usr/lib/lib(avformat|avcodec|avutil|swscale)[.]so[.][0-9]+|(avformat|avcodec|avutil|swscale)-[0-9]+[.]dll)$@FFmpeg-LGPL-2.1.txt,FFmpeg-configure.txt,FFmpeg-source.txt")
 if(kind STREQUAL "appimage")
   list(APPEND components
     "libcurl@curl@^usr/lib/libcurl[.]so[.]4$@curl.txt"
-    "AppImage runtime@MIT,BSD-2-Clause,public-domain@@AppImage-runtime.txt")
+    "AppImage runtime@MIT,BSD-2-Clause,BSD-3-Clause,zlib,LGPL-2.1-or-later@@AppImage-runtime.txt,AppImage-LGPL-2.1.txt,AppImage-source.txt")
 else()
   list(APPEND components
     "llvm-mingw C++ runtime@Apache-2.0 WITH LLVM-exception@^(libc[+][+]|libunwind)[.]dll$@llvm-mingw-runtime.txt"
@@ -107,7 +108,7 @@ endif()
 # and fonts under the OFL. The Windows player cannot run without the C++
 # runtime of the compiler that builds it, which is Apache-2.0 with the LLVM
 # exception (the exception waives notices for compiled code; they ship anyway).
-set(accepted MIT ISC BSD-2-Clause BSD-3-Clause zlib MPL-2.0 curl public-domain ZPL-2.1 OFL-1.1
+set(accepted 0BSD MIT ISC BSD-2-Clause BSD-3-Clause zlib MPL-2.0 curl public-domain ZPL-2.1 OFL-1.1
   LGPL-2.1-or-later "Apache-2.0 WITH LLVM-exception")
 set(claimed)
 foreach(component IN LISTS components)
@@ -238,7 +239,11 @@ endforeach()
 # Version and icon.
 if(kind STREQUAL "appimage")
   file(READ "${root}/lionheart.desktop" entry)
-  foreach(line "Exec=lionheart" "Icon=lionheart" "X-AppImage-Version=${VERSION}")
+  file(READ "${root}/usr/share/applications/lionheart.desktop" installed_entry)
+  if(NOT installed_entry STREQUAL entry)
+    fail("the installed and AppImage desktop entries differ")
+  endif()
+  foreach(line "Exec=lionheart %f" "MimeType=application/x-cue;" "Icon=lionheart" "X-AppImage-Version=${VERSION}")
     if(NOT entry MATCHES "(^|\n)${line}\n")
       fail("lionheart.desktop lacks ${line}")
     endif()
@@ -268,9 +273,10 @@ if(kind STREQUAL "appimage")
       endif()
     endif()
   endforeach()
-  file(STRINGS "${player}" found REGEX "^(.* )?${VERSION}$")
-  if(NOT found)
-    fail("the player does not carry version ${VERSION}")
+  execute_process(COMMAND "${player}" --version RESULT_VARIABLE status
+    OUTPUT_VARIABLE found OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT status EQUAL 0 OR NOT found MATCHES "^Lionheart ${VERSION} [(][0-9a-f]+(-dirty)?[)]$")
+    fail("the player reports '${found}', expected Lionheart ${VERSION}")
   endif()
 else()
   string(REPLACE "." ";" parts "${VERSION}")

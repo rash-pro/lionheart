@@ -23,7 +23,7 @@ source, the Linux AppImage or the Windows distribution. Vendored sources retain 
 | zlib 1.3.1 | zlib: [zlib.txt](licenses/zlib.txt) |
 | llvm-mingw runtime | LLVM Apache-2.0 with LLVM exception: [llvm-mingw-runtime.txt](licenses/llvm-mingw-runtime.txt) |
 | MinGW-w64 / winpthreads | Public domain / ZPL notices: [COPYING.MinGW-w64-runtime.txt](licenses/COPYING.MinGW-w64-runtime.txt) and [COPYING.winpthreads.txt](licenses/COPYING.winpthreads.txt) |
-| AppImageKit 13 runtime (start of the AppImage) | MIT, with squashfuse under BSD-2-Clause and public-domain liblzma: [AppImage-runtime.txt](licenses/AppImage-runtime.txt) |
+| AppImage type2-runtime fedfad51 | MIT, BSD-2-Clause, BSD-3-Clause, zlib; statically linked libfuse LGPL-2.1-or-later: [licences](licenses/AppImage-runtime.txt), [LGPL](licenses/AppImage-LGPL-2.1.txt), [source and relinking](licenses/AppImage-source.txt) |
 
 FFmpeg is dynamically linked. The exact unmodified corresponding source is
 https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz (SHA-256 and size are locked in

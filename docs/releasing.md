@@ -19,7 +19,7 @@ replaces the files of a draft and refuses to touch a published release.
 
 ## What the packages hold
 
-The AppImage is the AppImageKit 13 runtime followed by a squashfs image: `AppRun`, the desktop entry and icon,
+The AppImage is the statically linked AppImage type2-runtime (upstream commit `fedfad51acc2860b2916a1eef32ba4a500ff31ef`) followed by a zstd-compressed squashfs image: `AppRun`, the desktop entry and icon,
 `usr/bin/lionheart`, the libraries below in `usr/lib`, the hicolor icons and `usr/share/doc/lionheart/` with the
 notices and the dependency lock. The player finds its libraries through its run path (`$ORIGIN/../lib`), never
 `LD_LIBRARY_PATH`, and `AppRun` removes the four variables the runtime sets before it starts the player, so every
@@ -31,12 +31,12 @@ program the player starts, a compiler included, sees the environment the user la
 | FFmpeg 7.1.1 (`libavformat`, `libavcodec`, `libavutil`, `libswscale`) | LGPL-2.1-or-later, shared | `FFmpeg-LGPL-2.1.txt`, `FFmpeg-configure.txt`, `FFmpeg-source.txt` |
 | libcurl 8.22.0 (`libcurl.so.4`), HTTP and HTTPS only | curl (MIT-style) | `curl.txt` |
 | zlib 1.3.1, linked into the player | zlib | `zlib.txt` |
-| AppImageKit 13 runtime (the file's first 185 KiB) | MIT; squashfuse BSD-2-Clause; liblzma public domain | `AppImage-runtime.txt` |
+| AppImage type2-runtime (944,632-byte launcher) | MIT, BSD-2-Clause, BSD-3-Clause, zlib; libfuse LGPL-2.1-or-later | `AppImage-runtime.txt`, `AppImage-LGPL-2.1.txt`, `AppImage-source.txt` |
 | Lionheart and its vendored code | MIT, ISC, BSD-2-Clause, zlib, OFL-1.1 | as in the Windows folder |
 
 From the system it needs glibc 2.35 or later, libstdc++ (GLIBCXX 3.4.30, from GCC 12), OpenSSL 3 (`libssl.so.3`,
 `libcrypto.so.3`), D-Bus (`libdbus-1.so.3`), and at run time the display, audio and input libraries SDL2 opens,
-the Vulkan loader and driver, and `libfuse.so.2` to mount the image (without it, `--appimage-extract-and-run`).
+the Vulkan loader and driver, and kernel FUSE support to mount the image. No system FUSE library is needed; where mounting is forbidden, use `--appimage-extract-and-run`.
 
 The zip holds one folder, `Lionheart`, with exactly what `tools/build_windows.cmake` stages: `Lionheart.exe`, SDL2,
 the FFmpeg DLLs, the llvm-mingw C++ runtime and winpthreads, `dependencies.json` and `licences/`.
@@ -73,3 +73,31 @@ version and icon. `-DSCANNER=…/check_player_binary -DEXE=…` adds the release
 A new source version goes into the lock with its SHA-256 and size, checked against what its publisher states. FFmpeg
 and zlib must stay the same in both locks; the AppImage build refuses to run otherwise. A new image digest or archive
 date goes into `packaging/build-environment.sh`, the workflow and the commands above together.
+
+## Runtime and compiler
+
+The launcher is the upstream type2-runtime continuous build at commit
+`fedfad51acc2860b2916a1eef32ba4a500ff31ef`, pinned by SHA-256
+`617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46`
+in `tools/linux-deps.json`. Upstream may replace continuous assets: a different
+hash must fail the build; retain the verified download for reproducible rebuilds.
+Its statically linked libfuse is an accepted LGPL exception for a separate launcher,
+as FFmpeg is for shared libraries. Its licence texts and corresponding source and
+relink instructions ship in `usr/share/doc/lionheart/licences/AppImage-*`.
+
+On Linux the player probes Clang and GCC on the user's PATH. If neither works,
+it downloads the official Zig tar.xz from ziglang.org and decodes it with the
+vendored xz decoder. No compiler or game data ships in either package.
+Check the packaged version with `./Lionheart-VERSION-x86_64.AppImage --version`.
+The desktop entries accept `%f` and declare `application/x-cue`, as the installed
+player does; the desktop MIME cache is generated inside the package prefix.
+
+The no-disc check is `sh packaging/linux/test-appimage.sh PACKAGE`; it also checks
+the untouched launch environment. For actual compiler processes, compile
+`packaging/linux/compiler-environment.c` in the target distribution and run
+`sh packaging/linux/test-compiler-environment.sh PACKAGE DISC.cue WORK WRAPPER`.
+Add `zig` after installing the official compiler into `WORK/data` with
+`XDG_DATA_HOME=WORK/data PACKAGE --toolchain-install`, on a system without Clang
+or GCC. The test compares every compiler environment and requires a completed
+first tier. `sh packaging/linux/test-package-checker.sh PACKAGE` proves that
+missing notices, unknown libraries and incorrect versions are rejected.

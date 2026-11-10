@@ -265,10 +265,10 @@ file(MAKE_DIRECTORY "${OUT}")
 set(image "${BUILD}/AppDir.squashfs")
 set(package "${OUT}/Lionheart-${VERSION}-x86_64.AppImage")
 # SOURCE_DATE_EPOCH, set above, fixes the image's and every file's time.
-release_run(mksquashfs "${APPDIR}" "${image}" -noappend -no-xattrs -all-root -comp xz
+release_run(mksquashfs "${APPDIR}" "${image}" -noappend -no-xattrs -all-root -comp zstd
   -processors "${JOBS}" -no-progress -quiet)
 # An AppImage is its runtime followed by the file system it mounts.
-execute_process(COMMAND cat "${DEP_appimage-runtime}/obsolete-runtime-x86_64" "${image}"
+execute_process(COMMAND cat "${DEP_appimage-runtime}/runtime-x86_64" "${image}"
   OUTPUT_FILE "${package}" RESULT_VARIABLE status)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Cannot write ${package}")

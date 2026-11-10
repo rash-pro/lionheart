@@ -24,6 +24,13 @@ set -- HOME="$work/home" XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/confi
 if [ -n "${APPIMAGE_EXTRACT_AND_RUN:-}" ]; then set -- "$@" APPIMAGE_EXTRACT_AND_RUN="$APPIMAGE_EXTRACT_AND_RUN"; fi
 if [ -n "${TMPDIR:-}" ]; then set -- "$@" TMPDIR="$TMPDIR"; fi
 
+version=$(basename "$image" | cut -d- -f2)
+reported=$(env -i "$@" "$image" --version)
+case "$reported" in
+  "Lionheart $version ("*")") echo "PASS: $reported" ;;
+  *) echo "FAIL: unexpected version: $reported" >&2; exit 1 ;;
+esac
+
 status=0
 env -i "$@" "$image" --headless --config "$work/empty.ini" > "$work/out.txt" 2> "$work/err.txt" || status=$?
 if [ "$status" -ne 2 ] || ! grep -q '^Provide FF8 USA disc 1 with --disc PATH' "$work/err.txt"; then

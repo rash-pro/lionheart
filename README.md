@@ -24,23 +24,19 @@ Rendering defaults to the original software output.
 
 ## Install
 
-Packages are on the [releases page](https://github.com/rash-pro/lionheart/releases), with a `SHA256SUMS` file to
+Once releases are published, download packages from the [releases page](https://github.com/rash-pro/lionheart/releases), with a `SHA256SUMS` file to
 check them against (`sha256sum -c SHA256SUMS --ignore-missing`). They are not code-signed. Neither contains game
 code or a compiler.
 
 ### Linux
 
-`Lionheart-VERSION-x86_64.AppImage` is the whole program in one file. Make it executable and run it:
-
-```sh
-chmod +x Lionheart-*-x86_64.AppImage
-./Lionheart-*-x86_64.AppImage
-```
+Download `Lionheart-VERSION-x86_64.AppImage` from the releases page once available.
+Run `chmod +x Lionheart-*-x86_64.AppImage`, then `./Lionheart-*-x86_64.AppImage`.
+Use `./Lionheart-*-x86_64.AppImage --version` to check its version.
 
 It runs on x86-64 distributions with glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36 and newer). It
 brings SDL2, FFmpeg, libcurl and zlib, and uses these from the system: the C and C++ runtimes, OpenSSL 3, D-Bus,
-your audio and display libraries, and your GPU's Vulkan driver. To mount itself it needs `libfuse.so.2`
-(`libfuse2` on Debian and Ubuntu, `fuse-libs` on Fedora); without it, run it with `--appimage-extract-and-run`.
+your audio and display libraries, and your GPU's Vulkan driver. The launcher bundles libfuse; no system FUSE library is needed. If the kernel denies FUSE mounting, use `--appimage-extract-and-run`.
 
 The AppImage installs nothing. To get a menu entry, use an AppImage integration tool such as AppImageLauncher or
 Gear Lever, which reads the entry and icon inside it.
@@ -108,7 +104,7 @@ If an older cache has no receipt, remove its `install-ucrt` folder and rebuild f
 
 ### Release packages
 
-The AppImage and the Windows zip on the releases page are built from a version tag by
+The AppImage and the Windows zip will be built from a version tag by
 `.github/workflows/release.yml`. [docs/releasing.md](docs/releasing.md) says how to cut a release and how to
 rebuild either package byte for byte.
 
