@@ -106,6 +106,12 @@ Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` or `-DJOBS=4` befor
 An installed dependency prefix has a receipt tied to the dependency lock, build recipe and installed file bytes.
 If an older cache has no receipt, remove its `install-ucrt` folder and rebuild from its verified cached sources.
 
+### Release packages
+
+The AppImage and the Windows zip on the releases page are built from a version tag by
+`.github/workflows/release.yml`. [docs/releasing.md](docs/releasing.md) says how to cut a release and how to
+rebuild either package byte for byte.
+
 ## First run
 
 Start Lionheart with no arguments. The setup screen asks for your discs and a memory card; you can create a new

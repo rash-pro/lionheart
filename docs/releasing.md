@@ -54,7 +54,7 @@ docker run --rm -v "$PWD:/src" -w /src \
          cmake -DJOBS=4 -P tools/build_appimage.cmake'
 docker run --rm -v "$PWD:/src" -w /src \
   ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 \
-  sh -c 'sh packaging/build-environment.sh windows &&
+  sh -c 'sh packaging/build-environment.sh windows && git config --global --add safe.directory /src &&
          cmake -DJOBS=4 -P tools/build_windows.cmake && cmake -P tools/package_windows.cmake'
 sha256sum build/packages/*
 ```
