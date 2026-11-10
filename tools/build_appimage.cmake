@@ -264,8 +264,9 @@ endforeach()
 file(MAKE_DIRECTORY "${OUT}")
 set(image "${BUILD}/AppDir.squashfs")
 set(package "${OUT}/Lionheart-${VERSION}-x86_64.AppImage")
-# SOURCE_DATE_EPOCH, set above, fixes the image's and every file's time.
-release_run(mksquashfs "${APPDIR}" "${image}" -noappend -no-xattrs -all-root -comp zstd
+# Fix old timestamps too: SOURCE_DATE_EPOCH alone only clamps newer files.
+release_run("${CMAKE_COMMAND}" -E env --unset=SOURCE_DATE_EPOCH mksquashfs "${APPDIR}" "${image}"
+  -mkfs-time "${epoch}" -all-time "${epoch}" -noappend -no-xattrs -all-root -comp zstd
   -processors "${JOBS}" -no-progress -quiet)
 # An AppImage is its runtime followed by the file system it mounts.
 execute_process(COMMAND cat "${DEP_appimage-runtime}/runtime-x86_64" "${image}"
