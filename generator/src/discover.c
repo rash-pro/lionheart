@@ -196,6 +196,10 @@ static size_t jump_table(lhg_ctx *ctx, const lhg_image *image, int64_t pc, uint3
         default:
             break;
         }
+        /* Naming r0 as a destination discards the result; r0 stays zero. */
+        constants[0] = 0;
+        known[0] = 1;
+        has_base[0] = 0;
     }
     return 0;
 }

@@ -775,6 +775,34 @@ void direct(lh::Case &t, const std::string &fn, const J &p) {
             parity(t, O{{"main", image(pack(RET))}, {"overlays", A{ov}}, {"mode", mode}}, std::string("set-hints-") + mode);
         return;
     }
+    if (fn == "test_jump_table_scan_keeps_r0_zero") {
+        // `lui zero` is a no-op; the table base is then moved through r0, so a
+        // scanner that let r0 take the constant would look for the table elsewhere.
+        uint32_t table = BASE + 0x400;
+        Words w = {imm(15, 0, 0, 0x10),
+                   imm(15, 0, 8, (table + 0x8000) >> 16),
+                   imm(9, 8, 8, table & 65535),
+                   r(33, 8, 0, 10),
+                   r(0, 0, 4, 9, 2),
+                   r(33, 9, 10, 9),
+                   imm(35, 9, 9, 0),
+                   0,
+                   r(8, 9),
+                   0};
+        std::string data(0x800, '\0');
+        data.replace(0, pack(w).size(), pack(w));
+        for (int i = 0; i < 4; ++i) {
+            put32(data, 0x400 + i * 4, BASE + 0x40 + i * 8);
+            data.replace(0x40 + i * 8, 8, pack(RET));
+        }
+        auto main = image(data);
+        main["seeds"] = A{num(BASE)};
+        main["scan_calls"] = false;
+        auto out = parity(t, main_spec(main), "r0-table");
+        auto manifest = J::parse(lh::read_file(out / "manifest.json"));
+        LH_CHECK(manifest["jump_tables"].contains("0x80010020"));
+        return;
+    }
     if (fn == "test_call_ticks_see_the_callee_window") {
         // A function that calls itself: the call's tick knows the window at
         // its target, the entry, as a jump to it would.
