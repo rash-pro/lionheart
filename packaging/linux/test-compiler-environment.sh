@@ -26,13 +26,42 @@ set -- HOME="$work/home" XDG_DATA_HOME="$work/data" XDG_CONFIG_HOME="$work/confi
   COMPILER_ENV_LOG="$work/env" REAL_COMPILER="$real" LIONHEART_ENV_PROBE=compiler-package
 if [ -n "${APPIMAGE_EXTRACT_AND_RUN:-}" ]; then set -- "$@" APPIMAGE_EXTRACT_AND_RUN="$APPIMAGE_EXTRACT_AND_RUN"; fi
 printf '%s\n' "$@" | sort > "$work/launch.env"
-status=0
-env -i "$@" timeout -s TERM "${COMPILER_TEST_SECONDS:-600}" "$image" --config "$work/empty.ini" \
+rm -f "$work/stopped"
+env -i "$@" "$image" --config "$work/empty.ini" \
   --headless --native-compiler "$driver" --native-build-only --native-status --native-workers 6 --disc "$disc" \
-  > "$work/out.txt" 2> "$work/err.txt" || status=$?
-# A timeout is sufficient only after the real first tier has completed.
-test "$status" = 0 || test "$status" = 124
-grep -Eq 'native: built main |first tier [1-9][0-9]*[.]' "$work/err.txt"
+  > "$work/out.txt" 2> "$work/err.txt" &
+launcher=$!
+# Signal the player itself: killing an AppImage launcher can kill its child
+# before the player records the final native-build counters.
+player=
+tries=0
+while [ -z "$player" ] && [ "$tries" -lt 300 ]; do
+  for proc in /proc/[0-9]*; do
+    case "$(readlink "$proc/exe" 2>/dev/null)" in
+      */usr/bin/lionheart)
+        if tr "\0" "\n" < "$proc/environ" 2>/dev/null | grep -qx "COMPILER_ENV_LOG=$work/env"; then
+          player=${proc#/proc/}
+          break
+        fi ;;
+    esac
+  done
+  tries=$((tries + 1))
+  [ -n "$player" ] || sleep 0.1
+done
+if [ -z "$player" ]; then wait "$launcher" || true; cat "$work/err.txt" >&2; exit 1; fi
+(sleep "${COMPILER_TEST_SECONDS:-600}"; : > "$work/stopped"; kill -TERM "$player" 2>/dev/null || true) &
+timer=$!
+status=0
+wait "$launcher" || status=$?
+kill "$timer" 2>/dev/null || true
+wait "$timer" 2>/dev/null || true
+# A timed stop is sufficient only after the real first tier has completed.
+test "$status" = 0 || { test -f "$work/stopped" && test "$status" = 1; }
+grep -Eq 'first tier (0[.][1-9]|[1-9][0-9]*[.])' "$work/err.txt"
+if grep -Eq "native: .* [1-9][0-9]* failed" "$work/err.txt"; then
+  echo "FAIL: a native set failed to build" >&2
+  exit 1
+fi
 # The builder intentionally directs compiler temporary files into its private
 # cache; these are the only additions to the user's launch environment.
 sed '/^TMPDIR=/d' "$work/launch.env" > "$work/expected.env"
