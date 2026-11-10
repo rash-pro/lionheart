@@ -1,5 +1,5 @@
 #include <winver.h>
-1 24 "@CMAKE_SOURCE_DIR@/backends/host/windows/player.manifest"
+1 24 "@CMAKE_CURRENT_BINARY_DIR@/player.manifest"
 1 ICON "@CMAKE_SOURCE_DIR@/assets/logo/lionheart.ico"
 1 VERSIONINFO
 FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0

@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(package_zip C)
+find_package(ZLIB REQUIRED)
+add_executable(package-zip main.c)
+target_link_libraries(package-zip PRIVATE ZLIB::ZLIB)
+set_target_properties(package-zip PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES)
