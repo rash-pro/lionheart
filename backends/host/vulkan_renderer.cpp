@@ -752,10 +752,13 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
             }
         }
 #endif
-        // Smooth motion's fractions of a pixel (gpu_subpixel).
+        // Smooth motion's fractions of a pixel (gpu_subpixel), and with PGXP
+        // the depths that map textures in perspective (gpu_subpixel_depth).
+        bool depths=s->cornered && s->corner_w[0]>0 && s->corner_w[1]>0 && s->corner_w[2]>0;
         for (unsigned i=0;i<3;++i) {
             v[i].x+=s->shift_x+(s->cornered ? s->corner[i][0] : 0.0f);
             v[i].y+=s->shift_y+(s->cornered ? s->corner[i][1] : 0.0f);
+            if (depths) v[i].w=s->corner_w[i];
         }
         // Native output is replaced by the exact software pixels below. Keep
         // those writes pending until a draw that needs GPU pixels or scanout,

@@ -4,15 +4,18 @@
 // the same picture at every VBlank as the offline renderer
 // (tools/devtools/inbetween.c) draws from the same recording.
 #include "lh_test.h"
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <sstream>
+#include <vector>
 
 namespace {
 namespace fs = lh::fs;
 
 // Records a scene, draws it offline and live, and compares the two at every
 // VBlank. Returns the live harness's summary.
-std::string both(lh::Case &t, const char *harness, const char *scene, bool fractions = false) {
+std::string both(lh::Case &t, const char *harness, const char *scene, bool fractions = false, const char *precision = nullptr) {
     auto record = t.temp() / (std::string(scene) + ".rec"), offline = t.temp() / scene;
     fs::create_directories(offline);
     t.ok(t.harness(harness).arg(scene).arg(record).timeout(60));
@@ -20,6 +23,7 @@ std::string both(lh::Case &t, const char *harness, const char *scene, bool fract
     auto live = t.temp() / (std::string(scene) + "-live.rgb");
     auto command = t.harness("main").arg("replay").arg(record).arg(live);
     if (fractions) command.arg("fractions");
+    if (precision) command.arg(precision);
     auto out = t.ok(command.timeout(120)).out;
     auto a = lh::read_file(offline / "on.rgb"), b = lh::read_file(live);
     LH_CHECK_MSG(!a.empty() && a.size() % (320 * 240 * 3) == 0, scene);
@@ -158,4 +162,105 @@ LH_TEST(test_pictures_come_on_the_refresh_they_are_drawn_for) {
     // Without targets, handed over in the refresh before the one before.
     auto untargeted = paced(out, "untargeted");
     LH_CHECK_MSG(untargeted.on_time >= 99.5 && untargeted.intervals[1] >= 99.5, untargeted.line);
+}
+
+namespace {
+// What the presentation GPU hands its rasterizer with PGXP's precision on
+// (the probe harness): per picture, each triangle's corners and colour.
+struct Corner {
+    double x = 0, y = 0, w = 0;
+};
+struct Triangle {
+    Corner c[3];
+    std::string colour;
+};
+std::vector<std::vector<Triangle>> drawn(lh::Case &t, const char *scene, const char *precision) {
+    auto record = t.temp() / (std::string(scene) + "-" + precision + ".rec");
+    t.ok(t.harness("scene").arg(scene).arg(record).timeout(60));
+    auto out = t.ok(t.harness("probe").arg("replay").arg(record).arg(t.temp() / "probe.rgb").arg("fractions").arg(precision)
+                        .timeout(120)).out;
+    std::vector<std::vector<Triangle>> pictures;
+    std::istringstream in(out);
+    for (std::string line; std::getline(in, line);) {
+        if (line.rfind("V", 0) == 0) pictures.emplace_back();
+        else if (line.rfind("T ", 0) == 0 && !pictures.empty()) {
+            std::istringstream words(line.substr(2));
+            Triangle tri;
+            for (auto &c : tri.c) words >> c.x >> c.y >> c.w;
+            words >> tri.colour;
+            pictures.back().push_back(tri);
+        }
+    }
+    LH_CHECK_MSG(pictures.size() > 12, out);
+    return pictures;
+}
+bool whole(double v) { return v == static_cast<double>(static_cast<long>(v)); }
+} // namespace
+
+LH_TEST(test_precision_leaves_the_whole_pixels_alone) {
+    // PGXP's precision goes to a renderer that draws finer; the PlayStation's
+    // own pixels are the same, live and offline.
+    both(t, "scene", "move", true, "perspective");
+    both(t, "scene", "held", true, "vertex");
+    both(t, "layers", "scroll", true, "perspective");
+}
+
+LH_TEST(test_precision_keeps_a_still_part_still_and_fine) {
+    // Two rods standing turned: once the frames have a history, every
+    // picture, game frames and those between, draws each corner at the same
+    // place, finer than a pixel, with its depth.
+    // The scene draws into two buffers 256 lines apart, in either order.
+    auto pictures = drawn(t, "still", "perspective");
+    auto corners = [](const std::vector<Triangle> &picture) {
+        std::vector<std::string> out;
+        for (const auto &tri : picture) {
+            std::ostringstream s;
+            for (const auto &c : tri.c) s << c.x << "," << std::fmod(c.y, 256.0) << "," << c.w << " ";
+            out.push_back(s.str());
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    auto last = corners(pictures.back());
+    bool fine = false;
+    LH_CHECK_MSG(last.size() == 4, "triangles: " + std::to_string(last.size()));
+    for (size_t p = pictures.size() - 12; p < pictures.size(); ++p) {
+        LH_CHECK_MSG(corners(pictures[p]) == last, "picture " + std::to_string(p) + " moved a corner");
+        for (const auto &tri : pictures[p])
+            for (const auto &c : tri.c) {
+                LH_CHECK_MSG(c.w > 0 && c.w < 1000, "picture " + std::to_string(p) + " has no projected depth");
+                if (!whole(c.x) || !whole(c.y)) fine = true;
+            }
+    }
+    LH_CHECK_MSG(fine, "every corner at a whole pixel");
+}
+
+LH_TEST(test_precision_takes_the_guests_pgxp_where_blending_does_not) {
+    // A triangle over B's right edge with a corner the GTE never projected:
+    // its corners are held, so they come from the guest's PGXP (the stand-in
+    // puts them a quarter right and an eighth up), and the one PGXP does not
+    // know stays whole. A polygon with a corner of no depth is drawn without
+    // perspective; the quads, every corner known, with it.
+    auto pictures = drawn(t, "held", "perspective");
+    size_t held = 0, quads = 0;
+    for (size_t p = 4; p < pictures.size(); ++p)
+        for (const auto &tri : pictures[p]) {
+            if (tri.colour == "0000c0") {
+                ++held;
+                for (const auto &c : tri.c) {
+                    LH_EQ(c.w, 0.0);
+                    if (c.x == 300) LH_CHECK_MSG(whole(c.y), "the corner PGXP does not know moved");
+                    else LH_CHECK_MSG(c.x - std::floor(c.x) == 0.25 && std::ceil(c.y) - c.y == 0.125,
+                                      "held corner at " + std::to_string(c.x) + "," + std::to_string(c.y));
+                }
+            } else {
+                ++quads;
+                for (const auto &c : tri.c) LH_CHECK_MSG(c.w > 0, "a quad without depth");
+            }
+        }
+    LH_CHECK_MSG(held > 0 && quads > 0, "nothing drawn");
+    // In vertex mode nothing carries a depth.
+    for (const auto &picture : drawn(t, "held", "vertex"))
+        for (const auto &tri : picture)
+            for (const auto &c : tri.c) LH_EQ(c.w, 0.0);
 }

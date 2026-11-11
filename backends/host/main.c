@@ -329,8 +329,8 @@ static void smooth_apply(cpu_t *c, int audio) {
     smooth_pending = 0;
     if (smooth_motion && !host_frame_present_running()) {
         if (frame_identity) { fprintf(stderr, "Smooth motion is off while the frame identity developer switches run\n"); return; }
-        if (!host_frame_present_start(c, smooth_fractions)) { fprintf(stderr, "Smooth motion could not start\n"); return; }
-        if (pgxp_mode) fprintf(stderr, "Smooth motion draws its own positions; PGXP has no effect with it\n");
+        if (!host_frame_present_start(c, smooth_fractions, pgxp_mode)) { fprintf(stderr, "Smooth motion could not start\n"); return; }
+        if (pgxp_mode && !smooth_fractions) fprintf(stderr, "Smooth motion draws whole pixels at 1x; PGXP has no effect with it there\n");
         host_display_source(host_frame_present_gpu());
         host_display_rebind(host_frame_present_gpu());
 #ifdef FF8_VULKAN

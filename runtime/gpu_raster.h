@@ -20,9 +20,11 @@ typedef struct {
     int interlaced, field;
     /* Presentation only, never saved (gpu_subpixel): what to add, in pixels, to
      * the vertices of the primitive being drawn. shift applies to everything;
-     * corner to the triangle being drawn when cornered is set. */
+     * corner to the triangle being drawn when cornered is set. corner_w is
+     * each corner's depth for perspective texturing, 0 for none. */
     float shift_x, shift_y;
     float corner[3][2];
+    float corner_w[3];
     int cornered;
 } gpu_raster_t;
 

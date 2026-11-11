@@ -27,9 +27,10 @@ struct gpu {
     void *observer_context;
     const gpu_tap_t *tap;
     void *tap_context;
-    /* Host-side only as well: fractions for the next polygon (gpu_subpixel). */
-    float fraction[4][2];
-    int fractioned;
+    /* Host-side only as well: fractions and depths for the next polygon
+     * (gpu_subpixel, gpu_subpixel_depth). */
+    float fraction[4][2], depth[4];
+    int fractioned, depthed;
 };
 
 static int signed11(unsigned n) { return (int)(n & 1023) - (int)(n & 1024); }
@@ -114,11 +115,21 @@ void gpu_subpixel(gpu_t *g, float fraction[4][2]) {
 
 void gpu_subpixel_offset(gpu_t *g, float x, float y) { g->raster.shift_x = x; g->raster.shift_y = y; }
 
+void gpu_subpixel_depth(gpu_t *g, const float depth[4]) {
+    unsigned i;
+    for (i = 0; i < 4; ++i) g->depth[i] = depth[i];
+    g->depthed = 1;
+}
+
 /* The corners of one triangle of a polygon: 0, 1, 2 for the first, 1, 2, 3
  * for the second of a quad, as execute draws them. */
-static void corners(gpu_raster_t *s, float fraction[4][2], unsigned first) {
+static void corners(gpu_t *g, unsigned first) {
+    gpu_raster_t *s = &g->raster;
     unsigned i;
-    for (i = 0; i < 3; ++i) { s->corner[i][0] = fraction[first + i][0]; s->corner[i][1] = fraction[first + i][1]; }
+    for (i = 0; i < 3; ++i) {
+        s->corner[i][0] = g->fraction[first + i][0]; s->corner[i][1] = g->fraction[first + i][1];
+        s->corner_w[i] = g->depthed ? g->depth[first + i] : 0;
+    }
     s->cornered = 1;
 }
 
@@ -169,16 +180,16 @@ static void execute(gpu_t *g) {
 #if defined(FF8_PGXP)
         pgxp_polygon(g, v, n, g->offset_x, g->offset_y);
 #endif
-        if (g->fractioned) corners(s, g->fraction, 0);
+        if (g->fractioned) corners(g, 0);
         gpu_raster_triangle(s, v[0], v[1], v[2], p);
         if (n == 4) {
 #if defined(FF8_PGXP)
             pgxp_select(g, 1);
 #endif
-            if (g->fractioned) corners(s, g->fraction, 1);
+            if (g->fractioned) corners(g, 1);
             gpu_raster_triangle(s, v[1], v[2], v[3], p);
         }
-        s->cornered = g->fractioned = 0;
+        s->cornered = g->fractioned = g->depthed = 0;
     } else if (group == 2) {
         gpu_vertex_t a = vertex(g, w[1], w[0], 0);
         gpu_vertex_t b = vertex(g, w[(op & 16) ? 3 : 2], (op & 16) ? w[2] : w[0], 0);
@@ -195,9 +206,9 @@ static void execute(gpu_t *g) {
         p.clut = uv >> 16;
         if (!size) { uint32_t wh = w[p.textured ? 3 : 2]; rw = wh & 1023; rh = (wh >> 16) & 511; }
         else { rw = rh = size == 1 ? 1 : size == 2 ? 8 : 16; }
-        if (g->fractioned) corners(s, g->fraction, 0);
+        if (g->fractioned) corners(g, 0);
         gpu_raster_rectangle(s, v, rw, rh, p);
-        s->cornered = g->fractioned = 0;
+        s->cornered = g->fractioned = g->depthed = 0;
     } else if (group == 4) {
         gpu_raster_copy(s, w[1] & 1023, (w[1] >> 16) & 511,
                         w[2] & 1023, (w[2] >> 16) & 511, (int)width(w[3]), (int)height(w[3]));

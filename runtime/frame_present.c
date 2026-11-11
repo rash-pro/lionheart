@@ -51,7 +51,11 @@ struct frame_present {
     gpu_t *gpu, *checkpoint;
     uint64_t serial, checkpoint_serial; /* the presentation GPU's next polygon */
     frame_present_renderer_t renderer;
-    int fractions;
+    int fractions, precision;
+    /* The guest's PGXP corners of the polygons since the checkpoint, in
+     * serial order. */
+    struct corners { uint64_t serial; unsigned mask; float at[4][3]; } *corners;
+    size_t corner_count, corner_capacity;
     /* Chunks since the checkpoint: a tag byte, the length in words, the
      * words. mark is where the newest game frame ended. */
     bytes_t journal;
@@ -94,7 +98,7 @@ void frame_present_destroy(frame_present_t *p) {
     if (!p) return;
     free(p->gpu); free(p->checkpoint);
     frame_blend_destroy(p->blend); frame_layer_destroy(p->layer);
-    free(p->journal.data);
+    free(p->journal.data); free(p->corners);
     free(p);
 }
 
@@ -103,6 +107,7 @@ void frame_present_renderer(frame_present_t *p, const frame_present_renderer_t *
     if (r) p->renderer = *r; else memset(&p->renderer, 0, sizeof(p->renderer));
 }
 void frame_present_fractions(frame_present_t *p, int on) { p->fractions = on; }
+void frame_present_precision(frame_present_t *p, int mode) { p->precision = mode; }
 uint64_t frame_present_vblanks(const frame_present_t *p) { return p->vblanks; }
 const frame_present_clock_t *frame_present_timing(const frame_present_t *p) { return &p->clock; }
 frame_present_totals_t frame_present_totals(const frame_present_t *p) { return p->totals; }
@@ -110,6 +115,13 @@ frame_present_totals_t frame_present_totals(const frame_present_t *p) { return p
 static void save(frame_present_t *p) {
     gpu_copy(p->checkpoint, p->gpu);
     p->checkpoint_serial = p->serial;
+    {
+        /* What is drawn from here on starts at the checkpoint's serial. */
+        size_t k = 0;
+        while (k < p->corner_count && p->corners[k].serial < p->serial) ++k;
+        memmove(p->corners, p->corners + k, (p->corner_count - k) * sizeof(*p->corners));
+        p->corner_count -= k;
+    }
     if (p->renderer.save) p->renderer.save(p->renderer.context);
 }
 
@@ -126,6 +138,7 @@ void frame_present_sync(frame_present_t *p, gpu_t *guest, uint64_t polygon) {
     gpu_subpixel_offset(p->gpu, 0, 0);
     save(p);
     p->journal.size = 0; p->mark = 0; p->have_mark = 0; p->consumed = 0; p->vblank = 0;
+    p->corner_count = 0;
     frame_blend_reset(p->blend); frame_layer_reset(p->layer);
     frame_present_clock_reset(&p->clock);
     p->vblanks = 0; p->failed = 0;
@@ -168,6 +181,20 @@ void frame_present_command(frame_present_t *p, const uint32_t *packet, unsigned 
     if (!frame_layer_command(p->layer, packet, count)) { p->failed = 1; ++p->totals.failures; }
 }
 
+void frame_present_corners(frame_present_t *p, uint64_t polygon, unsigned mask, float corner[4][3]) {
+    if (p->failed || !mask) return;
+    if (p->corner_count == p->corner_capacity) {
+        size_t n = p->corner_capacity ? p->corner_capacity * 2 : 4096;
+        struct corners *c = realloc(p->corners, n * sizeof(*c));
+        if (!c) { p->failed = 1; ++p->totals.failures; return; }
+        p->corners = c; p->corner_capacity = n;
+    }
+    p->corners[p->corner_count].serial = polygon;
+    p->corners[p->corner_count].mask = mask;
+    memcpy(p->corners[p->corner_count].at, corner, sizeof(p->corners[0].at));
+    ++p->corner_count;
+}
+
 /* Drawing again. */
 typedef struct {
     uint32_t num, den;
@@ -200,6 +227,57 @@ static void beneath(frame_present_t *p, at_t *at) {
     }
 }
 
+/* The guest's PGXP corners of a polygon, by serial. */
+static const struct corners *corners_of(const frame_present_t *p, uint64_t serial) {
+    size_t lo = 0, hi = p->corner_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (p->corners[mid].serial < serial) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < p->corner_count && p->corners[lo].serial == serial ? &p->corners[lo] : NULL;
+}
+
+/* With precision, the corners of the polygon packet about to be drawn to a
+ * fraction of a pixel, at num / den: those blending places where the GTE put
+ * them before it dropped the fraction, game frames included, so that both
+ * ends of every interval are as fine as the motion between them; those it
+ * does not where the guest's PGXP put them for this packet. As PGXP draws
+ * them, each stands half a pixel up and left of that point, the PlayStation's
+ * pixel at its centre, and a polygon whose every corner has a depth maps its
+ * texture in perspective. A corner that follows the polygons around it has
+ * no projection of its own and moves by fractions as without precision.
+ * moved is the mask of corners blending moved; packet holds the corners'
+ * whole pixels as drawn. */
+static void precise(frame_present_t *p, const uint8_t *packet, unsigned op, uint32_t num, uint32_t den, unsigned moved) {
+    float fraction[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}}, depth[4] = {0, 0, 0, 0}, exact[4][2], deep[4], whole[4][2];
+    const struct corners *guest = corners_of(p, p->serial);
+    unsigned corners = (op & 8) ? 4 : 3, k = 1, i, known = 0;
+    unsigned placed = frame_blend_precise(p->blend, p->serial, num, den, exact, deep), following = moved & ~placed;
+    if (following) following &= frame_blend_fractions(p->blend, p->serial, num, den, whole);
+    for (i = 0; i < corners; ++i) {
+        uint32_t xy;
+        if (i && (op & 16)) ++k;
+        xy = le32(packet + k * 4);
+        k += (op & 4) ? 2 : 1;
+        if (placed & (1u << i)) {
+            fraction[i][0] = exact[i][0] - 0.5f - low(xy); fraction[i][1] = exact[i][1] - 0.5f - high(xy);
+            depth[i] = deep[i];
+            ++p->totals.corners_blended;
+        } else if (following & (1u << i)) {
+            fraction[i][0] = whole[i][0] - low(xy); fraction[i][1] = whole[i][1] - high(xy);
+            ++p->totals.corners_whole;
+        } else if (!(moved & (1u << i)) && guest && (guest->mask & (1u << i))) {
+            fraction[i][0] = guest->at[i][0] - low(xy); fraction[i][1] = guest->at[i][1] - high(xy);
+            depth[i] = guest->at[i][2];
+            ++p->totals.corners_pgxp;
+        } else ++p->totals.corners_whole;
+        if (depth[i] > 0) ++known;
+    }
+    gpu_subpixel(p->gpu, fraction);
+    if (p->precision == 2 && known == corners) gpu_subpixel_depth(p->gpu, depth);
+}
+
 /* GP0 words, with the newest frame's polygons, offsets and sprites where
  * blending and its layers put them at the fraction, as tools/devtools/inbetween.c
  * draws them offline. */
@@ -220,6 +298,7 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
             /* At the end of the interval everything is as recorded; a
              * packet cut between chunks is drawn as recorded too. */
             if (n > words) n = words;
+            else if (op >= 0x20 && op < 0x40 && p->precision && p->fractions) precise(p, w, op, 1, 1, 0);
             gpu_gp0_words(g, w, n);
             w += n * 4; words -= n;
             continue;
@@ -258,7 +337,8 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
             }
             if (shades & 1u) put_le32(packet, (le32(packet) & 0xff000000u) | colours[0]);
             if (mask || shades) at->blended = 1;
-            if (mask && p->fractions) {
+            if (p->precision && p->fractions) precise(p, packet, op, at->num, at->den, mask);
+            else if (mask && p->fractions) {
                 float exact[4][2], fraction[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
                 unsigned moving = frame_blend_fractions(p->blend, p->serial, at->num, at->den, exact);
                 for (i = 0; i < corners; ++i)
@@ -310,6 +390,7 @@ static void feed_after(frame_present_t *p, const uint8_t *w, unsigned words) {
                     int fw = (int)(((b & 1023) + 15) & ~15u), fh = (int)((b >> 16) & 511);
                     skip = fw && fh && !shown(s, x, y, x + fw - 1, y + fh - 1) && x + fw <= 1024 && y + fh <= 512;
                 }
+                if (!skip && op >= 0x20 && op < 0x40 && p->precision && p->fractions) precise(p, w, op, 1, 1, 0);
             }
         }
         if (n > words) n = words;

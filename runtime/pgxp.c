@@ -160,6 +160,25 @@ void pgxp_polygon(struct gpu *g, const gpu_vertex_t *v, unsigned n, int ox, int 
         for (i = 0; i < n; ++i) polygon[i].w = 1;
     precise = hits != 0;
 }
+unsigned pgxp_packet(struct gpu *g, const uint32_t *packet, pgxp_vertex_t out[4]) {
+    unsigned op = packet[0] >> 24, n = (op & 8) ? 4 : 3, i, at = 1, mask = 0;
+    if (g != owner || mode == PGXP_OFF || op < 0x20 || op >= 0x40) return 0;
+    for (i = 0; i < n; ++i) {
+        uint32_t xy, key;
+        resolution_t r;
+        if (i && (op & 16)) ++at;
+        xy = packet[at++];
+        if (op & 4) ++at;
+        /* The GPU's 11-bit coordinates, as pgxp_polygon keys them. */
+        key = (uint32_t)(((int)(xy & 1023) - (int)(xy & 1024)) & 65535) |
+              (uint32_t)(((int)((xy >> 16) & 1023) - (int)((xy >> 16) & 1024)) & 65535) << 16;
+        r = resolve(key);
+        out[i] = r.vertex;
+        if (mode != PGXP_PERSPECTIVE || !r.valid) out[i].w = 0;
+        if (r.valid) mask |= 1u << i;
+    }
+    return mask;
+}
 void pgxp_select(struct gpu *g, unsigned value) { if (g == owner) first = value; }
 int pgxp_triangle(const gpu_raster_t *raster, pgxp_vertex_t out[3]) {
     if (!owner || mode == PGXP_OFF || !precise || gpu_raster_state(owner) != raster) return 0;

@@ -84,6 +84,23 @@ of moving layers likewise (`frame_layer_offset_fraction`, `frame_layer_sprite_fr
 renderer beside the commands (`gpu_subpixel`, `gpu_subpixel_offset`). A layer moves as a whole, every tile by
 the same fraction, so tiles keep their shared edges.
 
+With PGXP on (`--pgxp vertex|perspective`), above 1x, every picture keeps the precision PGXP gives without
+smooth motion, game frames included, so that both ends of an interval are as fine as the motion between them.
+Corners blending moves are drawn where the GTE's equations put them before the division drops the fraction, at
+every fraction, the ends included (`frame_blend_precise`); in perspective mode with their depth (SZ) at that
+moment. Their view-space positions are those frame identity linked them to, so a corner whose pixel another
+vertex shares takes its own projection's place and depth, where PGXP takes whichever was recorded last at
+that pixel. The other corners (held by blending, or in frames with nothing to blend from) are drawn where the
+guest's PGXP put them: PGXP is bound to the guest's GPU and resolves a corner from what the GTE recorded at its
+pixel in the last few VBlanks, which only the guest's GPU can do in time, so the host asks it for each polygon
+command as the guest's GPU is about to draw it (`pgxp_packet`) and hands the answer to the presenter with the
+command (`frame_present_corners`); the presentation GPU draws the same packet with it. As PGXP draws, a corner
+stands half a pixel up and left of that point, and a polygon is drawn in perspective only when every corner
+has a depth. A corner that follows the polygons around it (a shadow's centre) moves by fractions as without
+PGXP. The depths reach the renderer beside the fractions (`gpu_subpixel_depth`). What PGXP did not resolve
+stays at whole pixels, as without smooth motion. At 1x smooth motion draws whole pixels and PGXP has no effect
+with it, so that its pictures stay those of the offline renderer.
+
 Changes inside `third_party/parallel-psx`: `FBAtlas::get_status`/`set_status`, `Renderer::copy_vram` and its
 `VramCopy`, the atlas' texture memo (`Renderer::set_texture_memo`), and device creation enables
 `VK_KHR_present_id`, `VK_KHR_present_wait`, `VK_EXT_present_mode_fifo_latest_ready`, `VK_EXT_present_timing` and
@@ -239,6 +256,7 @@ the cost of the two showing different moments.
   whether that picture was on time.
 - Variable refresh is not used: with it a display shows each picture when it is handed over, and the grid the
   pacer locks onto would follow its own presents.
-- PGXP has no effect with smooth motion: the presentation GPU draws its own positions.
+- At 1x PGXP has no effect with smooth motion. Above 1x, corners PGXP did not resolve, and the polygons of the
+  frame before drawn beneath the newer one at the screen's edge, stay at whole pixels.
 - Everything frame blending and layers leave at the game's rate stays so (`docs/frame-blend.md`,
   `docs/frame-layer.md`).

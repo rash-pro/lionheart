@@ -8,9 +8,10 @@
 
 /* Starts the frame identity service with the recording GTE entries bound, taps
  * the guest's GPU and creates the presentation GPU. fractions: the renderer
- * draws above the PlayStation's resolution. Returns 0 on failure, with nothing
- * left running. */
-int host_frame_present_start(cpu_t *c, int fractions);
+ * draws above the PlayStation's resolution. precision: PGXP's mode (1 vertex,
+ * 2 perspective), which the presentation GPU keeps where it draws fractions.
+ * Returns 0 on failure, with nothing left running. */
+int host_frame_present_start(cpu_t *c, int fractions, int precision);
 int host_frame_present_running(void);
 /* The presentation GPU, or NULL when smooth motion is off: the GPU a renderer
  * mirrors and the display shows. */

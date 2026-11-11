@@ -9,11 +9,19 @@
  *     guest's drawing, and prints the words drawn again for the first
  *     picture and the last, whether the last is the guest's, and whether the
  *     one in the middle is the guest's as of its last VBlank;
- *   frame_present replay RECORDING OUT.rgb [fractions]
+ *   frame_present replay RECORDING OUT.rgb [fractions [vertex|perspective]]
  *     plays a recording (runtime/frame_record.h) into a GPU as the guest's,
  *     with the presenter tapping it as the player does, and writes the picture
  *     it presents at each VBlank, centred on a 320x240 canvas as
- *     tools/devtools/inbetween.c writes its own: the two must agree. */
+ *     tools/devtools/inbetween.c writes its own: the two must agree; with
+ *     precision (vertex or perspective) after fractions, as the player with
+ *     PGXP on, and a stand-in for the guest's PGXP that puts every corner
+ *     a quarter of a pixel right and an eighth up of its whole pixel, with
+ *     a depth of 1000 plus its polygon's serial, except at x = 300, which
+ *     the scenes never project. Built with the rasterizer wrapped (probe),
+ *     it also prints each triangle the presentation GPU draws, by VBlank:
+ *     "T" and per corner x and y as the renderer takes them (fractions
+ *     included) and the depth, 0 for none, then the first corner's colour. */
 #include "../runtime/gpu.c"
 #include "frame_present.h"
 #include "frame_record.h"
@@ -78,6 +86,7 @@ static uint64_t le64(const uint8_t *p) { return le32(p) | (uint64_t)le32(p + 4) 
 
 static frame_present_t *present;
 static uint64_t polygons;
+static int precision;
 static void tap_gp0(void *context, const uint8_t *words, unsigned count) { (void)context; frame_present_gp0(present, words, count); }
 static void tap_gp1(void *context, uint32_t word) { (void)context; frame_present_gp1(present, word); }
 static void tap_read(void *context) { (void)context; frame_present_read(present); }
@@ -90,8 +99,41 @@ static void count_polygon(void *context, unsigned opcode, const uint32_t *packet
 static void command(void *context, const uint32_t *packet, unsigned count) {
     (void)context;
     frame_present_command(present, packet, count, polygons);
+    if (precision && packet[0] >> 24 >= 0x20 && packet[0] >> 24 < 0x40) {
+        unsigned op = packet[0] >> 24, n = (op & 8) ? 4 : 3, i, at = 1, mask = 0;
+        float corner[4][3];
+        memset(corner, 0, sizeof(corner));
+        for (i = 0; i < n; ++i) {
+            uint32_t xy;
+            if (i && (op & 16)) ++at;
+            xy = packet[at++];
+            if (op & 4) ++at;
+            if ((int16_t)(xy & 0xffffu) == 300) continue;
+            corner[i][0] = (int16_t)(xy & 0xffffu) + 0.25f; corner[i][1] = (int16_t)(xy >> 16) - 0.125f;
+            corner[i][2] = precision == 2 ? 1000.0f + (float)polygons : 0;
+            mask |= 1u << i;
+        }
+        frame_present_corners(present, polygons, mask, corner);
+    }
 }
 static const gpu_observer_t observer = {ignore_start, ignore_vblank, count_polygon, command};
+
+#ifdef PRESENT_PROBE
+void __real_gpu_raster_triangle(gpu_raster_t *, gpu_vertex_t, gpu_vertex_t, gpu_vertex_t, gpu_paint_t);
+void __wrap_gpu_raster_triangle(gpu_raster_t *s, gpu_vertex_t a, gpu_vertex_t b, gpu_vertex_t c, gpu_paint_t p) {
+    if (present && s == gpu_raster_state(frame_present_gpu(present))) {
+        const gpu_vertex_t *v[3];
+        unsigned i;
+        v[0] = &a; v[1] = &b; v[2] = &c;
+        printf("T");
+        for (i = 0; i < 3; ++i)
+            printf(" %.4f %.4f %g", v[i]->x + s->shift_x + (s->cornered ? s->corner[i][0] : 0.0f),
+                   v[i]->y + s->shift_y + (s->cornered ? s->corner[i][1] : 0.0f), s->cornered ? s->corner_w[i] : 0.0f);
+        printf(" %02x%02x%02x\n", (unsigned)a.r, (unsigned)a.g, (unsigned)a.b);
+    }
+    __real_gpu_raster_triangle(s, a, b, c, p);
+}
+#endif
 
 static void expand(uint16_t v, uint8_t *o) {
     unsigned i;
@@ -113,7 +155,7 @@ static void picture(gpu_t *g, uint8_t *out) {
     }
 }
 
-static int run_replay(const char *path, const char *out_path, int fractions) {
+static int run_replay(const char *path, const char *out_path, int fractions, int mode) {
     static uint8_t rgb[320 * 240 * 3];
     frame_record_reader_t in;
     frame_record_frame_t frame;
@@ -124,6 +166,7 @@ static int run_replay(const char *path, const char *out_path, int fractions) {
     if (!guest || !out || !(present = frame_present_create()) || !frame_record_open(&in, path)) return 2;
     memset(&frame, 0, sizeof(frame));
     frame_present_fractions(present, fractions);
+    frame_present_precision(present, precision = mode);
     gpu_observe(guest, &observer, NULL);
     while (frame_record_next(&in)) {
         const uint8_t *p = in.payload;
@@ -149,6 +192,9 @@ static int run_replay(const char *path, const char *out_path, int fractions) {
         } else if (in.tag == FRAME_RECORD_VBLK) {
             /* As the player: the VBlank, then the picture for it. */
             gpu_vblank(guest);
+#ifdef PRESENT_PROBE
+            printf("V%" PRIu64 "\n", pictures);
+#endif
             frame_present_draw(present, (double)frame_present_vblanks(present));
             picture(frame_present_gpu(present), rgb);
             if (fwrite(rgb, 1, sizeof(rgb), out) != sizeof(rgb)) return 2;
@@ -213,7 +259,9 @@ static int run_waiting(void) {
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "phases")) return run_phases();
     if (argc > 1 && !strcmp(argv[1], "waiting")) return run_waiting();
-    if (argc > 3 && !strcmp(argv[1], "replay")) return run_replay(argv[2], argv[3], argc > 4 && !strcmp(argv[4], "fractions"));
-    fprintf(stderr, "usage: frame_present phases | waiting | replay RECORDING OUT.rgb [fractions]\n");
+    if (argc > 3 && !strcmp(argv[1], "replay"))
+        return run_replay(argv[2], argv[3], argc > 4 && !strcmp(argv[4], "fractions"),
+                          argc > 5 ? (!strcmp(argv[5], "perspective") ? 2 : !strcmp(argv[5], "vertex")) : 0);
+    fprintf(stderr, "usage: frame_present phases | waiting | replay RECORDING OUT.rgb [fractions [vertex|perspective]]\n");
     return 2;
 }

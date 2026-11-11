@@ -1351,6 +1351,28 @@ unsigned frame_blend_fractions(const frame_blend_t *b, uint64_t serial, uint32_t
     return mask;
 }
 
+unsigned frame_blend_precise(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den, float xy[4][2], float depth[4]) {
+    uint64_t i = serial - b->info.first_polygon;
+    unsigned c, mask = 0;
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num > den || b->hidden[i]) return 0;
+    for (c = 0; c < 4 && b->corners[i][c] >= 0; ++c) {
+        const vertex_t *v = &b->vertices[b->corners[i][c]];
+        int32_t view[3];
+        int64_t z;
+        double at[2];
+        if (v->pinned || v->floating) continue;
+        (void)place(b, v, num, den, view);
+        project_exact(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
+                      (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm, at);
+        /* SZ as the GTE takes it, before it saturates. */
+        z = v->shift ? view[2] : asr(view[2], 12);
+        xy[c][0] = (float)at[0]; xy[c][1] = (float)at[1];
+        depth[c] = z > 0 && z <= 65535 ? (float)z : 0;
+        mask |= 1u << c;
+    }
+    return mask;
+}
+
 unsigned frame_blend_leftovers(const frame_blend_t *b) { return (unsigned)b->leftover_count; }
 
 unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]) {

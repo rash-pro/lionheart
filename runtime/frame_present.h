@@ -72,6 +72,18 @@ void frame_present_renderer(frame_present_t *, const frame_present_renderer_t *)
 /* Draw finer than whole pixels where frame blending and layers can say so
  * (gpu_subpixel); for renderers above the PlayStation's resolution. */
 void frame_present_fractions(frame_present_t *, int);
+/* With fractions, PGXP's precision (1 vertex, 2 perspective; 0, the default,
+ * none): every 3D corner drawn where the GTE put it before it dropped the
+ * fraction, game frames included, and in perspective with its depth.
+ * Corners frame blending moves get theirs from the view-space positions
+ * frame identity gave; the others from the guest's PGXP, which only the
+ * guest's GPU can consult, through frame_present_corners. */
+void frame_present_precision(frame_present_t *, int mode);
+/* Where the guest's PGXP put the corners of a polygon packet the guest's GPU
+ * is about to execute (pgxp_packet), by polygon serial, as frame_present_command
+ * numbers it: per corner x and y in packet coordinates and the depth (0 for
+ * none), for the corners in mask. */
+void frame_present_corners(frame_present_t *, uint64_t polygon, unsigned mask, float corner[4][3]);
 /* Start over from the guest's GPU as it stands, with polygon serial polygon
  * (frame_identity_totals): nothing to blend from until two frames end. */
 void frame_present_sync(frame_present_t *, gpu_t *guest, uint64_t polygon);
@@ -100,6 +112,10 @@ const frame_present_clock_t *frame_present_timing(const frame_present_t *);
 typedef struct {
     uint64_t draws, blended, advances, settles, syncs, failures;
     uint64_t replayed_words; /* words drawn again, all draws */
+    /* With precision, the polygon corners drawn: where blending placed them,
+     * where the guest's PGXP did, and at whole pixels (2D, or what PGXP did
+     * not resolve). */
+    uint64_t corners_blended, corners_pgxp, corners_whole;
 } frame_present_totals_t;
 frame_present_totals_t frame_present_totals(const frame_present_t *);
 #endif

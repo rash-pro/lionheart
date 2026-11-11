@@ -19,3 +19,7 @@ lh_harness(host FLAGS -std=c99 -O1 -g -Wall -Wextra -Werror ${LH_SDL_FLAGS} INCL
 lh_harness(pace FLAGS -std=c99 -O2 -g -Wall -Wextra -Werror -Wpedantic INCLUDES backends/host
   SANITIZE_FLAGS -fsanitize=address,undefined -fno-sanitize-recover=all
   SOURCES tests/present_pace_harness.c backends/host/present_pace.c LIBS -lm)
+lh_harness(probe FLAGS -std=c99 -O2 -g -Wall -Wextra -Werror -DFF8_SAVESTATES -DPRESENT_PROBE INCLUDES runtime
+  SOURCES tests/frame_present_harness.c runtime/frame_present.c runtime/frame_blend.c runtime/frame_layer.c
+    runtime/frame_record.c runtime/frame_identity.c runtime/gpu_raster_soft.c runtime/gte.c runtime/savestate_io.c
+  LINK_FLAGS -Wl,--wrap=gpu_raster_triangle)

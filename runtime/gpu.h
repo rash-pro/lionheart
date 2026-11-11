@@ -61,8 +61,11 @@ unsigned gpu_packet_words(unsigned opcode);
  * gpu_subpixel moves the corners of the next polygon packet by fraction[i]
  * (x, y), or the next sprite by fraction[0], and only that packet;
  * gpu_subpixel_offset moves everything drawn after it, until it is set again
- * (0, 0 by default). Neither is saved. */
+ * (0, 0 by default); gpu_subpixel_depth gives the next polygon packet, beside
+ * its fractions, each corner's screen depth (SZ), for a renderer that maps
+ * textures in perspective as PGXP does (0 for none). None of them is saved. */
 void gpu_subpixel(gpu_t *, float fraction[4][2]);
 void gpu_subpixel_offset(gpu_t *, float x, float y);
+void gpu_subpixel_depth(gpu_t *, const float depth[4]);
 
 #endif

@@ -133,6 +133,13 @@ unsigned frame_blend_polygon(const frame_blend_t *, uint64_t serial, uint32_t nu
  * the interval are still the game's own pixels. */
 unsigned frame_blend_fractions(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, float xy[4][2]);
 
+/* The same corners where the GTE's equations put them before the division
+ * drops the fraction, at every alpha, the ends included: what PGXP records
+ * of a projection. depth is each one's SZ (0 where the GTE would saturate
+ * it). Corners that follow the polygons around them (a shadow's centre)
+ * have no projection of their own and are left out of the mask. */
+unsigned frame_blend_precise(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, float xy[4][2], float depth[4]);
+
 /* Each polygon packet the GPU executes, by the serial frame identity counts
  * (docs/frame-identity.md), before the identity frame that holds it: what
  * blending knows of a polygon's look. */

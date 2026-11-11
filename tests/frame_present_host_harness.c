@@ -31,7 +31,7 @@ int main(void) {
     if (!c || !h || !(h->gpu = gpu_create())) return 2;
     c->hw = h;
     ok &= plain("before");
-    if (!host_frame_present_start(c, 0)) return 2;
+    if (!host_frame_present_start(c, 0, 0)) return 2;
     ok &= interp_gte_command == frame_identity_gte_command && bound_rtps == frame_identity_rtps &&
           bound_rtpt == frame_identity_rtpt && frame_identity_running() && host_frame_present_gpu() != NULL &&
           host_frame_present_gpu() != h->gpu;

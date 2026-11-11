@@ -4,6 +4,9 @@
 #include "frame_present.h"
 #include "frame_record.h"
 #include "hw.h"
+#ifdef FF8_PGXP
+#include "pgxp.h"
+#endif
 #ifdef FF8_VULKAN
 #include "vulkan_renderer.h"
 #endif
@@ -15,7 +18,7 @@
 
 /* What the guest hands the presenter, in order, when another thread draws
  * (host_frame_present_queue): a tag byte, the payload's length, the payload. */
-enum { EVENT_GP0, EVENT_GP1, EVENT_READ, EVENT_VBLANK, EVENT_COMMAND, EVENT_FRAME, EVENT_SYNC };
+enum { EVENT_GP0, EVENT_GP1, EVENT_READ, EVENT_VBLANK, EVENT_COMMAND, EVENT_CORNERS, EVENT_FRAME, EVENT_SYNC };
 
 typedef struct {
     uint8_t *data;
@@ -27,6 +30,7 @@ static struct {
     frame_present_t *present;
     gpu_t *guest;
     int running, queued;
+    int precision;           /* PGXP's corners are taken for the presenter */
     /* The queue: the guest thread appends to incoming; the drawing thread
      * takes it whole and works through it outside the lock. */
     SDL_mutex *lock;
@@ -86,6 +90,24 @@ static void command(void *context, const uint32_t *packet, unsigned count, uint6
     (void)context;
     if (h.queued) event(EVENT_COMMAND, &polygon, 8, packet, (size_t)count * 4);
     else frame_present_command(h.present, packet, count, polygon);
+#ifdef FF8_PGXP
+    /* PGXP resolves a corner on the guest's GPU, which is about to draw it:
+     * the presentation GPU, drawing the packet again, cannot ask. */
+    if (h.precision && (packet[0] >> 24) >= 0x20 && (packet[0] >> 24) < 0x40) {
+        pgxp_vertex_t v[4] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+        float corner[4][3];
+        unsigned i, mask = pgxp_packet(h.guest, packet, v);
+        if (!mask) return;
+        for (i = 0; i < 4; ++i) { corner[i][0] = v[i].x; corner[i][1] = v[i].y; corner[i][2] = v[i].w; }
+        if (h.queued) {
+            uint8_t payload[12 + sizeof(corner)];
+            uint32_t m = mask;
+            memcpy(payload, &polygon, 8); memcpy(payload + 8, &m, 4); memcpy(payload + 12, corner, sizeof(corner));
+            event(EVENT_CORNERS, payload, sizeof(payload), NULL, 0);
+        }
+        else frame_present_corners(h.present, polygon, mask, corner);
+    }
+#endif
 }
 
 static void sink(void *context, const frame_identity_frame_t *f) {
@@ -126,7 +148,7 @@ static void attach(cpu_t *c) {
     sync_with(h.guest);
 }
 
-int host_frame_present_start(cpu_t *c, int fractions) {
+int host_frame_present_start(cpu_t *c, int fractions, int precision) {
     frame_identity_config_t config;
     if (h.running) return 1;
     memset(&h, 0, sizeof(h));
@@ -137,6 +159,12 @@ int host_frame_present_start(cpu_t *c, int fractions) {
     if (!(h.lock = SDL_CreateMutex())) return 0;
     if (!(h.present = frame_present_create())) { SDL_DestroyMutex(h.lock); h.lock = NULL; return 0; }
     frame_present_fractions(h.present, fractions);
+#ifdef FF8_PGXP
+    h.precision = fractions ? precision : 0;
+#else
+    (void)precision;
+#endif
+    frame_present_precision(h.present, h.precision);
 #ifdef FF8_VULKAN
     {
         frame_present_renderer_t renderer = {keep, put_back, between, NULL};
@@ -217,6 +245,14 @@ static void drain(void) {
             frame_present_command(h.present, words, n, polygon);
             break;
         }
+        case EVENT_CORNERS: {
+            uint64_t polygon;
+            uint32_t mask;
+            float corner[4][3];
+            memcpy(&polygon, p, 8); memcpy(&mask, p + 8, 4); memcpy(corner, p + 12, sizeof(corner));
+            frame_present_corners(h.present, polygon, mask, corner);
+            break;
+        }
         case EVENT_FRAME: {
             int32_t wh[2];
             memcpy(wh, p, sizeof(wh));
@@ -272,6 +308,9 @@ void host_frame_present_stop(int report) {
         fprintf(stderr, "Smooth motion: draws=%" PRIu64 " blended=%" PRIu64 " between=%" PRIu64 " holds=%" PRIu64
                 " skips=%" PRIu64 " advances=%" PRIu64 " settles=%" PRIu64 " syncs=%" PRIu64 " failures=%" PRIu64 "\n",
                 t.draws, t.blended, k->between, k->holds, k->skips, t.advances, t.settles, t.syncs, t.failures);
+        if (h.precision)
+            fprintf(stderr, "Smooth motion corners: blended=%" PRIu64 " pgxp=%" PRIu64 " whole=%" PRIu64 "\n",
+                    t.corners_blended, t.corners_pgxp, t.corners_whole);
     }
     frame_present_destroy(h.present);
     free(h.incoming.data); free(h.working.data);
