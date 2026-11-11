@@ -58,8 +58,8 @@ a frozen synthetic host before checking sampler lifetime and exact counters.
 
 `build/devtools/inbetween RECORDING` draws a recording made with the player's
 `--frame-record` again through the software rasterizer, checks it against the
-game's pictures, and draws and measures the frames between game frames
-(docs/frame-blend.md).
+game's pictures, and draws and measures the frames between game frames, 3D
+(docs/frame-blend.md) and field backgrounds (docs/frame-layer.md) moved.
 
 ## Trace and benchmark tools
 

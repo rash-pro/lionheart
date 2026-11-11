@@ -181,8 +181,9 @@ windows is drawn again exactly, with no stray corner.
 Everything here is offline: nothing is presented live, and the timing of a live presenter is not measured. What
 still moves only at game frames, by what the measures find on the battle and field routes:
 
-- 2D: sprites, the HUD and menus, and field backgrounds, which are drawn as tiles that scroll with the camera. A
-  field's 3D moves smoothly over a background that steps; tying the two together is a separate stage.
+- 2D: sprites, the HUD and menus. Field backgrounds, drawn as tiles under a drawing offset that scrolls with the
+  camera, move with that offset as layers, the 3D drawn under it with them (`docs/frame-layer.md`); their
+  animated tiles still change at the game's rate.
 - 3D the service cannot link: effect geometry projected anew each frame (no pair), polygons whose corners the CPU
   computes without the GTE, and ambiguous corners whose polygon was not drawn the same way a game frame earlier.
   Holding a corner holds its polygon and the surface around it.
