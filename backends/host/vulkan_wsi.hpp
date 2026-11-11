@@ -61,6 +61,8 @@ class Swapchain {
     std::deque<std::pair<uint64_t,double>> sightings;
     double (*now_seconds)()=nullptr;
     uint64_t retry_after=0;
+    // Reports of past presents the swapchain keeps, and the host after it.
+    static constexpr unsigned timing_queue=64;
     struct {
         bool on=false, absolute=false;
         VkTimeDomainKHR domain=VK_TIME_DOMAIN_DEVICE_KHR;
@@ -71,6 +73,8 @@ class Swapchain {
         VkTimeDomainKHR local_domain=VK_TIME_DOMAIN_DEVICE_KHR;
         int64_t offset=0;
         unsigned since_calibrated=0;
+        // Presents since their reports were last taken up (gather()).
+        unsigned unread=0;
         uint32_t stage=0;
         std::deque<std::pair<uint64_t,uint64_t>> results;
     } timing;
@@ -104,6 +108,7 @@ class Swapchain {
     void gather() {
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
         if (!timing.on) return;
+        timing.unread=0;
         if (++timing.since_calibrated>=64) calibrate();
         VkPastPresentationTimingInfoEXT info={}; info.sType=VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_INFO_EXT;
         info.swapchain=active.handle;
@@ -121,6 +126,8 @@ class Swapchain {
             for (unsigned i=0;i<properties.presentationTimingCount;++i)
                 if (past[i].reportComplete && past[i].presentStageCount && past[i].pPresentStages[0].time)
                     timing.results.push_back({past[i].presentId,uint64_t(int64_t(past[i].pPresentStages[0].time)-timing.offset)});
+            // A host that stopped asking (shown()) leaves the oldest behind.
+            while (timing.results.size()>timing_queue) timing.results.pop_front();
             if (properties.timingPropertiesCounter!=timing.counter) refresh_properties();
             if (result!=VK_INCOMPLETE) return;
         }
@@ -128,10 +135,10 @@ class Swapchain {
     }
     // Sets the active swapchain up for present timing, where it was made with it.
     void time_chain(bool requested) {
-        timing.on=false; timing.results.clear();
+        timing.on=false; timing.results.clear(); timing.unread=0;
 #if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
         if (!requested) return;
-        if (timing_api.queue_size(device,active.handle,64)!=VK_SUCCESS) return;
+        if (timing_api.queue_size(device,active.handle,timing_queue)!=VK_SUCCESS) return;
         uint64_t counter=0;
         VkSwapchainTimeDomainPropertiesEXT domains={}; domains.sType=VK_STRUCTURE_TYPE_SWAPCHAIN_TIME_DOMAIN_PROPERTIES_EXT;
         if (timing_api.domains(device,active.handle,&domains,&counter)!=VK_SUCCESS || !domains.timeDomainCount) return;
@@ -435,6 +442,11 @@ public:
         VkPresentTimingInfoEXT timing_info={}; timing_info.sType=VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT;
         VkPresentTimingsInfoEXT timings_info={}; timings_info.sType=VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT;
         if (timing.on) {
+            // The swapchain keeps a report for each present until it is taken
+            // up, and refuses presents once its queue is full: where the host
+            // is not asking for them (a menu drawn by another loop), they are
+            // taken up here.
+            if (++timing.unread>=timing_queue/4) gather();
             last_id=++next_id;
             id2_info.swapchainCount=1; id2_info.pPresentIds=&last_id;
             id2_info.pNext=info.pNext; info.pNext=&id2_info;

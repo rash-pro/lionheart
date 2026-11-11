@@ -57,6 +57,9 @@ struct frame_present {
     bytes_t journal;
     size_t mark;
     int have_mark;
+    /* Where the journal stood at the guest's last VBlank: the picture the
+     * game shows when nothing is blended. */
+    size_t vblank;
     /* The newest frame was drawn whole, and the checkpoint moved to its end:
      * the journal holds only what came after it. */
     int consumed;
@@ -122,7 +125,7 @@ void frame_present_sync(frame_present_t *p, gpu_t *guest, uint64_t polygon) {
     p->serial = polygon;
     gpu_subpixel_offset(p->gpu, 0, 0);
     save(p);
-    p->journal.size = 0; p->mark = 0; p->have_mark = 0; p->consumed = 0;
+    p->journal.size = 0; p->mark = 0; p->have_mark = 0; p->consumed = 0; p->vblank = 0;
     frame_blend_reset(p->blend); frame_layer_reset(p->layer);
     frame_present_clock_reset(&p->clock);
     p->vblanks = 0; p->failed = 0;
@@ -152,7 +155,11 @@ void frame_present_gp1(frame_present_t *p, uint32_t word) {
     append(p, CHUNK_GP1, w, 1);
 }
 void frame_present_read(frame_present_t *p) { append(p, CHUNK_READ, NULL, 0); }
-void frame_present_vblank(frame_present_t *p) { append(p, CHUNK_VBLANK, NULL, 0); ++p->vblanks; }
+void frame_present_vblank(frame_present_t *p) {
+    append(p, CHUNK_VBLANK, NULL, 0);
+    ++p->vblanks;
+    if (!p->failed) p->vblank = p->journal.size;
+}
 
 void frame_present_command(frame_present_t *p, const uint32_t *packet, unsigned count, uint64_t polygon) {
     unsigned op = packet[0] >> 24;
@@ -321,11 +328,12 @@ static void apply(frame_present_t *p, unsigned tag, const uint8_t *w, unsigned c
     p->totals.replayed_words += count;
 }
 
-/* Drops the chunks before the mark: the checkpoint is now there. */
-static void trim(frame_present_t *p) {
-    memmove(p->journal.data, p->journal.data + p->mark, p->journal.size - p->mark);
-    p->journal.size -= p->mark;
-    p->mark = 0;
+/* Drops the chunks before a place in the journal: the checkpoint is now there. */
+static void trim(frame_present_t *p, size_t to) {
+    memmove(p->journal.data, p->journal.data + to, p->journal.size - to);
+    p->journal.size -= to;
+    p->mark = p->mark > to ? p->mark - to : 0;
+    p->vblank = p->vblank > to ? p->vblank - to : 0;
 }
 
 /* Draws the journal from the checkpoint. With at, the chunks before the mark
@@ -353,7 +361,7 @@ static void replay(frame_present_t *p, at_t *at, size_t until, int all) {
         save(p);
         p->consumed = 1;
     }
-    if (p->consumed && p->mark) trim(p);
+    if (p->consumed && p->mark) trim(p, p->mark);
 }
 
 int frame_present_frame(frame_present_t *p, const frame_identity_frame_t *f, int32_t width, int32_t height) {
@@ -385,14 +393,20 @@ int frame_present_draw(frame_present_t *p, double t) {
     at.num = at.den = 1;
     if (!p->failed && p->have_mark) frame_present_clock_phase(&p->clock, t, &at.num, &at.den);
     if (p->consumed) at.num = at.den = 1;
-    /* Long without a frame (a load, a movie that sets no display start):
-     * nothing will blend from here, so the checkpoint follows the guest and
-     * the journal stays short; then everything is drawn, as it is kept. */
-    settle = p->consumed && p->vblanks - p->clock.end > FRAME_IDENTITY_GAP;
-    replay(p, p->failed ? NULL : &at, p->journal.size, settle);
+    /* Long without a frame (a load, a movie that sets no display start), or
+     * none yet since the presenter started over (the screens before the
+     * first): nothing will blend from here, so the checkpoint follows the
+     * guest and the journal stays short; then everything is drawn, as it is
+     * kept, up to the guest's last VBlank. A guest that ends no frames draws
+     * into the picture it shows, and what it has drawn of the next one by
+     * the time the display asks is not a picture the game shows. */
+    settle = p->have_mark ? p->consumed && p->vblanks - p->clock.end > FRAME_IDENTITY_GAP : 1;
+    replay(p, p->failed ? NULL : &at, settle && !p->failed ? p->vblank : p->journal.size, settle);
     if (settle) {
+        /* After a failure nothing more is kept: what there is goes. */
+        size_t to = p->failed ? p->journal.size : p->vblank;
         save(p);
-        p->journal.size = 0; p->mark = 0;
+        trim(p, to);
         ++p->totals.settles;
     }
     if (at.blended && at.num < at.den) { ++p->totals.blended; return 1; }

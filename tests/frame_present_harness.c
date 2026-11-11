@@ -3,6 +3,12 @@
  *     prints the newest frame's fraction at each VBlank for game frames
  *     that end every 2, 3, 4 or 6 VBlanks, a change of rate, a gap and a
  *     frame that must be shown whole;
+ *   frame_present waiting
+ *     draws a guest that fills its screen at every VBlank and ends no game
+ *     frame, as before a game's first, then once more in the middle of the
+ *     guest's drawing, and prints the words drawn again for the first
+ *     picture and the last, whether the last is the guest's, and whether the
+ *     one in the middle is the guest's as of its last VBlank;
  *   frame_present replay RECORDING OUT.rgb [fractions]
  *     plays a recording (runtime/frame_record.h) into a GPU as the guest's,
  *     with the presenter tapping it as the player does, and writes the picture
@@ -163,9 +169,51 @@ static int run_replay(const char *path, const char *out_path, int fractions) {
     return fclose(out) ? 2 : 0;
 }
 
+/* A fill of 64 by 64 at (16, 16). */
+static void fill(gpu_t *guest, uint32_t colour) {
+    uint32_t words[3];
+    uint8_t bytes[12];
+    unsigned i;
+    words[0] = 0x02000000u | colour; words[1] = 16u << 16 | 16u; words[2] = 64u << 16 | 64u;
+    for (i = 0; i < 12; ++i) bytes[i] = (uint8_t)(words[i / 4] >> (i % 4 * 8));
+    gpu_gp0_words(guest, bytes, 3);
+}
+
+static int run_waiting(void) {
+    enum { VBLANKS = 200 };
+    static uint16_t shown[1024 * 512];
+    gpu_t *guest = gpu_create();
+    uint64_t first = 0, last = 0;
+    int same, held;
+    unsigned v;
+    if (!guest || !(present = frame_present_create())) return 2;
+    gpu_tap(guest, &tap, NULL);
+    frame_present_sync(present, guest, 0);
+    for (v = 0; v < VBLANKS; ++v) {
+        uint64_t before = frame_present_totals(present).replayed_words;
+        fill(guest, (v + 1) * 8);
+        gpu_vblank(guest);
+        frame_present_draw(present, (double)frame_present_vblanks(present));
+        last = frame_present_totals(present).replayed_words - before;
+        if (!v) first = last;
+    }
+    same = !memcmp(gpu_vram(frame_present_gpu(present)), gpu_vram(guest), sizeof(shown));
+    /* The guest starts its next picture; the display asks before it is done. */
+    memcpy(shown, gpu_vram(guest), sizeof(shown));
+    fill(guest, 0xffffff);
+    frame_present_draw(present, (double)frame_present_vblanks(present) + 0.5);
+    held = !memcmp(gpu_vram(frame_present_gpu(present)), shown, sizeof(shown)) && memcmp(gpu_vram(guest), shown, sizeof(shown));
+    printf("waiting: first=%" PRIu64 " last=%" PRIu64 " same=%d held=%d failures=%" PRIu64 "\n", first, last,
+           same, held, frame_present_totals(present).failures);
+    frame_present_destroy(present);
+    free(guest);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "phases")) return run_phases();
+    if (argc > 1 && !strcmp(argv[1], "waiting")) return run_waiting();
     if (argc > 3 && !strcmp(argv[1], "replay")) return run_replay(argv[2], argv[3], argc > 4 && !strcmp(argv[4], "fractions"));
-    fprintf(stderr, "usage: frame_present phases | replay RECORDING OUT.rgb [fractions]\n");
+    fprintf(stderr, "usage: frame_present phases | waiting | replay RECORDING OUT.rgb [fractions]\n");
     return 2;
 }
