@@ -704,7 +704,7 @@ static struct {
     host_display_draw_t draw;
     void *context;
     gpu_t *shown;
-    int rate, timing, have, whole;
+    int rate, timing, have, whole, changed;
     double at, period, frequency, start;   /* the guest's last VBlank (smoothed) and its period, seconds */
     double vblank;                          /* when the guest's last VBlank came */
     double refresh;                         /* the display's refresh period as last found */
@@ -735,7 +735,11 @@ static void smooth_display(void) {
      * finds it from when pictures were shown, starting from the mode's. */
     double refresh = reported > 0 ? reported : 1.0 / rate;
     if (smooth.pace.refresh > 0 && rate == smooth.rate && timing == smooth.timing && (reported > 0) == smooth.pace.known &&
-        fabs(refresh - smooth.refresh) < 1e-7) return;
+        fabs(refresh - smooth.refresh) < 1e-7) { smooth.changed = 0; return; }
+    /* Seen twice in a row: the display a window is on can be said to be
+     * another for a moment, as the compositor moves it. */
+    if (smooth.pace.refresh > 0 && ++smooth.changed < 2) return;
+    smooth.changed = 0;
     smooth.rate = rate; smooth.timing = timing; smooth.refresh = refresh;
     present_pace_start(&smooth.pace, refresh, reported > 0, timing > 0, timing > 1);
 }

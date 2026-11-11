@@ -126,8 +126,9 @@ for, or by a timer), so the picture is the compositor's a refresh ahead and show
 the period the compositor's deadline lies, and wherever the grid is known to within half a refresh. The swapchain
 is a mailbox then, with room for the pictures held: with FIFO each present also waits for the one before to be
 shown, which Hyprland only does when something else on the output changes, and pictures stalled for seconds. A
-picture that comes late moves the hand-over half a refresh earlier; it comes back by half a millisecond for every
-five seconds with none late. Between two pictures every second refresh or more, copies of the picture are handed
+picture that comes late moves the hand-over a millisecond earlier, twice as much as the last time when pictures
+come late within ten seconds of each other (the deadline moved), up to half a refresh; it comes back by half a
+millisecond every five seconds with none late. Between two pictures every second refresh or more, copies of the picture are handed
 over for each refresh between, held until theirs: a compositor that has had nothing new for two refreshes takes
 one more to wake up, which made every third or fourth picture late. Without targets, pictures are handed over in
 the middle of the refresh before the one before their own and moved within it as they come early or late.
@@ -136,7 +137,9 @@ the middle of the refresh before the one before their own and moved within it as
 picture does not move it), copies by their average. A picture every m refreshes, m the least for which a picture
 and m - 1 copies take three quarters of m refreshes; up as soon as the current multiple no longer fits with a
 little to spare (a picture that does not fit makes the next late), down only after two seconds in which the
-lower one would have fitted. A change of multiple changes nothing in how the game moves, since every picture is
+lower one would have fitted; never fewer than about 45 pictures a second (every refresh at 60 Hz, at most every
+third at 144 Hz), since at 60 Hz every second refresh would halve the motion for seconds where a costly stretch
+only makes a few pictures late. A change of multiple changes nothing in how the game moves, since every picture is
 drawn for its own moment: the steps between pictures double or halve, evenly.
 
 **What a picture shows.** A picture shows the game at the moment it is begun, held at the same distance from the
@@ -146,8 +149,9 @@ early or late). The phase of the newest game frame follows its measured interval
 ended n VBlanks after the one before is drawn at (t - end) / n, whole from the end of its interval until the next
 frame ends (a hold), and cut short when the next comes early (a skip). Game frames come every 2 to 6 VBlanks.
 
-The display the window is on is checked once a second, and pacing starts over when it moves to one of another
-rate or the device learns more of it.
+The display the window is on is checked once a second, and pacing starts over when it has moved to one of
+another rate (seen on two checks in a row: a window can be said to be on another display for a moment) or the
+device learns more of it.
 
 Shown as the game shows it: fast-forward, the world map (excluded by frame identity), a frame more than eight
 VBlanks after the one before (loads, a disc change, a field change), a camera cut or a change of scene, and a

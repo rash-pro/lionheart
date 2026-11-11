@@ -122,7 +122,7 @@ static double load(const present_pace_t *p, unsigned m) {
 }
 
 void present_pace_done(present_pace_t *p, const present_plan_t *plan, double cost, double repeat, double now) {
-    unsigned m;
+    unsigned m, most;
     ++p->pictures;
     p->costs[p->pictures % 16] = cost;
     p->cost = second_most(p->costs, p->pictures);
@@ -136,19 +136,25 @@ void present_pace_done(present_pace_t *p, const present_plan_t *plan, double cos
     /* A picture every refresh where its cost fits the period with a margin,
      * every second (or more) where it does not. Up at once, as a picture that
      * does not fit makes the next late; down only after two seconds that
-     * would have fitted, so that a few cheap pictures do not change it. */
-    for (m = 1; m < 8 && load(p, m) > 0.75 * m * p->refresh; ++m) {}
-    if (m > p->multiple && load(p, p->multiple) > 0.85 * p->multiple * p->refresh) {
+     * would have fitted, so that a few cheap pictures do not change it. Never
+     * fewer than about 45 pictures a second: at 60 Hz every second refresh
+     * would halve the motion for seconds, where a costly stretch only makes a
+     * few pictures late. */
+    most = (unsigned)floor(1.0 / (45 * p->refresh));
+    if (most < 1) most = 1;
+    if (most > 8) most = 8;
+    for (m = 1; m < most && load(p, m) > 0.75 * m * p->refresh; ++m) {}
+    if (m > p->multiple && load(p, p->multiple) > 0.95 * p->multiple * p->refresh) {
         p->multiple = m; ++p->changes; p->calm = 0;
     } else if (m < p->multiple && load(p, p->multiple - 1) < 0.65 * (p->multiple - 1) * p->refresh) {
         if (p->calm <= 0) p->calm = now;
         else if (now - p->calm >= 2.0) { --p->multiple; ++p->changes; p->calm = 0; }
     } else p->calm = 0;
     /* Back towards the least lead once nothing has been late for a while. */
-    if (p->lead > p->lead_floor && now - p->late_at > 5.0) {
+    if (p->lead > p->lead_floor && now - p->late_at > 5.0 && now - p->eased > 5.0) {
         p->lead -= 0.0005;
         if (p->lead < p->lead_floor) p->lead = p->lead_floor;
-        p->late_at = now;
+        p->eased = now;
     }
     p->next = plan->moment + p->multiple * p->refresh;
 }
@@ -196,9 +202,13 @@ int present_pace_shown(present_pace_t *p, double moment, double shown, int repea
     if (late > 0) {
         ++p->late;
         /* Late: handed over too close to the compositor's deadline. Earlier,
-         * where a picture can be held until its refresh. */
+         * where a picture can be held until its refresh: by a millisecond for
+         * a picture late on its own, by twice as much each time pictures come
+         * late one soon after another, as when the deadline moves. */
         if (p->targets) {
-            p->lead += 0.5 * p->refresh;
+            p->step = p->late_at > 0 && shown - p->late_at < 10.0 ? p->step * 2 : 0.001;
+            if (p->step > 0.5 * p->refresh) p->step = 0.5 * p->refresh;
+            p->lead += p->step;
             if (p->lead > p->lead_floor + 2 * p->refresh) p->lead = p->lead_floor + 2 * p->refresh;
         } else if (p->lead < 2 * p->refresh - 0.0005) p->lead = p->lead_floor = p->lead + 0.25 * p->refresh;
         p->late_at = shown;

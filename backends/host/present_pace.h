@@ -35,6 +35,8 @@ typedef struct {
     double latency;     /* from beginning a picture to its moment, smoothed: the game time a picture shows */
     double calm;        /* since when fewer refreshes per picture would do, 0 if they would not */
     double late_at;     /* when a picture was last late */
+    double step;        /* how much earlier the last late picture moved the hand-over */
+    double eased;       /* when the hand-over last moved back towards the least lead */
     /* Totals. */
     unsigned long pictures, on_time, late, early, stray, skipped, changes;
 } present_pace_t;

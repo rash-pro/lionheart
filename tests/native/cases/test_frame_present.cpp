@@ -138,7 +138,8 @@ LH_TEST(test_pictures_come_on_the_refresh_they_are_drawn_for) {
     auto battle = paced(out, "144-battle");
     LH_CHECK_MSG(battle.on_time >= 99.5 && battle.intervals[2] >= 99.5, battle.line);
     auto heavy = paced(out, "144-heavy");
-    LH_CHECK_MSG(heavy.on_time >= 99.5 && heavy.intervals[4] >= 99.5, heavy.line);
+    LH_CHECK_MSG(heavy.on_time >= 99.5, heavy.line);
+    LH_CHECK_MSG(heavy.intervals.rbegin()->first >= 3 && (heavy.intervals[3] >= 99.5 || heavy.intervals[4] >= 99.5), heavy.line);
     // From every refresh to every second and back: once each way, every
     // interval one refresh or two, and the game evenly spaced through both.
     auto change = paced(out, "144-change");
