@@ -39,8 +39,11 @@ service (`frame_identity_config_t`'s `command`). `runtime/frame_present.h` keeps
   picture and none of it is kept, so drawing commands whose drawing area misses the shown picture are left out;
   uploads, copies and state are drawn. This halves the cost in battle and changes no presented pixel.
 - A frame drawn at fraction 1 becomes the next checkpoint on the way. A frame the next one cut short is drawn
-  once more, whole and unseen, when the next ends. More than eight VBlanks without a frame (a load) and the
-  checkpoint follows the guest, so the journal stays short.
+  once more, whole and unseen, when the next ends.
+- More than eight VBlanks without a frame (a load, a movie), or none yet since the presenter started (the
+  screens a game starts with), and the checkpoint follows the guest, so the journal stays short. The picture is
+  then the guest's as of its last VBlank: a guest that ends no frames draws into the picture it shows, and what
+  it has drawn of the next one when the display asks is not a picture the game shows.
 
 Nothing here writes to the guest: the presentation GPU is a separate `gpu_t`, copied from the guest's when
 presentation starts or a state is loaded (`gpu_copy`).

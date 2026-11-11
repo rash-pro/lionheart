@@ -72,9 +72,10 @@ LH_TEST(test_phases_follow_the_measured_interval) {
 LH_TEST(test_waiting_for_the_first_frame_draws_only_what_is_new) {
     // Before a game's first frame ends (the screens it starts with) each
     // picture draws what the guest sent since the one before, however long
-    // that lasts, and shows what the guest shows.
+    // that lasts, and shows what the guest showed at its last VBlank: not
+    // the next picture half drawn.
     auto out = t.ok(t.harness("main").arg("waiting")).out;
-    LH_CONTAINS(out, "waiting: first=3 last=3 same=1 failures=0");
+    LH_CONTAINS(out, "waiting: first=3 last=3 same=1 held=1 failures=0");
 }
 
 LH_TEST(test_live_and_offline_draw_the_same_pictures) {
