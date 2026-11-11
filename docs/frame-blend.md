@@ -123,3 +123,21 @@ states, and writes `probe-before.ppm`, `probe-start.ppm`, `probe-game.ppm` and `
 `tests/native/cases/test_frame_blend.cpp` checks blending, the replay and the measures on a synthetic scene,
 and, with your own discs, that recording changes no route's final state and that every game frame of the recorded
 windows is drawn again exactly, with no stray corner.
+
+## Limits
+
+Everything here is offline: nothing is presented live, and the timing of a live presenter is not measured. What
+still moves only at game frames, by what the measures find on the battle and field routes:
+
+- 2D: sprites, the HUD and menus, and field backgrounds, which are drawn as tiles that scroll with the camera. A
+  field's 3D moves smoothly over a background that steps; tying the two together is a separate stage.
+- 3D the service cannot link: effect geometry projected anew each frame (no pair), polygons whose corners the CPU
+  computes without the GTE, and positions where two projections meet that stood apart before (the joints of a
+  chain such as a whip). Holding a corner holds its polygon and the surface around it.
+- 3D that moves, but whose look changes at game frames: texture coordinates, colours, which polygons are drawn,
+  or a texture or palette rewritten during the frame, as many spell and summon effects do.
+- Parts that turn far within one game frame. A corner moves in a straight line in view space, which matches a
+  steady move or a small turn; a whip or a limb that swings through tens of degrees each game frame is drawn
+  shorter between them than at either end. Interpolating each run's own rotation and translation, which the
+  service records, would follow the arc.
+- The game frame that shows a cut or a change of scene, and the first after a gap, are shown as the game shows them.
