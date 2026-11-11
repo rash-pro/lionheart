@@ -52,6 +52,12 @@ at a fraction alpha between that frame and the one before:
   where the other way round is nearly as short and which way the part went is a guess (a straight line keeps
   it between its two ends, a wrong guess would draw it where it never was), different vertices at the two
   ends, and a vertex whose arc would reach the camera plane. Alpha 0 and 1 stay the game's own positions.
+- A polygon whose every corner is linked takes its corner colours from between those of the same polygon a game
+  frame earlier (found as for ambiguous corners) and its own, when both are drawn by the same command and, where
+  textured, with the same semi-transparency: lighting that changes as a model turns, flashes and fades. Raw
+  textures, which ignore the colour, and a change of blending mode, which cannot be drawn in between, keep the
+  recorded colours. Blending knows a polygon's look from `frame_blend_packet`, which the host calls with each
+  polygon packet the GPU executes.
 - 3D polygons that share an edge (both its ends at the same packet positions) form one surface, and a position
   is one vertex within a surface. A gap can open only along a shared edge; two surfaces that meet at a single
   position, often by chance (an effect's corner on a vertex of the floor), do not hold each other.
@@ -113,7 +119,8 @@ Measures, over `--from` to `--until`:
 
 - `Blended`: 3D corners (those of polygons with a corner at a projection) and polygons that move, and why the rest
   stay: held by the service, ends the GTE does not give again or at the camera plane, in or next to a held polygon,
-  no history, a run that jumped by itself; and the ambiguous corners resolved.
+  no history, a run that jumped by itself; the ambiguous corners resolved, and the polygons whose colours change
+  from a game frame earlier.
 - `Game rate`: for each game frame, the pixels where alpha 0 differs from the picture shown just before it change
   only at game frames; of the pixels that change across the game frame, their share, and their share of the
   screen. Without blending both shares would be those of every changing pixel.
@@ -162,8 +169,9 @@ still moves only at game frames, by what the measures find on the battle and fie
 - 3D the service cannot link: effect geometry projected anew each frame (no pair), polygons whose corners the CPU
   computes without the GTE, and ambiguous corners whose polygon was not drawn the same way a game frame earlier.
   Holding a corner holds its polygon and the surface around it.
-- 3D that moves, but whose look changes at game frames: texture coordinates, colours, which polygons are drawn,
-  or a texture or palette rewritten during the frame, as many spell and summon effects do.
+- 3D that moves, but whose look changes at game frames in ways blending does not follow: texture coordinates,
+  which polygons are drawn, their order, a change of blending mode, or a texture or palette rewritten during the
+  frame, as many spell and summon effects do.
 - Parts that turn more than 150 degrees within one game frame, and parts whose matrix is no rotation, move on
   straight lines and shrink between the frames.
 - The game frame that shows a cut or a change of scene, and the first after a gap, are shown as the game shows them.

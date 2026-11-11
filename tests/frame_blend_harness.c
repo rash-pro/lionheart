@@ -7,9 +7,10 @@
  *   T<number> turning=<corners> runs=<turning>/<hanging>/<flat or mirrored>/<too far>
  *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
  *   R<number> resolved=<ambiguous corners resolved by the polygon drawn a game frame earlier>
+ *   C<number> <polygon>=<mask of the corners whose colour changes>[/<first corner's colour at alpha 0, 1/2 and 1>]...
  * Scenarios: move, held, touch, resets, late; parts that turn: turn, chain,
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
- * on screen: cross. With "straight" after the name, every corner moves on a
+ * on screen: cross; colours that change: fade. With "straight" after the name, every corner moves on a
  * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
@@ -90,6 +91,21 @@ static void sink(void *context, const frame_identity_frame_t *f) {
     if (!f->polygon_count) return;
     sizes(f);
     {
+        unsigned n = f->polygon_count < 3 ? f->polygon_count : 3;
+        printf("C%llu", (unsigned long long)f->number);
+        for (i = 0; i < n; ++i) {
+            uint32_t zero[4], half[4], one[4];
+            unsigned m = frame_blend_colours(blend, f->first_polygon + i, 1, 2, half);
+            printf(" %c=%x", 'A' + i, m);
+            if (m) {
+                frame_blend_colours(blend, f->first_polygon + i, 0, 2, zero);
+                frame_blend_colours(blend, f->first_polygon + i, 2, 2, one);
+                printf("/%06x-%06x-%06x", (unsigned)zero[0], (unsigned)half[0], (unsigned)one[0]);
+            }
+        }
+        printf("\n");
+    }
+    {
         uint32_t half[3][4], zero[3][4], one[3][4];
         unsigned mask[3], m0, m1, n = f->polygon_count < 3 ? f->polygon_count : 3, exact = 1;
         printf("M%llu", (unsigned long long)f->number);
@@ -143,10 +159,22 @@ static void draw_area(unsigned buffer) {
     gpu_gp0(g, 0xe5000000u | y << 11);
 }
 
-static void quad(uint32_t color, const uint32_t xy[4]) {
+/* A polygon packet to the GPU, told to blending as the GPU takes it. */
+static uint64_t polygons_drawn;
+static void polygon(const uint32_t *words, unsigned n) {
     unsigned i;
-    gpu_gp0(g, 0x28000000u | color);
-    for (i = 0; i < 4; ++i) gpu_gp0(g, xy[i]);
+    frame_blend_packet(blend, polygons_drawn++, words);
+    for (i = 0; i < n; ++i) gpu_gp0(g, words[i]);
+}
+
+static void quad(uint32_t color, const uint32_t xy[4]) {
+    uint32_t w[5] = {0x28000000u | color, xy[0], xy[1], xy[2], xy[3]};
+    polygon(w, 5);
+}
+
+static void triangle(uint32_t color, uint32_t a, uint32_t b_, uint32_t c_) {
+    uint32_t w[4] = {0x20000000u | color, a, b_, c_};
+    polygon(w, 4);
 }
 
 static void display(void) {
@@ -179,11 +207,9 @@ static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
     quad(0x0000c0u, drawn.a);
     quad(0x00c000u, drawn.b);
     if (with_c == 1) {
-        gpu_gp0(g, 0x20c00000u);
-        gpu_gp0(g, drawn.b[1]); gpu_gp0(g, drawn.b[3]); gpu_gp0(g, (200u << 16) | 300u);
+        triangle(0xc00000u, drawn.b[1], drawn.b[3], (200u << 16) | 300u);
     } else if (with_c == 2) {
-        gpu_gp0(g, 0x20c0c000u);
-        gpu_gp0(g, drawn.a[0]); gpu_gp0(g, (200u << 16) | 10u); gpu_gp0(g, (220u << 16) | 60u);
+        triangle(0xc0c000u, drawn.a[0], (200u << 16) | 10u, (220u << 16) | 60u);
     }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     draw_area(back);
@@ -340,7 +366,35 @@ static void scenario_cross(void) {
         for (i = 0; i < 4; ++i) q[i] = rtps(front[i][0], front[i][1], front[i][2]);
         for (i = 0; i < 3; ++i) t[i] = rtps(back_[i][0], back_[i][1], back_[i][2]);
         quad(0x0000c0u, q);
-        gpu_gp0(g, 0x20c00000u); gpu_gp0(g, t[0]); gpu_gp0(g, t[1]); gpu_gp0(g, t[2]);
+        triangle(0xc00000u, t[0], t[1], t[2]);
+        shown();
+    }
+}
+
+/* Three quads that move a little each game frame while their look changes:
+ * A shaded per corner, fading up; B flat, fading down; C textured and
+ * semi-transparent, its colour changing and its blending mode with it. */
+static void scenario_fade(void) {
+    static const int corner[4][2] = {{-100, -60}, {100, -60}, {-100, 60}, {100, 60}};
+    int f;
+    for (f = 0; f < 6; ++f) {
+        uint32_t xy[3][4], level = 40u * (uint32_t)f;
+        unsigned i, k;
+        cleared();
+        for (k = 0; k < 3; ++k) {
+            pose(10.0 * f, 1, 1, 1, -250 + 250 * (int)k, 0, 1000);
+            /* A different shape each, so that each quad is its own run. */
+            for (i = 0; i < 4; ++i) xy[k][i] = rtps(corner[i][0] + (int)k, corner[i][1], 0);
+        }
+        {
+            uint32_t a[8] = {0x38000000u | level, xy[0][0], 0x00ff00u | level << 16, xy[0][1], 0x0000ffu, xy[0][2],
+                             0x404040u + level, xy[0][3]};
+            uint32_t bq[5] = {0x28000000u | (200u - level) << 8, xy[1][0], xy[1][1], xy[1][2], xy[1][3]};
+            /* Texture page 0 with blending mode f & 1 (bits 5-6), palette at 0,480. */
+            uint32_t cq[9] = {0x2e000000u | level, xy[2][0], 0x78000000u, xy[2][1], ((uint32_t)(f & 1) << 5) << 16 | 0x0f00u,
+                              xy[2][2], 0x0f0fu, xy[2][3], 0x000fu};
+            polygon(a, 8); polygon(bq, 5); polygon(cq, 9);
+        }
         shown();
     }
 }
@@ -372,6 +426,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "stretched")) scenario_turn(60, 2, 0.5, 0);
     else if (!strcmp(name, "chain")) scenario_chain();
     else if (!strcmp(name, "cross")) scenario_cross();
+    else if (!strcmp(name, "fade")) scenario_fade();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

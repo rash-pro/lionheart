@@ -92,7 +92,7 @@ LH_TEST(test_shared_vertices_stay_shared) {
 LH_TEST(test_a_cut_resets) {
     auto out = scenario(t, "resets");
     LH_CONTAINS(out, "F2 reason=kept moving=8/8");
-    LH_CONTAINS(out, "F3 reason=cut moving=0/8 polygons=0/2 held=0/0/0/8\nT3 turning=0 runs=0/0/0/0\nM3 A=0 B=0");
+    LH_CONTAINS(out, "F3 reason=cut moving=0/8 polygons=0/2 held=0/0/0/8\nT3 turning=0 runs=0/0/0/0\nC3 A=0 B=0\nM3 A=0 B=0");
     LH_CONTAINS(out, "F4 reason=kept moving=8/8");
     LH_CONTAINS(out, "F5 reason=scene moving=0/8");
     LH_CONTAINS(out, "F6 reason=kept moving=8/8");
@@ -239,6 +239,25 @@ LH_TEST(test_corners_that_meet_on_screen_are_told_apart_by_the_frame_before) {
         LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=7/7 polygons=2/2");
         LH_CHECK_MSG(out.find("R" + std::to_string(f) + " ") == std::string::npos, out);
     }
+}
+
+LH_TEST(test_colours_blend_between_game_frames) {
+    // A, shaded per corner, fades up; B, flat, fades down: halfway each
+    // changing colour is halfway, and the ends are the game's. C is textured
+    // and its semi-transparency changes with its colour: drawn as recorded.
+    auto out = scenario(t, "fade");
+    LH_CONTAINS(out, "C2 A=b/000028-00003c-000050 B=f/00a000-008c00-007800 C=0\n");
+    LH_CONTAINS(out, "C3 A=b/000050-000064-000078 B=f/007800-006400-005000 C=0\n");
+    LH_CONTAINS(out, "C5 A=b/0000a0-0000b4-0000c8 B=f/002800-001400-000000 C=0\n");
+    // A frame without history has nothing to blend from.
+    LH_CONTAINS(out, "C1 A=0 B=0 C=0\n");
+    // Polygons whose colour stays are drawn as recorded.
+    LH_CONTAINS(scenario(t, "move"), "C3 A=0 B=0\n");
+    auto record = t.temp() / "fade.rec";
+    scenario(t, "fade", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, " differ=0 pixels=0");
+    LH_CONTAINS(drawn, "Stray: corners=0 ");
 }
 
 // Recording changes nothing the game computes; replaying the recording gives

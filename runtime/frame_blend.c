@@ -19,12 +19,25 @@ typedef struct {
      * them by linked corner: (corner, age, projection) to the first polygon,
      * then per polygon corner the next with the same. */
     frame_identity_polygon_t *polygons;
+    /* Each polygon's corner colours as its packet gave them (one for a flat
+     * polygon), the texture page word of a textured one, and whether its
+     * packet was seen. */
+    uint32_t (*colours)[4];
+    uint32_t *pages;
+    uint8_t *coloured;
     uint64_t *corner_keys;
     int32_t *corner_heads, *corner_next;
     size_t projection_count, run_count, setup_count, polygon_count;
     size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity, polygon_capacity;
-    size_t corner_capacity, next_capacity;
+    size_t corner_capacity, next_capacity, colour_capacity, page_capacity, coloured_capacity;
 } kept_t;
+
+/* A polygon packet as the GPU took it, waiting for its identity frame. */
+typedef struct {
+    uint64_t serial;
+    uint32_t opcode, page;
+    uint32_t colours[4];
+} look_t;
 
 /* Both ends of a vertex: where it stood in the frame before (a) and now (b). */
 typedef struct {
@@ -61,6 +74,12 @@ struct frame_blend {
     uint64_t histogram[2048];
     size_t move_capacity;
     int straight;                /* every corner on a straight line, for comparison */
+    look_t *looks;               /* packets not yet in a frame, in serial order */
+    size_t look_count, look_capacity;
+    /* The latest frame's polygons: the same polygon a game frame earlier, by
+     * index in the frame before, or -1. */
+    int32_t *before;
+    size_t before_capacity;
 };
 
 static int grow(void **items, size_t *capacity, size_t needed, size_t size) {
@@ -81,8 +100,9 @@ void frame_blend_destroy(frame_blend_t *b) {
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
         free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
-        free(b->kept[i].corner_next);
+        free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
+    free(b->looks); free(b->before);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
@@ -91,11 +111,33 @@ void frame_blend_reset(frame_blend_t *b) {
     unsigned i;
     for (i = 0; i < 3; ++i) b->kept[i].valid = 0;
     memset(&b->info, 0, sizeof(b->info));
+    b->look_count = 0;
 }
 
 const frame_blend_info_t *frame_blend_info(const frame_blend_t *b) { return &b->info; }
 
 void frame_blend_straight(frame_blend_t *b, int on) { b->straight = on != 0; }
+
+void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packet) {
+    unsigned op = packet[0] >> 24, corners = (op & 8) ? 4 : 3, i, k = 1;
+    look_t *l;
+    if (op < 0x20 || op >= 0x40) return;
+    if (b->look_count && b->looks[b->look_count - 1].serial >= serial) b->look_count = 0;
+    if (!grow((void **)&b->looks, &b->look_capacity, b->look_count + 1, sizeof(*b->looks))) return;
+    l = &b->looks[b->look_count++];
+    memset(l, 0, sizeof(*l));
+    l->serial = serial; l->opcode = op;
+    l->colours[0] = packet[0] & 0xffffffu;
+    for (i = 0; i < corners; ++i) {
+        if (i && (op & 16)) l->colours[i] = packet[k++] & 0xffffffu;
+        else if (i) l->colours[i] = l->colours[0];
+        ++k;
+        if (op & 4) {
+            if (i == 1) l->page = packet[k] >> 16;
+            ++k;
+        }
+    }
+}
 
 static int16_t low(uint32_t w) { return (int16_t)(uint16_t)(w & 0xffffu); }
 static int16_t high(uint32_t w) { return (int16_t)(uint16_t)(w >> 16); }
@@ -126,7 +168,13 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
         !grow((void **)&k->jumped, &k->jumped_capacity, f->run_count, sizeof(*k->jumped)) ||
         !grow((void **)&k->polygons, &k->polygon_capacity, f->polygon_count, sizeof(*k->polygons)) ||
         !grow((void **)&k->corner_next, &k->next_capacity, (size_t)f->polygon_count * 4, sizeof(*k->corner_next))) return 0;
-    if (f->polygon_count) memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
+    if (!grow((void **)&k->colours, &k->colour_capacity, f->polygon_count, sizeof(*k->colours)) ||
+        !grow((void **)&k->pages, &k->page_capacity, f->polygon_count, sizeof(*k->pages)) ||
+        !grow((void **)&k->coloured, &k->coloured_capacity, f->polygon_count, sizeof(*k->coloured))) return 0;
+    if (f->polygon_count) {
+        memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
+        memset(k->coloured, 0, f->polygon_count);
+    }
     k->polygon_count = f->polygon_count;
     if (f->run_count) memset(k->jumped, 0, f->run_count);
     if (f->projection_count) memcpy(k->projections, f->projections, f->projection_count * sizeof(*k->projections));
@@ -864,6 +912,21 @@ static void resolve(frame_blend_t *b, kept_t *cur) {
     }
 }
 
+/* The packets of a frame's polygons, by serial; older ones are dropped. */
+static void attach_looks(frame_blend_t *b, kept_t *k, const frame_identity_frame_t *f) {
+    size_t i, kept = 0;
+    for (i = 0; i < b->look_count; ++i) {
+        const look_t *l = &b->looks[i];
+        uint64_t at = l->serial - f->first_polygon;
+        if (l->serial >= f->first_polygon && at < f->polygon_count) {
+            if (f->polygons[at].opcode != l->opcode) continue;
+            memcpy(k->colours[at], l->colours, sizeof(l->colours));
+            k->pages[at] = l->page; k->coloured[at] = 1;
+        } else if (l->serial >= f->first_polygon + f->polygon_count) b->looks[kept++] = *l;
+    }
+    b->look_count = kept;
+}
+
 int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     kept_t *cur, *prev;
     frame_blend_info_t *info = &b->info;
@@ -881,6 +944,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         cur->valid = 0;
         return 0;
     }
+    attach_looks(b, cur, f);
     if (f->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) cur->reason = FRAME_BLEND_NO_HISTORY;
     else if (f->flags & FRAME_IDENTITY_EXCLUDED) cur->reason = FRAME_BLEND_EXCLUDED;
     else if (!prev->valid || prev->number + 1 != f->number) cur->reason = FRAME_BLEND_NO_HISTORY;
@@ -895,7 +959,18 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     info->reason = cur->reason;
     if (!motion_plan(b, cur, prev)) { cur->valid = 0; return 0; }
     resolve(b, cur);
-    if (!index_corners(cur)) { cur->valid = 0; return 0; }
+    if (!index_corners(cur) || !grow((void **)&b->before, &b->before_capacity, f->polygon_count, sizeof(*b->before))) {
+        cur->valid = 0;
+        return 0;
+    }
+    for (i = 0; i < f->polygon_count; ++i) {
+        const frame_identity_polygon_t *q = &cur->polygons[i];
+        b->before[i] = -1;
+        for (c = 0; c < q->corners; ++c) if (q->state[c] != FRAME_IDENTITY_LINKED) break;
+        if (c == q->corners && cur->coloured[i]) b->before[i] = predecessor(b, q);
+        if (b->before[i] >= 0 && memcmp(prev->colours[b->before[i]], cur->colours[i], sizeof(cur->colours[i])))
+            ++info->polygons_recoloured;
+    }
     /* Every position of a 3D surface is one vertex. A corner that cannot move
      * pins its position; so do projections that share a position now but
      * stood apart before, which are not one vertex. */
@@ -1062,6 +1137,30 @@ unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t n
             if (l < lo * 0.9 - 2 || l > hi * 1.1 + 2) resized = 1;
         }
         check->resized += resized;
+    }
+    return mask;
+}
+
+unsigned frame_blend_colours(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den, uint32_t colours[4]) {
+    const kept_t *cur = kept_seen(b, 0), *prev = kept_seen(b, 1);
+    uint64_t i = serial - b->info.first_polygon;
+    const uint32_t *from, *to;
+    unsigned c, a, mask = 0, op;
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num > den || b->before[i] < 0 ||
+        cur->polygons[i].age[0] > 1 || kept_seen(b, cur->polygons[i].age[0])->reason != FRAME_BLEND_KEPT) return 0;
+    op = cur->polygons[i].opcode;
+    from = prev->colours[b->before[i]]; to = cur->colours[i];
+    /* Raw textures ignore the colour; a change of blending mode between the
+     * two (semi-transparency on a textured polygon) cannot be drawn between. */
+    if (!prev->coloured[b->before[i]] || ((op & 4) && ((op & 1) || ((prev->pages[b->before[i]] ^ cur->pages[i]) & 0x60u))))
+        return 0;
+    for (c = 0; c < cur->polygons[i].corners; ++c) {
+        uint32_t out = 0;
+        if (from[c] == to[c]) { colours[c] = to[c]; continue; }
+        for (a = 0; a < 24; a += 8)
+            out |= (uint32_t)between((int32_t)((from[c] >> a) & 255u), (int32_t)((to[c] >> a) & 255u), num, den) << a;
+        colours[c] = out;
+        mask |= 1u << c;
     }
     return mask;
 }

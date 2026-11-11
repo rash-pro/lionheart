@@ -53,10 +53,13 @@ static void put_le32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_
 typedef struct {
     gpu_t *gpu;
     uint64_t serial;
+    frame_blend_t *blend;    /* told every polygon the game drew, or NULL */
 } counted_t;
 static void count_polygon(void *context, unsigned opcode, const uint32_t *packet) {
-    (void)opcode; (void)packet;
-    ++((counted_t *)context)->serial;
+    counted_t *c = context;
+    (void)opcode;
+    if (c->blend) frame_blend_packet(c->blend, c->serial, packet);
+    ++c->serial;
 }
 static void ignore_start(void *context, uint32_t start) { (void)context; (void)start; }
 static void ignore_vblank(void *context) { (void)context; }
@@ -383,16 +386,21 @@ static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t 
                 n = need;
                 if (at && op >= 0x20 && op < 0x40) {
                     uint8_t packet[12 * 4];
-                    uint32_t xy[4], w[12];
-                    unsigned corners = (op & 8) ? 4 : 3, i, k = 1, mask;
+                    uint32_t xy[4], w[12], colours[4];
+                    unsigned corners = (op & 8) ? 4 : 3, i, k = 1, mask, shades;
                     memcpy(packet, p, n * 4);
                     mask = frame_blend_polygon(at->blend, c->serial, at->num, at->den, xy, &at->check);
+                    shades = frame_blend_colours(at->blend, c->serial, at->num, at->den, colours);
                     for (i = 0; i < corners; ++i) {
-                        if (i && (op & 16)) ++k;
+                        if (i && (op & 16)) {
+                            if (shades & (1u << i)) put_le32(packet + k * 4, (le32(packet + k * 4) & 0xff000000u) | colours[i]);
+                            ++k;
+                        }
                         if (mask & (1u << i)) put_le32(packet + k * 4, xy[i]);
                         ++k;
                         if (op & 4) ++k;
                     }
+                    if (shades & 1u) put_le32(packet, (le32(packet) & 0xff000000u) | colours[0]);
                     if (at->trace) {
                         for (i = 0; i < n; ++i) w[i] = le32(packet + i * 4);
                         cause = polygon_cause(at, c->serial, op, mask, w);
@@ -558,7 +566,7 @@ int main(int argc, char **argv) {
     uint64_t polygons_3d = 0, polygons_moving = 0, corners_3d = 0, corners_moving = 0;
     uint64_t held_service = 0, held_projection = 0, held_neighbour = 0, held_reset = 0, held_jump = 0;
     uint64_t sized = 0, resized = 0, resized_renders = 0, corners_turning = 0, runs_turning = 0, runs_attached = 0;
-    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0;
+    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0, polygons_recoloured = 0;
     char resized_list[1024] = "";
     char wrong_list[1024] = "", stray_list[1024] = "", reset_list[2048] = "", jump_list[1024] = "";
     /* --causes: what drew each pixel of the last two renders, on the canvas. */
@@ -592,6 +600,7 @@ int main(int argc, char **argv) {
     if (!path || !blend || !frame_record_open(&in, path)) { fprintf(stderr, "Cannot read recording: %s\n", path ? path : ""); return 2; }
     memset(&frame, 0, sizeof(frame)); memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b)); memset(&j, 0, sizeof(j));
     truth.gpu = gpu_create(); scratch.gpu = gpu_create(); truth.serial = scratch.serial = 0;
+    truth.blend = blend; scratch.blend = NULL;
     now = calloc((size_t)cw * ch, 3); before = calloc((size_t)cw * ch, 3); drawn = calloc((size_t)cw * ch, 3);
     start = calloc((size_t)cw * ch, 3); last = calloc((size_t)cw * ch, 3);
     jumps = calloc((size_t)cw * ch, sizeof(*jumps)); smooth = calloc((size_t)cw * ch, sizeof(*smooth));
@@ -678,7 +687,7 @@ int main(int argc, char **argv) {
                 held_service += info->held_service; held_projection += info->held_projection;
                 held_neighbour += info->held_neighbour; held_reset += info->held_reset; held_jump += info->held_jump;
                 corners_turning += info->corners_turning; runs_turning += info->runs_turning; runs_attached += info->runs_attached;
-                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved;
+                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved; polygons_recoloured += info->polygons_recoloured;
             }
             continue; /* not journalled: it changes no GPU */
         } else if (in.tag == FRAME_RECORD_VBLK) {
@@ -885,10 +894,10 @@ int main(int argc, char **argv) {
            from, until == UINT64_MAX ? vblank : until, frames, renders, holds, skips);
     printf("Blended: corners3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%) polygons3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%)"
            " held-service=%" PRIu64 " held-projection=%" PRIu64 " held-neighbour=%" PRIu64 " held-reset=%" PRIu64
-           " held-jump=%" PRIu64 " resolved=%" PRIu64 "\n",
+           " held-jump=%" PRIu64 " resolved=%" PRIu64 " recoloured=%" PRIu64 "\n",
            corners_3d, corners_moving, corners_3d ? 100.0 * corners_moving / corners_3d : 0.0, polygons_3d, polygons_moving,
            polygons_3d ? 100.0 * polygons_moving / polygons_3d : 0.0, held_service, held_projection, held_neighbour, held_reset,
-           held_jump, corners_resolved);
+           held_jump, corners_resolved, polygons_recoloured);
     printf("Turning: corners=%" PRIu64 " (%.2f%% of moving) runs=%" PRIu64 " hanging=%" PRIu64 " flat-or-mirrored=%" PRIu64
            " too-far=%" PRIu64 "\n", corners_turning, corners_moving ? 100.0 * corners_turning / corners_moving : 0.0, runs_turning,
            runs_attached, runs_flat, runs_far);

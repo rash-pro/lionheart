@@ -81,6 +81,9 @@ typedef struct {
     /* Corners the service held as ambiguous that the same polygon a game
      * frame earlier resolved. */
     uint32_t corners_resolved;
+    /* Polygons whose colours change from the same polygon a game frame
+     * earlier (blended where frame_blend_colours allows). */
+    uint32_t polygons_recoloured;
 } frame_blend_info_t;
 
 typedef struct frame_blend frame_blend_t;
@@ -115,6 +118,20 @@ typedef struct {
  * check, if given, adds up what it finds drawn wrong. */
 unsigned frame_blend_polygon(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den,
                              uint32_t xy[4], frame_blend_check_t *check);
+
+/* Each polygon packet the GPU executes, by the serial frame identity counts
+ * (docs/frame-identity.md), before the identity frame that holds it: what
+ * blending knows of a polygon's look. */
+void frame_blend_packet(frame_blend_t *, uint64_t serial, const uint32_t *packet);
+
+/* The corner colours of a polygon of the latest frame at alpha = num / den,
+ * between those of the same polygon a game frame earlier and its own: a
+ * polygon whose every corner is linked, drawn by the same command, with the
+ * same semi-transparency where it is textured. Writes 24-bit colours to
+ * colours (one per corner; a flat polygon's are all its one colour) and
+ * returns a mask of those that differ from the latest frame's; 0 when its
+ * colours stay as recorded. */
+unsigned frame_blend_colours(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, uint32_t colours[4]);
 
 /* Move every corner on a straight line in view space, as before runs turned
  * (for comparison); takes effect from the next frame added. */
