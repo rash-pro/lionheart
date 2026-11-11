@@ -2,7 +2,7 @@
 // two quads that share an edge, each its own transform run, moving and turning;
 // a triangle with a corner the GTE never projected, over an edge or touching one
 // corner; a cut, a scene change and a gap; a world moved by the camera on the
-// CPU. The harness records what it draws (runtime/frame_record.h), and the
+// CPU, sliding off the screen. The harness records what it draws (runtime/frame_record.h), and the
 // offline renderer (tools/devtools/inbetween.c) draws it again.
 #include "lh_test.h"
 
@@ -103,6 +103,23 @@ LH_TEST(test_a_world_block_coming_into_view_moves_with_the_world) {
     LH_CONTAINS(drawn, "Alpha 1: game-frames=4 differ=0 pixels=0");
     LH_CONTAINS(drawn, " jumped=0 ");
     LH_CONTAINS(drawn, "Stray: corners=0");
+}
+
+LH_TEST(test_world_terrain_that_leaves_the_screen_is_drawn_where_the_step_puts_it) {
+    // The world slides left by a step and the CPU projects only what it draws:
+    // a quad that left the screen has no projection a game frame later. It
+    // is drawn beneath the rest between the two frames, its points where the
+    // step puts them, so the screen's edge never shows the background.
+    auto out = scenario(t, "world-pan");
+    LH_CONTAINS(out, "L4 leftovers=1\n");
+    LH_CONTAINS(out, "L7 leftovers=1\n");
+    auto record = t.temp() / "world-pan.rec";
+    scenario(t, "world-pan", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, "Alpha 1: game-frames=6 differ=0 pixels=0");
+    LH_CONTAINS(drawn, "Alpha 0: game-frames-equal-to-previous=6");
+    LH_CONTAINS(drawn, " culled-at-edge=2 ");
+    LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
 }
 
 LH_TEST(test_shared_vertices_stay_shared) {

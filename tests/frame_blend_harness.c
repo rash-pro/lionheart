@@ -15,7 +15,9 @@
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
  * on screen: cross; colours that change: fade; a strip panning off the screen,
  * its polygons culled once wholly off it: pan; a shadow-like fan whose centre
- * is projected anew each game frame, sliding or torn apart: shadow, torn. With "straight" after the name, every corner moves on a
+ * is projected anew each game frame, sliding or torn apart: shadow, torn. A world moved by
+ * the camera on the CPU, a block coming into view each frame: world; the same
+ * world sliding off the screen, projected only where drawn: world-pan. With "straight" after the name, every corner moves on a
  * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
@@ -526,6 +528,49 @@ static void scenario_world(void) {
     free(then);
 }
 
+/* The same world sliding left by a step, the CPU projecting only the columns
+ * of the quads it draws, those at least partly on the screen: a quad that
+ * leaves it is not projected again, and between the frame that still drew it
+ * and the next it is drawn beneath the rest where the step puts its points. */
+static void scenario_world_pan(void) {
+    cpu_t *then = calloc(1, sizeof(*then));
+    int f;
+    tag = 2 | FRAME_IDENTITY_POINTS;
+    for (f = 0; f < 8 && then; ++f) {
+        uint32_t top[16], bottom[16];
+        int shown_quad[15], first = -1, last = -1, place[3];
+        unsigned i, k;
+        cleared();
+        pose(0, 1, 1, 1, 0, 0, 0);
+        memcpy(then->gte_ctrl, c->gte_ctrl, sizeof(then->gte_ctrl));
+        for (i = 0; i < 15; ++i) {
+            int left = 1 << 20, right = -(1 << 20);
+            for (k = 0; k < 4; ++k) {
+                int x;
+                world_place(i + (k & 1), k < 2, -60 * f, place);
+                then->gte_data[0] = (uint32_t)(uint16_t)place[0] | (uint32_t)(uint16_t)place[1] << 16;
+                then->gte_data[1] = (uint32_t)(uint16_t)place[2];
+                gte_rtps(then, 12, 0);
+                x = (int16_t)(then->gte_data[14] & 0xffffu);
+                left = x < left ? x : left; right = x > right ? x : right;
+            }
+            shown_quad[i] = right >= 0 && left < 320;
+            if (shown_quad[i]) { if (first < 0) first = (int)i; last = (int)i + 1; }
+        }
+        for (i = (unsigned)first; i <= (unsigned)last; ++i) { world_place(i, 1, -60 * f, place); top[i] = rtps(place[0], place[1], place[2]); }
+        for (i = (unsigned)first; i <= (unsigned)last; ++i) { world_place(i, 0, -60 * f, place); bottom[i] = rtps(place[0], place[1], place[2]); }
+        for (i = 0; i < 15; ++i) {
+            uint32_t q[4];
+            if (!shown_quad[i]) continue;
+            q[0] = top[i]; q[1] = top[i + 1]; q[2] = bottom[i]; q[3] = bottom[i + 1];
+            quad(i & 1 ? 0x0000c0u : 0x00c000u, q);
+        }
+        shown();
+    }
+    tag = 1;
+    free(then);
+}
+
 int main(int argc, char **argv) {
     const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 && strcmp(argv[2], "straight") ? argv[2] : NULL;
     frame_identity_config_t config;
@@ -561,6 +606,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "shadow")) scenario_shadow(0);
     else if (!strcmp(name, "torn")) scenario_shadow(1);
     else if (!strcmp(name, "world")) scenario_world();
+    else if (!strcmp(name, "world-pan")) scenario_world_pan();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

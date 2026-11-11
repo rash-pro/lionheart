@@ -113,8 +113,11 @@ struct frame_blend {
      * and what the latest frame no longer draws. */
     uint8_t *continued;
     int32_t *forward[2];
+    /* Per run of the frames before whose points the CPU moves by a step: the
+     * setup the frame a game frame later projected them under, or -1. */
+    int32_t *ahead[2];
     leftover_t *leftovers;
-    size_t continued_capacity, forward_capacity[2], leftover_count, leftover_capacity;
+    size_t continued_capacity, forward_capacity[2], ahead_capacity[2], leftover_count, leftover_capacity;
     int32_t screen[2];           /* the picture's size in packet coordinates */
 };
 
@@ -145,7 +148,7 @@ void frame_blend_destroy(frame_blend_t *b) {
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
     free(b->looks); free(b->before); free(b->hidden); free(b->fan); free(b->continued); free(b->forward[0]); free(b->forward[1]);
-    free(b->leftovers);
+    free(b->ahead[0]); free(b->ahead[1]); free(b->leftovers);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
@@ -191,6 +194,20 @@ static int64_t asr(int64_t n, unsigned bits) {
     return n >= 0 ? (int64_t)((uint64_t)n >> bits) : -1 - (int64_t)((uint64_t)(-1 - n) >> bits);
 }
 static int64_t saturate(int64_t n, int64_t low, int64_t high) { return n < low ? low : n > high ? high : n; }
+
+/* Where the GTE puts a point under a setup in view space, (TR * 4096 + RT * V)
+ * >> sf, for its input moved by a step (sign 1) or back by it (sign -1). */
+static void stepped_view(const frame_identity_setup_t *s, const int16_t *input, const int32_t *step, int sign, int32_t view[3]) {
+    unsigned i, k;
+    for (i = 0; i < 3; ++i) {
+        int64_t n = (int64_t)s->translation[i] * 4096;
+        for (k = 0; k < 3; ++k) {
+            uint32_t w = s->rotation[(i * 3 + k) / 2];
+            n += (int64_t)((i * 3 + k) & 1 ? high(w) : low(w)) * ((int64_t)input[k] + sign * (int64_t)step[k]);
+        }
+        view[i] = (int32_t)(uint32_t)(uint64_t)asr(n, s->shift);
+    }
+}
 
 uint32_t frame_blend_project(const int32_t view[3], int32_t ofx, int32_t ofy, uint32_t h, uint32_t shift, uint32_t lm) {
     /* RTPS: IR1-2 saturate MAC1-2; SZ3 is MAC3 at a fixed 12-bit shift. */
@@ -838,16 +855,9 @@ static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsign
         /* A point the frame before has no record of stood at its input less
          * the step, under the setup the run's paired points stood under: what
          * the GTE would have given for it then. */
-        int32_t r[9];
-        unsigned i, k;
         if (!at->stepped || at->placed[p->run] < 0 || (size_t)at->placed[p->run] >= before->setup_count) return ENDS_PROJECTION;
         so = &before->setups[at->placed[p->run]];
-        for (i = 0; i < 9; ++i) r[i] = i & 1 ? high(so->rotation[i / 2]) : low(so->rotation[i / 2]);
-        for (i = 0; i < 3; ++i) {
-            int64_t n = (int64_t)so->translation[i] * 4096;
-            for (k = 0; k < 3; ++k) n += (int64_t)r[i * 3 + k] * ((int64_t)p->input[k] - at->step[k]);
-            oview[i] = (int32_t)(uint32_t)(uint64_t)asr(n, so->shift);
-        }
+        stepped_view(so, p->input, at->step, -1, oview);
         osxy = frame_blend_project(oview, so->ofx, so->ofy, so->h, so->shift, so->lm);
     } else {
         const frame_identity_projection_t *o;
@@ -1047,6 +1057,33 @@ static int drawn(const frame_identity_polygon_t *q) {
     return 0;
 }
 
+/* A vertex from a projection of the frame from to where its point stands a
+ * game frame later, in at, which did not project it: on the world map the CPU
+ * projects only the terrain it draws, and the point stands at its input plus
+ * the step, under the setup at projected the rest of its run under (ahead, by
+ * run of from). */
+static int stepped_ahead(const kept_t *at, const kept_t *from, const int32_t *ahead, int32_t projection, vertex_t *v) {
+    const frame_identity_projection_t *o;
+    const frame_identity_setup_t *so, *sp;
+    int32_t view[3];
+    if (!at->stepped || at->reason != FRAME_BLEND_KEPT || projection < 0 || (size_t)projection >= from->projection_count) return 0;
+    o = &from->projections[projection];
+    if (o->run >= from->run_count || ahead[o->run] < 0 || (size_t)ahead[o->run] >= at->setup_count) return 0;
+    so = &from->setups[from->runs[o->run].setup]; sp = &at->setups[ahead[o->run]];
+    if (sp->shift != so->shift || sp->lm != so->lm ||
+        frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return 0;
+    stepped_view(sp, o->input, at->step, 1, view);
+    if (near_plane(view, sp) || near_plane(o->view, so)) return 0;
+    memset(v, 0, sizeof(*v));
+    memcpy(v->view[0], o->view, sizeof(view)); memcpy(v->view[1], view, sizeof(view));
+    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = o->sxy;
+    v->ofx[1] = sp->ofx; v->ofy[1] = sp->ofy; v->h[1] = sp->h;
+    v->sxy[1] = frame_blend_project(view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm);
+    v->shift = sp->shift; v->lm = sp->lm;
+    v->run = -1;
+    return 1;
+}
+
 /* Polygons of the frame before that the latest frame no longer draws because
  * they left the screen: on a fast camera move, what the older picture had at
  * the edge, which the newer one culls. Between the two they are drawn first,
@@ -1055,7 +1092,11 @@ static int drawn(const frame_identity_polygon_t *q) {
  * before it culls its polygons. Only polygons whose every corner is, a game
  * frame later, beyond one edge of the screen: anything still on it that the
  * game no longer draws went for another reason (hidden, or a polygon held,
- * which a ghost of would show). */
+ * which a ghost of would show). The world map's terrain is the exception: the
+ * CPU no longer projects what it stops drawing at the screen's edge, so its
+ * points stand where the step puts them, and a polygon of it with a corner off
+ * the screen a game frame later is drawn beneath too: there is nothing beneath
+ * the terrain but the clear colour. */
 static int leftovers(frame_blend_t *b, kept_t *cur) {
     kept_t *prev = kept_at(b, 1);
     size_t i, k;
@@ -1068,41 +1109,60 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
         int32_t r = predecessor(b, &cur->polygons[i]);
         if (r >= 0) b->continued[r] = 1;
     }
-    /* Where each projection of the two frames before stands a game frame later. */
+    /* Where each projection of the two frames before stands a game frame
+     * later, and for runs of points moved by a step, the setup they stand
+     * under then. */
     for (a = 0; a < 2; ++a) {
         const kept_t *at = kept_at(b, a), *from = kept_at(b, a + 1);
-        if (!grow((void **)&b->forward[a], &b->forward_capacity[a], from->projection_count + 1, sizeof(*b->forward[a]))) return 0;
+        if (!grow((void **)&b->forward[a], &b->forward_capacity[a], from->projection_count + 1, sizeof(*b->forward[a])) ||
+            !grow((void **)&b->ahead[a], &b->ahead_capacity[a], from->run_count + 1, sizeof(*b->ahead[a]))) return 0;
         for (k = 0; k < from->projection_count; ++k) b->forward[a][k] = -1;
+        for (k = 0; k < from->run_count; ++k) b->ahead[a][k] = -1;
         if (!at->valid || !from->valid || at->number != from->number + 1) continue;
         for (k = 0; k < at->projection_count; ++k) {
-            int32_t p = at->projections[k].previous;
-            if (p >= 0 && (size_t)p < from->projection_count) b->forward[a][p] = (int32_t)k;
+            const frame_identity_projection_t *p = &at->projections[k];
+            int32_t o = p->previous;
+            if (o < 0 || (size_t)o >= from->projection_count) continue;
+            b->forward[a][o] = (int32_t)k;
+            if (at->stepped && from->projections[o].run < from->run_count && p->run < at->run_count &&
+                b->ahead[a][from->projections[o].run] < 0 && zero_translation(at, p->run) &&
+                zero_translation(from, from->projections[o].run))
+                b->ahead[a][from->projections[o].run] = (int32_t)at->runs[p->run].setup;
         }
     }
     for (i = 0; i < prev->polygon_count; ++i) {
         frame_identity_polygon_t q = prev->polygons[i];
         int32_t x0 = INT32_MAX, x1 = INT32_MIN, y0 = INT32_MAX, y1 = INT32_MIN;
+        vertex_t ahead[4];
+        unsigned stepped = 0;
         leftover_t *l;
         if (b->continued[i] || !prev->coloured[i] || !drawn(&q)) continue;
         for (c = 0; c < q.corners; ++c) {
             int32_t p;
             const kept_t *at;
             if (q.state[c] != FRAME_IDENTITY_LINKED || q.age[c] > 1 || q.projection[c] < 0) break;
-            if ((p = b->forward[q.age[c]][q.projection[c]]) < 0) break;
             at = kept_at(b, q.age[c]);
-            /* The corner as the latest frame would link it. */
-            q.projection[c] = p; q.xy[c] = at->projections[p].sxy;
+            if ((p = b->forward[q.age[c]][q.projection[c]]) >= 0) {
+                /* The corner as the latest frame would link it. */
+                q.projection[c] = p; q.xy[c] = at->projections[p].sxy;
+            } else if (stepped_ahead(at, kept_at(b, q.age[c] + 1u), b->ahead[q.age[c]], q.projection[c], &ahead[c])) {
+                q.xy[c] = ahead[c].sxy[1];
+                stepped |= 1u << c;
+            } else break;
             x0 = low(q.xy[c]) < x0 ? low(q.xy[c]) : x0; x1 = low(q.xy[c]) > x1 ? low(q.xy[c]) : x1;
             y0 = high(q.xy[c]) < y0 ? high(q.xy[c]) : y0; y1 = high(q.xy[c]) > y1 ? high(q.xy[c]) : y1;
         }
-        if (c < q.corners || !(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1])) continue;
+        if (c < q.corners) continue;
+        if (!(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1]) &&
+            !(stepped && (x0 < 0 || y0 < 0 || x1 >= b->screen[0] || y1 >= b->screen[1]))) continue;
         if (!grow((void **)&b->leftovers, &b->leftover_capacity, b->leftover_count + 1, sizeof(*b->leftovers)) ||
             !grow((void **)&b->vertices, &b->vertex_capacity, b->vertex_count + q.corners, sizeof(*b->vertices))) return 0;
         l = &b->leftovers[b->leftover_count];
         for (c = 0; c < q.corners; ++c) {
             vertex_t *v = &b->vertices[b->vertex_count + c];
             memset(v, 0, sizeof(*v));
-            if (ends(b, &q, c, v) != ENDS_OK) break;
+            if (stepped & (1u << c)) *v = ahead[c];
+            else if (ends(b, &q, c, v) != ENDS_OK) break;
             l->vertex[c] = (int32_t)(b->vertex_count + c);
         }
         if (c < q.corners) continue;
