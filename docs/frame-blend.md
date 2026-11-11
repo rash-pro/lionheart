@@ -57,21 +57,25 @@ previous one, an overflow, a restored state), in excluded scenes (the world map)
 `tools/devtools/inbetween.c` (built with the developer tools, `build/devtools/inbetween`):
 
 ```sh
-inbetween play.rec [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames]
+inbetween play.rec [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames] [--causes] [--packets V]
 ```
 
 It replays the recording through `runtime/gpu.c` and checks, at every VBlank, that the replay shows what the
 game showed (the recorded digest), and for every game frame that drawing it again with every blended polygon at
-alpha 1 gives the game's picture pixel for pixel. To draw a game frame at some alpha it restores the GPU state of
-the display-start change before the frame's own, replays everything since, with the polygons of the frame where
-blending puts them, up to the VBlank shown. Everything else is replayed as it was, so the HUD and other 2D drawn
-after the change are those of the VBlank shown.
+alpha 1 gives the game's picture pixel for pixel; with `--from`, that check starts a few VBlanks before the window
+(drawing every game frame again is what takes the time) and the replay ends at `--until`. To draw a game frame at
+some alpha it restores the GPU state of the display-start change before the frame's own, replays everything since,
+with the polygons of the frame where blending puts them, up to the VBlank shown. Everything else is replayed as it
+was, so the HUD and other 2D drawn after the change are those of the VBlank shown.
 
-The timeline is that of a presenter one game frame late, as a live one could run it: the game frame whose display
-start changed at VBlank `v` (shown from `v + 1`) is drawn at VBlank `v + j` with alpha `min(j, n) / n`, where `n` is
-the number of VBlanks between that change and the one before. When the next frame comes later than `n` the picture
-stays at alpha 1 (a hold); when it comes earlier, the rest of the way is skipped (a skip). A frame with nothing to
-blend from is shown as the game shows it.
+The timeline is the guest's own: one picture per VBlank (59.94 Hz with NTSC timing), each the newest game frame
+blended one game frame late, as a live presenter could run it without seeing the future: the game frame
+whose display start changed at VBlank `v` (shown from `v + 1`) is drawn at VBlank `v + j` with alpha
+`min(j, n) / n`, where `n` is the number of VBlanks between that change and the one before. When the next frame
+comes later than `n` the picture stays at alpha 1 (a hold); when it comes earlier, the rest of the way is skipped
+(a skip). A frame with nothing to blend from is shown as the game shows it. Game frames come every 2 to 6
+VBlanks (fields about every 2, battle about every 4); each interval is the one measured before it, so a steady rate
+gives evenly spaced steps and a change of rate costs one hold or skip.
 
 Measures, over `--from` to `--until`:
 
@@ -85,11 +89,25 @@ Measures, over `--from` to `--until`:
   screen, the measure frame identity's summary uses, held or blended.
 - `Stray`: blended corners more than two pixels off the line between their two ends where the GTE saturates
   nothing, which a straight move in view space never does: something drawn wrong.
+- With `--causes`, `Causes`: what drew each pixel that changes only at game frames, as shares of those pixels:
+  3D polygons that move but whose colour, texture coordinates, order or what lies under them changed (or whose
+  texture or palette was rewritten in the frame); 3D polygons held, by the first reason that applies (a frame
+  without history, a corner no projection made, a projection without pair, an ambiguous or split corner, the
+  blending rules above); polygons with no corner at a projection; sprites, lines, fills and transfers; what is
+  drawn after the display-start change; and frames not blended at all. Where alpha 0 draws a moving polygon or
+  the background, the pixel is blamed on what the picture before had there (something held that left).
+- With `--causes`, `Holes`: pixels of the blended pictures left to the clear colour, or not drawn, where both game
+  frames had 3D: geometry the newer frame no longer draws (gone past the screen edge in a fast camera move) or a
+  crack between a held polygon and a moving one. Renders with 16 or more are listed.
 
 `--out` writes `off.rgb` and `on.rgb`, raw 24-bit frames of the canvas (320x240 by default), one per VBlank, and
 `heat.ppm`: the last picture of the window in dim grey; where pixels changed, the more often the stronger, red for
-the share of their changes that jumped at game frames and green for the share that moved between them. `--sheet V` writes the pictures of the first blended game frame from VBlank `V` on.
+the share of their changes that jumped at game frames and green for the share that moved between them. `--sheet V`
+writes the pictures of the first blended game frame from VBlank `V` on. With `--causes`, `causes.ppm` colours each
+pixel that jumped by what most often caused it. `--packets V` (which implies `--causes`) prints, for the first
+blended game frame from VBlank `V` on, the packets that alpha 0 draws where the picture jumps, with their identity
+states, and writes `probe-before.ppm`, `probe-start.ppm`, `probe-game.ppm` and `probe-causes.ppm`.
 
-`tests/native/cases/test_frame_blend.cpp` checks blending and the replay on a synthetic scene, and, with the
-owner's discs, that recording changes no route's final state and that every game frame of the recorded windows is
-drawn again exactly.
+`tests/native/cases/test_frame_blend.cpp` checks blending, the replay and the measures on a synthetic scene,
+and, with your own discs, that recording changes no route's final state and that every game frame of the recorded
+windows is drawn again exactly, with no stray corner.
