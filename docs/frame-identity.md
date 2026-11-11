@@ -60,7 +60,7 @@ Polygon serials count every polygon packet the GPU executes, in its order, from 
 replayed from the same point lines up with them by counting its own polygon packets. To
 interpolate a linked corner, take its projection's view-space position in its frame and that of the projection's
 `previous` in the frame before. Corners in polygons with any held corner, and vertices shared with such polygons,
-should stay at the current frame; that rule belongs to the presenter.
+should stay at the current frame; that rule belongs to the presenter (`docs/frame-blend.md`).
 
 ## Developer switch
 
@@ -73,7 +73,7 @@ The summary prints, for all frames and per scene (FF8's mode word: field, world,
 resets, exclusions, projections paired, polygon corners, corners of 3D polygons (polygons with at least one
 corner at a projection), linked corners, corners in polygons whose every corner is linked, and the held corners
 by reason, and `jumps`: frames whose paired vertices moved, at the median, 32 pixels or more on screen, which
-are camera cuts in practice (right as identity, wrong to blend; history is not reset for them yet). Then
+are camera cuts in practice (right as identity, wrong to blend: blending detects cuts itself, `docs/frame-blend.md`). Then
 `Frame identity digest`, an FNV-1a over the stream. Native and interpreted runs of one route must print the same
 digest.
 

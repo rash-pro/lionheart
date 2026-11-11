@@ -56,6 +56,11 @@ GTE wrappers from the public declarations, and removes temporary objects after
 linking. The two existing native probe identities now drive the relinker against
 a frozen synthetic host before checking sampler lifetime and exact counters.
 
+`build/devtools/inbetween RECORDING` draws a recording made with the player's
+`--frame-record` again through the software rasterizer, checks it against the
+game's pictures, and draws and measures the frames between game frames
+(docs/frame-blend.md).
+
 ## Trace and benchmark tools
 
 `frame-bench` runs alternating copied-card routes with checkpoint warmup and contiguous samples.
