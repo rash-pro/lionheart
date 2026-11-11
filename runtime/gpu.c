@@ -6,6 +6,10 @@
 #endif
 #include <stdlib.h>
 
+#ifdef FF8_FRAME_ORACLE
+const frame_oracle_gpu_t *frame_oracle_gpu;
+#endif
+
 struct gpu {
     gpu_raster_t raster;
     uint32_t packet[12], read_latch, draw_start, draw_end, draw_offset;
@@ -122,7 +126,7 @@ static void execute(gpu_t *g) {
             v[i] = vertex(g, xy, color, uv);
         }
         p.dither = !!(op & 16) || (p.textured && !p.raw);
-        FRAME_ORACLE(frame_oracle_polygon(op));
+        FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->polygon(op));
         if (g->observer) g->observer->polygon(g->observer_context, op, w);
 #if defined(FF8_PGXP)
         pgxp_polygon(g, v, n, g->offset_x, g->offset_y);
@@ -207,7 +211,7 @@ void gpu_gp0(gpu_t *g, uint32_t word) {
         return;
     }
     if (!g->count) { g->opcode = word >> 24; g->needed = packet_size(g->opcode); }
-    FRAME_ORACLE(frame_oracle_packet_word(g->count, NULL));
+    FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->packet_word(g->count, NULL));
     g->packet[g->count++] = word;
     if (g->count == g->needed) { execute(g); g->count = 0; }
 }
@@ -241,7 +245,7 @@ void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
         n = g->needed - g->count;
         if (n > words) n = words;
         for (i = 0; i < n; ++i) {
-            FRAME_ORACLE(frame_oracle_packet_word(g->count, data + i * 4));
+            FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->packet_word(g->count, data + i * 4));
             g->packet[g->count++] = le_word(data + i * 4);
         }
         data += n * 4; words -= n;

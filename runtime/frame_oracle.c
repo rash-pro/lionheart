@@ -578,6 +578,8 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
     o.input_base = o.serial; o.polygon_base = o.polygons;
 }
 
+static const frame_oracle_gpu_t gpu_hooks = {frame_oracle_packet_word, frame_oracle_polygon};
+
 int frame_oracle_start(cpu_t *c, const char *report) {
     if (!c->interpreter_only) {
         fprintf(stderr, "--frame-oracle needs --interpreter: it follows values through interpreted instructions only\n");
@@ -595,6 +597,7 @@ int frame_oracle_start(cpu_t *c, const char *report) {
           " corners linked link-correct link-equivalent link-wrong link-undecided held-known\n", o.out);
     o.cpu = c;
     o.active = 1;
+    frame_oracle_gpu = &gpu_hooks;
     return 1;
 }
 
@@ -623,6 +626,7 @@ int frame_oracle_stop(void) {
     int ok = 1;
     unsigned i;
     if (!o.active) return 1;
+    frame_oracle_gpu = NULL;
     if (o.out) {
         totals("all", &o.total);
         for (i = 0; i < SCENES; ++i) if (o.scene[i].frames) totals(scene_names[i], &o.scene[i]);

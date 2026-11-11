@@ -37,6 +37,13 @@ void frame_oracle_step(cpu_t *c, uint32_t word, uint32_t a, uint32_t b, uint32_t
 void frame_oracle_packet_word(unsigned slot, const uint8_t *source);
 void frame_oracle_dma_word(uint32_t address);
 void frame_oracle_polygon(unsigned opcode);
+/* The GPU reaches the last two through this, set while the oracle runs: the GPU
+ * library is also linked into tools and hosts without the runtime. */
+typedef struct {
+    void (*packet_word)(unsigned slot, const uint8_t *source);
+    void (*polygon)(unsigned opcode);
+} frame_oracle_gpu_t;
+extern const frame_oracle_gpu_t *frame_oracle_gpu;
 #define FRAME_ORACLE(...) __VA_ARGS__
 #else
 #define FRAME_ORACLE(...) ((void)0)
