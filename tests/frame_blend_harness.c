@@ -155,6 +155,23 @@ static void sink(void *context, const frame_identity_frame_t *f) {
             }
             printf(" fractions=%s\n", fine ? "fine" : "off");
         }
+        {
+            /* A corner that stands at the same place at both ends stands
+             * there between them, whole and to a fraction of a pixel. */
+            unsigned drift = 0, q;
+            for (i = 0; i < n; ++i)
+                for (q = 1; q < 4; ++q) {
+                    uint32_t xy[4];
+                    float at[4][2];
+                    unsigned m = frame_blend_polygon(blend, f->first_polygon + i, q, 4, xy, NULL);
+                    frame_blend_fractions(blend, f->first_polygon + i, q, 4, at);
+                    for (k = 0; k < f->polygons[i].corners; ++k)
+                        if ((m >> k & 1) && zero[i][k] == one[i][k] &&
+                            (xy[k] != one[i][k] || at[k][0] != (int16_t)(one[i][k] & 0xffffu) || at[k][1] != (int16_t)(one[i][k] >> 16)))
+                            ++drift;
+                }
+            printf("D%llu drift=%u\n", (unsigned long long)f->number, drift);
+        }
         for (i = 0; i < n; ++i) for (k = 0; k < 4; ++k) polygon_words[i][k] = f->polygons[i].xy[k];
     }
 }
@@ -363,14 +380,15 @@ static void scenario_turn(double step, double sx, double sy, int mirror_first) {
 
 /* Two rods, A from its origin along x and a thinner B hanging from A's far
  * end, each its own run: A turns 40 degrees a game frame, B 30 more against
- * A. B's first corners are A's last ones, projected in both runs. */
-static void scenario_chain(void) {
+ * A. B's first corners are A's last ones, projected in both runs. Still,
+ * both stand turned (A 37 degrees, B 23 more) and nothing moves. */
+static void scenario_chain(int still) {
     int f;
     for (f = 0; f < 6; ++f) {
         static const int rod[4][2] = {{0, -40}, {200, -40}, {0, 40}, {200, 40}}, tip[4][2] = {{0, -40}, {150, -30}, {0, 40}, {150, 30}};
         uint32_t a[4], bq[4];
-        double turn = 40.0 * f, bend = 30.0 * f;
-        int tx = -150 + 5 * f, tz = 700, bx, by;
+        double turn = still ? 37 : 40.0 * f, bend = still ? 23 : 30.0 * f;
+        int tx = still ? -150 : -150 + 5 * f, tz = 700, bx, by;
         unsigned i;
         cleared();
         pose(turn, 1, 1, 1, tx, 0, tz);
@@ -505,7 +523,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "mirror")) scenario_turn(60, 1, 1, 1);
     else if (!strcmp(name, "mirrored")) scenario_turn(60, -1, 1, 0);
     else if (!strcmp(name, "stretched")) scenario_turn(60, 2, 0.5, 0);
-    else if (!strcmp(name, "chain")) scenario_chain();
+    else if (!strcmp(name, "chain")) scenario_chain(0);
+    else if (!strcmp(name, "still")) scenario_chain(1);
     else if (!strcmp(name, "cross")) scenario_cross();
     else if (!strcmp(name, "fade")) scenario_fade();
     else if (!strcmp(name, "pan")) scenario_pan();

@@ -261,6 +261,18 @@ LH_TEST(test_a_joint_between_two_parts_stays_welded) {
     for (int f = 2; f <= 5; ++f) LH_CHECK_MSG(lines.find("S" + std::to_string(f) + " resized=0 ") == std::string::npos, lines);
 }
 
+LH_TEST(test_a_part_standing_still_stays_still) {
+    // The same rods standing turned: each corner stands where the game put
+    // it at every fraction, whole and to a fraction of a pixel, and does not
+    // step a view unit aside between game frames.
+    auto out = scenario(t, "still");
+    for (int f = 2; f <= 5; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=8/8 polygons=2/2");
+        LH_CONTAINS(out, "T" + std::to_string(f) + " turning=8 runs=2/1/0/0");
+        LH_CONTAINS(out, "D" + std::to_string(f) + " drift=0\n");
+    }
+}
+
 LH_TEST(test_a_turn_near_half_a_turn_moves_on_straight_lines) {
     // 175 degrees in one game frame: either way round is about as likely,
     // so nothing turns; the corners keep to straight lines between the ends.

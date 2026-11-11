@@ -52,7 +52,9 @@ at a fraction alpha between that frame and the one before:
   squashed onto the floor), one mirrored at one end only, a turn of more than 150 degrees in one game frame,
   where the other way round is nearly as short and which way the part went is a guess (a straight line keeps
   it between its two ends, a wrong guess would draw it where it never was), different vertices at the two
-  ends, and a vertex whose arc would reach the camera plane. Alpha 0 and 1 stay the game's own positions.
+  ends, and a vertex whose arc would reach the camera plane. Alpha 0 and 1 stay the game's own positions. A
+  position on the way is rounded down to a whole view unit, as the GTE rounds MAC, so a part that stands still
+  stands still between frames too.
 - A polygon whose every corner is linked takes its corner colours from between those of the same polygon a game
   frame earlier (found as for ambiguous corners) and its own, when both are drawn by the same command and, where
   textured, with the same semi-transparency: lighting that changes as a model turns, flashes and fades. Raw

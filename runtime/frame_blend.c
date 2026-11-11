@@ -559,8 +559,6 @@ static int motion_plan(frame_blend_t *b, kept_t *cur, const kept_t *prev) {
     return 1;
 }
 
-static int64_t nearest(double x) { return x >= 0 ? (int64_t)(x + 0.5) : -(int64_t)(-x + 0.5); }
-
 /* A run's matrix and translation at alpha = num / den. */
 static void motion_at(motion_t *motions, uint32_t run, uint32_t num, uint32_t den, double m[3][3], double t[3], unsigned depth) {
     motion_t *mo = &motions[run];
@@ -602,14 +600,20 @@ static void motion_at(motion_t *motions, uint32_t run, uint32_t num, uint32_t de
     memcpy(mo->at_m[k], m, sizeof(mo->at_m[k])); memcpy(mo->at_t[k], t, sizeof(mo->at_t[k]));
 }
 
-/* Where a vertex of a turning run stands at alpha, in view space. */
+/* Where a vertex of a turning run stands at alpha, in view space. The GTE
+ * shifts MAC right, rounding down, so a part that stands still stands where
+ * the game put it at every fraction, and not a unit beside it every other
+ * picture; the margin takes up what rebuilding its matrix in doubles costs,
+ * far less than the 1/4096 of a unit MAC holds. */
 static void turned(motion_t *motions, const vertex_t *v, uint32_t num, uint32_t den, int32_t view[3]) {
     double m[3][3], t[3], in[3] = {v->input[0], v->input[1], v->input[2]}, out[3];
     unsigned x;
     motion_at(motions, (uint32_t)v->run, num, den, m, t, 0);
     matrix_apply(m, in, out);
     for (x = 0; x < 3; ++x) {
-        int64_t n = nearest(out[x] + t[x]);
+        double at = out[x] + t[x] + 1e-6;
+        int64_t n = (int64_t)at;
+        if ((double)n > at) --n;
         view[x] = (int32_t)(n > INT32_MAX ? INT32_MAX : n < INT32_MIN ? INT32_MIN : n);
     }
 }
