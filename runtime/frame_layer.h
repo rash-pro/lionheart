@@ -93,4 +93,10 @@ int frame_layer_moves(const frame_layer_t *, uint32_t segment);
 /* The main segment's move, as frame_layer_offset would place its origin:
  * the offset at alpha minus the newer one. 0 when it does not move. */
 void frame_layer_shift(const frame_layer_t *, uint32_t num, uint32_t den, int32_t *x, int32_t *y);
+/* For a renderer that draws finer than the PlayStation's pixels: what
+ * frame_layer_offset and frame_layer_sprite round to whole pixels, as a
+ * fraction to add to them (the offset's to everything drawn under it, the
+ * sprite's to it besides). Both are 0 at the ends of the interval. */
+int frame_layer_offset_fraction(const frame_layer_t *, uint32_t index, uint32_t num, uint32_t den, float *x, float *y);
+int frame_layer_sprite_fraction(const frame_layer_t *, uint32_t index, uint32_t num, uint32_t den, float *x, float *y);
 #endif

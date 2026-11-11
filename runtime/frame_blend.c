@@ -1283,6 +1283,70 @@ static uint32_t place(const frame_blend_t *b, const vertex_t *v, uint32_t num, u
                                (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm);
 }
 
+/* The GTE's projection before it drops the fraction: SX and SY as
+ * frame_blend_project gives them, plus the part of a pixel the division left. */
+static void project_exact(const int32_t view[3], int32_t ofx, int32_t ofy, uint32_t h, uint32_t shift, uint32_t lm, double out[2]) {
+    int64_t ir1 = saturate(view[0], lm ? 0 : -32768, 32767), ir2 = saturate(view[1], lm ? 0 : -32768, 32767);
+    int64_t depth = shift ? view[2] : asr(view[2], 12);
+    uint32_t q = gte_divide(h & 65535u, (uint32_t)saturate(depth, 0, 65535));
+    double sx = ((double)q * (double)ir1 + ofx) / 65536.0, sy = ((double)q * (double)ir2 + ofy) / 65536.0;
+    out[0] = sx < -1024 ? -1024 : sx > 1023 ? 1023 : sx;
+    out[1] = sy < -1024 ? -1024 : sy > 1023 ? 1023 : sy;
+}
+
+/* Where place() puts a vertex, to a fraction of a pixel. The game draws each
+ * end at the whole pixel the GTE's division rounds down to; the fraction it
+ * dropped at each end is taken off in proportion, so that alpha 0 and 1 are
+ * still exactly the game's pixels and the motion between them is even. */
+static void place_exact(const frame_blend_t *b, const vertex_t *v, uint32_t num, uint32_t den, double out[2]) {
+    double a = (double)num / den, e[2][2];
+    int32_t view[3];
+    unsigned k;
+    if (v->floating) {
+        double x = 0, y = 0;
+        for (k = 0; k < v->neighbour_count; ++k) {
+            const vertex_t *w = &b->vertices[v->neighbours[k]];
+            double at[2];
+            if (w->pinned) continue;
+            place_exact(b, w, num, den, at);
+            x += at[0] - low(w->sxy[1]); y += at[1] - high(w->sxy[1]);
+        }
+        out[0] = low(v->sxy[1]) + (v->neighbour_count ? x / v->neighbour_count : 0);
+        out[1] = high(v->sxy[1]) + (v->neighbour_count ? y / v->neighbour_count : 0);
+        return;
+    }
+    (void)place(b, v, num, den, view);
+    project_exact(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
+                  (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm, out);
+    for (k = 0; k < 2; ++k) {
+        project_exact(v->view[k], v->ofx[k], v->ofy[k], v->h[k], v->shift, v->lm, e[k]);
+        e[k][0] -= low(v->sxy[k]); e[k][1] -= high(v->sxy[k]);
+    }
+    out[0] -= e[0][0] + (e[1][0] - e[0][0]) * a;
+    out[1] -= e[0][1] + (e[1][1] - e[0][1]) * a;
+}
+
+unsigned frame_blend_fractions(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den, float xy[4][2]) {
+    uint64_t i = serial - b->info.first_polygon;
+    unsigned c, mask = 0;
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num > den || b->hidden[i]) return 0;
+    for (c = 0; c < 4 && b->corners[i][c] >= 0; ++c) {
+        const vertex_t *v = &b->vertices[b->corners[i][c]];
+        double at[2];
+        if (v->pinned) continue;
+        if (num && num < den) place_exact(b, v, num, den, at);
+        else {
+            /* The ends are the game's own pixels, exactly. */
+            int32_t view[3];
+            uint32_t whole = place(b, v, num, den, view);
+            at[0] = low(whole); at[1] = high(whole);
+        }
+        xy[c][0] = (float)at[0]; xy[c][1] = (float)at[1];
+        mask |= 1u << c;
+    }
+    return mask;
+}
+
 unsigned frame_blend_leftovers(const frame_blend_t *b) { return (unsigned)b->leftover_count; }
 
 unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]) {

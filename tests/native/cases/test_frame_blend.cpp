@@ -69,6 +69,10 @@ LH_TEST(test_alpha_zero_and_one_are_the_two_game_frames) {
         LH_CONTAINS(out, "E" + std::to_string(f) + " ends=exact");
     }
     LH_CHECK_MSG(out.find("ends=differ") == std::string::npos, out);
+    // To a fraction of a pixel too, for renderers that draw finer: the game's
+    // pixels at both ends, less than a pixel from the whole ones between.
+    LH_CONTAINS(out, "fractions=fine");
+    LH_CHECK_MSG(out.find("fractions=off") == std::string::npos, out);
     // Drawn again from the recording: alpha 1 is each game frame's picture
     // and, with everything blended, alpha 0 is the one before it.
     auto record = t.temp() / "move.rec";

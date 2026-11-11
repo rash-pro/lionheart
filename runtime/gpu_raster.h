@@ -18,6 +18,12 @@ typedef struct {
     int left, top, right, bottom;
     int display_x, display_y, display_w, display_h, display_enabled;
     int interlaced, field;
+    /* Presentation only, never saved (gpu_subpixel): what to add, in pixels, to
+     * the vertices of the primitive being drawn. shift applies to everything;
+     * corner to the triangle being drawn when cornered is set. */
+    float shift_x, shift_y;
+    float corner[3][2];
+    int cornered;
 } gpu_raster_t;
 
 void gpu_raster_triangle(gpu_raster_t *, gpu_vertex_t a, gpu_vertex_t b,

@@ -127,6 +127,12 @@ typedef struct {
 unsigned frame_blend_polygon(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den,
                              uint32_t xy[4], frame_blend_check_t *check);
 
+/* The corners frame_blend_polygon moves, to a fraction of a pixel, for a
+ * renderer that draws finer than the PlayStation's pixels: the same mask, and
+ * positions that differ from its whole pixels by less than one. Both ends of
+ * the interval are still the game's own pixels. */
+unsigned frame_blend_fractions(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, float xy[4][2]);
+
 /* Each polygon packet the GPU executes, by the serial frame identity counts
  * (docs/frame-identity.md), before the identity frame that holds it: what
  * blending knows of a polygon's look. */

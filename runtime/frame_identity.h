@@ -123,6 +123,11 @@ typedef struct {
      * before any); the result is stored as the frame's tag, and with
      * FRAME_IDENTITY_EXCLUDE set the frame is excluded. */
     uint32_t (*classify)(void *context, const cpu_t *c);
+    /* Optional: each whole GP0 command the observed GPU executes, in order,
+     * with the serial its polygon has or, for any other command, the serial
+     * the next polygon will have (what a presenter needs besides the frames:
+     * drawing offsets, sprites, every polygon's look). */
+    void (*command)(void *context, const uint32_t *packet, unsigned count, uint64_t polygon);
     void *context;
     /* Repeated keys pair only within this many pixels on screen; 0 means 8. */
     unsigned repeat_pixels;

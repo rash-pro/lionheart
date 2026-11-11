@@ -68,7 +68,7 @@ static void count_polygon(void *context, unsigned opcode, const uint32_t *packet
 }
 static void ignore_start(void *context, uint32_t start) { (void)context; (void)start; }
 static void ignore_vblank(void *context) { (void)context; }
-static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon};
+static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon, NULL};
 
 /* A GPU state with the serial of its next polygon. */
 typedef struct {

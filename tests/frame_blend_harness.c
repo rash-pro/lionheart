@@ -132,8 +132,29 @@ static void sink(void *context, const frame_identity_frame_t *f) {
         }
         printf("\n");
         /* A's right corners are B's left ones. */
-        printf("E%llu ends=%s shared=%s\n", (unsigned long long)f->number, exact ? "exact" : "differ",
+        printf("E%llu ends=%s shared=%s", (unsigned long long)f->number, exact ? "exact" : "differ",
                n >= 2 && half[0][1] == half[1][0] && half[0][3] == half[1][2] ? "kept" : "split");
+        /* To a fraction of a pixel: the same corners, the game's own pixels at
+         * both ends, and less than a pixel from the whole ones between. */
+        {
+            int fine = 1;
+            for (i = 0; i < n; ++i) {
+                float at[4][2];
+                unsigned q;
+                for (q = 0; q <= 4; ++q) {
+                    uint32_t xy[4];
+                    unsigned m = frame_blend_polygon(blend, f->first_polygon + i, q, 4, xy, NULL);
+                    if (frame_blend_fractions(blend, f->first_polygon + i, q, 4, at) != m) fine = 0;
+                    for (k = 0; k < f->polygons[i].corners; ++k) {
+                        double dx, dy;
+                        if (!(m >> k & 1)) continue;
+                        dx = at[k][0] - (int16_t)(xy[k] & 0xffffu); dy = at[k][1] - (int16_t)(xy[k] >> 16);
+                        if ((q == 0 || q == 4) ? (dx != 0 || dy != 0) : (dx <= -1 || dx >= 1 || dy <= -1 || dy >= 1)) fine = 0;
+                    }
+                }
+            }
+            printf(" fractions=%s\n", fine ? "fine" : "off");
+        }
         for (i = 0; i < n; ++i) for (k = 0; k < 4; ++k) polygon_words[i][k] = f->polygons[i].xy[k];
     }
 }

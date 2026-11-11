@@ -48,7 +48,9 @@ static struct {
 static void display_start(void *context, uint32_t start);
 static void vblank(void *context);
 static void polygon(void *context, unsigned opcode, const uint32_t *packet);
-static const gpu_observer_t observer = {display_start, vblank, polygon};
+static void command(void *context, const uint32_t *packet, unsigned count);
+static const gpu_observer_t observer = {display_start, vblank, polygon, NULL};
+static const gpu_observer_t observer_commands = {display_start, vblank, polygon, command};
 
 static int16_t low(uint32_t word) { return (int16_t)(uint16_t)(word & 0xffffu); }
 static int16_t high(uint32_t word) { return (int16_t)(uint16_t)(word >> 16); }
@@ -135,7 +137,7 @@ void frame_identity_rebind(gpu_t *gpu) {
     if (!s.running) return;
     if (s.gpu && s.gpu != gpu) gpu_observe(s.gpu, NULL, NULL);
     s.gpu = gpu;
-    if (gpu) gpu_observe(gpu, &observer, NULL);
+    if (gpu) gpu_observe(gpu, s.config.command ? &observer_commands : &observer, NULL);
     frame_identity_reset();
 }
 
@@ -251,6 +253,12 @@ static void polygon(void *context, unsigned opcode, const uint32_t *packet) {
 }
 
 static void vblank(void *context) { (void)context; ++s.vblanks; }
+
+/* A polygon is reported here before polygon() counts it: s.polygons is its serial. */
+static void command(void *context, const uint32_t *packet, unsigned count) {
+    (void)context;
+    s.config.command(s.config.context, packet, count, s.polygons);
+}
 
 /* Ending a frame. */
 static int same_inputs(const segment_t *a, const frame_identity_run_t *x, const segment_t *b,

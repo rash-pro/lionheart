@@ -458,3 +458,30 @@ void frame_layer_shift(const frame_layer_t *l, uint32_t num, uint32_t den, int32
     *x = between(s->from_x, s->rel_x, num, den) - s->rel_x;
     *y = between(s->from_y, s->rel_y, num, den) - s->rel_y;
 }
+
+/* What between() rounds away. */
+static float rounded_off(int32_t a, int32_t b, uint32_t num, uint32_t den) {
+    return (float)((double)a + ((double)b - a) * num / den - between(a, b, num, den));
+}
+
+int frame_layer_offset_fraction(const frame_layer_t *l, uint32_t index, uint32_t num, uint32_t den, float *x, float *y) {
+    const segment_t *s = segment_at(l, index + 1);
+    *x = *y = 0;
+    if (!s || !den || num >= den) return 0;
+    *x = rounded_off(s->from_x, s->rel_x, num, den);
+    *y = rounded_off(s->from_y, s->rel_y, num, den);
+    return *x != 0 || *y != 0;
+}
+
+int frame_layer_sprite_fraction(const frame_layer_t *l, uint32_t index, uint32_t num, uint32_t den, float *x, float *y) {
+    const frame_t *f = &l->frames[l->latest];
+    const tile_t *t;
+    const segment_t *s;
+    *x = *y = 0;
+    if (!f->valid || index >= f->tile_count || !den || num >= den) return 0;
+    t = &f->tiles[index];
+    if (!(s = segment_at(l, t->segment))) return 0;
+    *x = rounded_off(t->from_x, t->x + s->rel_x, num, den) - rounded_off(s->from_x, s->rel_x, num, den);
+    *y = rounded_off(t->from_y, t->y + s->rel_y, num, den) - rounded_off(s->from_y, s->rel_y, num, den);
+    return *x != 0 || *y != 0;
+}
