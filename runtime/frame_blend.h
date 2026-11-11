@@ -39,6 +39,10 @@ enum {
  * many pixels over the interval is held whole: it would visibly stretch. */
 enum { FRAME_BLEND_STRETCH = 8 };
 
+/* A run that turns farther than this many degrees between two game frames
+ * moves on straight lines: near half a turn, which way it went is a guess. */
+enum { FRAME_BLEND_TURN_LIMIT = 150 };
+
 /* A camera cut: paired runs moved, at the vertex-weighted median, at least
  * FRAME_BLEND_CUT_MOVE / 1000 of their depth in view space, and at least half
  * of that move is not what the velocity they had one frame earlier predicts.
@@ -69,6 +73,11 @@ typedef struct {
      * that stood elsewhere before); in a frame without history; or in a
      * transform run that jumped by itself, by the cut rule applied to it alone. */
     uint32_t held_service, held_projection, held_neighbour, held_reset, held_jump;
+    /* Moving corners that follow their run's rotation rather than a straight
+     * line; runs paired with the frame before that turn (of them, those that
+     * hang from another run), whose matrix flattens space or mirrors at one
+     * end only, and that turn farther than FRAME_BLEND_TURN_LIMIT. */
+    uint32_t corners_turning, runs_turning, runs_attached, runs_flat, runs_far;
 } frame_blend_info_t;
 
 typedef struct frame_blend frame_blend_t;
@@ -83,14 +92,30 @@ int frame_blend_add(frame_blend_t *, const frame_identity_frame_t *);
 /* What the latest frame added gives. */
 const frame_blend_info_t *frame_blend_info(const frame_blend_t *);
 
+/* Checks on what frame_blend_polygon draws, added up over calls. */
+typedef struct {
+    /* Corners off their path by more than two pixels where the GTE saturates
+     * nothing: a corner on a straight line off the line between its ends, a
+     * corner that turns farther from that line than an arc of at most half a
+     * turn and its turn about its part's origin allow. Something drawn
+     * visibly wrong. */
+    unsigned stray;
+    /* Polygons whose every corner moves, and of them those with an edge, in
+     * view space, more than a tenth shorter or longer than at both ends: a
+     * part that shrinks or grows between two frames that agree on its size. */
+    unsigned polygons, resized;
+} frame_blend_check_t;
+
 /* A polygon of the latest frame, by serial, at alpha = num / den (0 is the
  * frame before, den the latest): writes the packet words of its corners to xy
  * and returns a mask of the corners that move. 0 when it stays as recorded.
- * stray, if given, counts corners that left the line between their two ends
- * by more than two pixels, where the GTE saturates nothing: something drawn
- * visibly wrong. */
+ * check, if given, adds up what it finds drawn wrong. */
 unsigned frame_blend_polygon(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den,
-                             uint32_t xy[4], unsigned *stray);
+                             uint32_t xy[4], frame_blend_check_t *check);
+
+/* Move every corner on a straight line in view space, as before runs turned
+ * (for comparison); takes effect from the next frame added. */
+void frame_blend_straight(frame_blend_t *, int);
 
 /* SXY as the GTE gives it for a view-space position (MAC1-3) under a setup's
  * OFX, OFY, H, sf and lm. */

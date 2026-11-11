@@ -31,6 +31,20 @@ at a fraction alpha between that frame and the one before:
   projections of the frame before, paired with the frame before that.
 - A corner is followed only if both ends are what the GTE's equations give for them, with the same sf and lm,
   and neither end lies at or behind the camera plane, where the GTE's division saturates (SZ3 at most H/2).
+- A corner whose transform run turns follows the run's motion instead of a straight line. Each paired run's
+  matrix, at both ends, is split into a rotation and what stays besides it (scale, shear, a mirror), by the
+  polar decomposition; the rotation is interpolated along the shorter arc at constant speed and the rest
+  linearly, so a part that turns keeps its size between two game frames (a straight line in view space draws a
+  part that turns a quarter turn at 71% of its size halfway). A run whose origin, put in another run's space at
+  one end, lands where its origin is at the other (to 2 view units plus 1% of the distance, both ways) hangs from
+  that run, as a bone from its parent: its origin is carried by the parent's motion, and it turns relative to the
+  parent or on its own, whichever is the smaller turn. A chain of parts that each swing far against the camera (a
+  whip-like weapon, a limb) then bends a little at each joint, and its joints stay where both parts put them.
+  Runs with no rotation to follow move on straight lines, as before: a matrix that flattens space (a shadow
+  squashed onto the floor), one mirrored at one end only, a turn of more than 150 degrees in one game frame,
+  where the other way round is nearly as short and which way the part went is a guess (a straight line keeps
+  it between its two ends, a wrong guess would draw it where it never was), different vertices at the two
+  ends, and a vertex whose arc would reach the camera plane. Alpha 0 and 1 stay the game's own positions.
 - 3D polygons that share an edge (both its ends at the same packet positions) form one surface, and a position
   is one vertex within a surface. A gap can open only along a shared edge; two surfaces that meet at a single
   position, often by chance (an effect's corner on a vertex of the floor), do not hold each other.
@@ -64,7 +78,7 @@ previous one, an overflow, a restored state), in excluded scenes (the world map)
 `tools/devtools/inbetween.c` (built with the developer tools, `build/devtools/inbetween`):
 
 ```sh
-inbetween play.rec [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames] [--causes] [--packets V]
+inbetween play.rec [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames] [--causes] [--packets V] [--straight]
 ```
 
 It replays the recording through `runtime/gpu.c` and checks, at every VBlank, that the replay shows what the
@@ -99,8 +113,15 @@ Measures, over `--from` to `--until`:
 - `Resets` and their VBlanks (of the frames whose projections have nothing to blend from; in battle the picture
   cuts a game frame later); `Jumps`: frames whose paired projections moved a median of 32 pixels or more on
   screen, the measure frame identity's summary uses, held or blended.
-- `Stray`: blended corners more than two pixels off the line between their two ends where the GTE saturates
-  nothing, which a straight move in view space never does: something drawn wrong.
+- `Turning`: moving corners that follow their run's rotation, runs that turn (and of them, those hanging from
+  another), runs whose matrix is flat or mirrored at one end only, and runs that turn too far.
+- `Stray`: blended corners off their path by more than two pixels where the GTE saturates nothing: on a straight
+  line, off the line between their two ends, which a straight move in view space never does; turning, farther
+  from that line than half the distance between the ends plus their distance from the origin of every part that
+  carries them, which an arc of at most half a turn never is. Something drawn wrong.
+- `Size`: polygons that move whole, and of them those with an edge, in view space, more than a tenth shorter or
+  longer than at both ends: a part that shrinks or grows between two frames that agree on its size.
+  `--straight` moves every corner on a straight line, for comparison.
 - With `--causes`, `Causes`: what drew each pixel that changes only at game frames, as shares of those pixels:
   3D polygons that move but whose colour, texture coordinates, order or what lies under them changed (or whose
   texture or palette was rewritten in the frame); 3D polygons held, by the first reason that applies (a frame
@@ -136,8 +157,6 @@ still moves only at game frames, by what the measures find on the battle and fie
   chain such as a whip). Holding a corner holds its polygon and the surface around it.
 - 3D that moves, but whose look changes at game frames: texture coordinates, colours, which polygons are drawn,
   or a texture or palette rewritten during the frame, as many spell and summon effects do.
-- Parts that turn far within one game frame. A corner moves in a straight line in view space, which matches a
-  steady move or a small turn; a whip or a limb that swings through tens of degrees each game frame is drawn
-  shorter between them than at either end. Interpolating each run's own rotation and translation, which the
-  service records, would follow the arc.
+- Parts that turn more than 150 degrees within one game frame, and parts whose matrix is no rotation, move on
+  straight lines and shrink between the frames.
 - The game frame that shows a cut or a change of scene, and the first after a gap, are shown as the game shows them.

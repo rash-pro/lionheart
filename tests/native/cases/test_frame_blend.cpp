@@ -14,6 +14,17 @@ std::string scenario(lh::Case &t, const char *name, const lh::fs::path &record =
     return t.ok(command.timeout(60)).out;
 }
 
+std::string straight(lh::Case &t, const char *name) { return t.ok(t.harness("main").arg(name).arg("straight").timeout(60)).out; }
+
+// The smallest and largest edge of the scenario's quads on screen between
+// two game frames, in percent of the same edge at the two ends.
+std::pair<int, int> size(const std::string &out, int frame) {
+    auto low = lh::capture(out, "S" + std::to_string(frame) + R"( resized=\d+ stray=\d+ size=(\d+)-)");
+    auto high = lh::capture(out, "S" + std::to_string(frame) + R"( resized=\d+ stray=\d+ size=\d+-(\d+))");
+    LH_CHECK_MSG(!low.empty() && !high.empty(), out);
+    return {std::stoi(low), std::stoi(high)};
+}
+
 std::string redraw(lh::Case &t, const lh::fs::path &record) {
     return t.ok(t.harness("inbetween").arg(record).arg("--causes").timeout(120)).out;
 }
@@ -81,7 +92,7 @@ LH_TEST(test_shared_vertices_stay_shared) {
 LH_TEST(test_a_cut_resets) {
     auto out = scenario(t, "resets");
     LH_CONTAINS(out, "F2 reason=kept moving=8/8");
-    LH_CONTAINS(out, "F3 reason=cut moving=0/8 polygons=0/2 held=0/0/0/8\nM3 A=0 B=0");
+    LH_CONTAINS(out, "F3 reason=cut moving=0/8 polygons=0/2 held=0/0/0/8\nT3 turning=0 runs=0/0/0/0\nM3 A=0 B=0");
     LH_CONTAINS(out, "F4 reason=kept moving=8/8");
     LH_CONTAINS(out, "F5 reason=scene moving=0/8");
     LH_CONTAINS(out, "F6 reason=kept moving=8/8");
@@ -143,6 +154,78 @@ LH_TEST(test_a_polygon_touching_one_corner_holds_nothing) {
     for (int f = 1; f <= 7; ++f) {
         LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=8/11 polygons=2/3 held=3/0/0/0");
         LH_CONTAINS(out, "M" + std::to_string(f) + " A=f B=f C=0");
+    }
+}
+
+LH_TEST(test_a_part_that_turns_keeps_its_size) {
+    // A square turning a quarter turn each game frame about the line of
+    // sight: between the frames it is the same square, turned part of the way.
+    auto out = scenario(t, "turn");
+    for (int f = 2; f <= 5; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=4/4 polygons=1/1");
+        LH_CONTAINS(out, "T" + std::to_string(f) + " turning=4 runs=1/0/0/0");
+        LH_CONTAINS(out, "S" + std::to_string(f) + " resized=0 stray=0 ");
+        auto [low, high] = size(out, f);
+        LH_CHECK_MSG(low >= 95 && high <= 105, out);
+    }
+    // On straight lines each corner cuts across: the square shrinks.
+    auto lines = straight(t, "turn");
+    for (int f = 2; f <= 5; ++f) {
+        LH_CONTAINS(lines, "S" + std::to_string(f) + " resized=3 ");
+        LH_CHECK_MSG(size(lines, f).first < 80, lines);
+    }
+    // Drawn again from a recording: alpha 1 is the game's picture.
+    auto record = t.temp() / "turn.rec";
+    scenario(t, "turn", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, "Alpha 1: game-frames=");
+    LH_CONTAINS(drawn, " differ=0 pixels=0");
+    LH_CONTAINS(drawn, "Stray: corners=0 ");
+    LH_CONTAINS(drawn, " resized=0 (0.00%)");
+}
+
+LH_TEST(test_a_joint_between_two_parts_stays_welded) {
+    // B hangs from A's far end and bends against it: B turns relative to A,
+    // its origin carried by A, so the joint both draw stays one point and
+    // neither rod changes length.
+    auto out = scenario(t, "chain");
+    for (int f = 2; f <= 5; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=8/8 polygons=2/2");
+        LH_CONTAINS(out, "T" + std::to_string(f) + " turning=8 runs=2/1/0/0");
+        LH_CONTAINS(out, "E" + std::to_string(f) + " ends=exact shared=kept");
+        LH_CONTAINS(out, "S" + std::to_string(f) + " resized=0 stray=0 ");
+        auto [low, high] = size(out, f);
+        LH_CHECK_MSG(low >= 92 && high <= 108, out);
+    }
+    auto lines = straight(t, "chain");
+    for (int f = 2; f <= 5; ++f) LH_CHECK_MSG(lines.find("S" + std::to_string(f) + " resized=0 ") == std::string::npos, lines);
+}
+
+LH_TEST(test_a_turn_near_half_a_turn_moves_on_straight_lines) {
+    // 175 degrees in one game frame: either way round is about as likely,
+    // so nothing turns; the corners keep to straight lines between the ends.
+    auto out = scenario(t, "far");
+    for (int f = 2; f <= 5; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=4/4 polygons=1/1");
+        LH_CONTAINS(out, "T" + std::to_string(f) + " turning=0 runs=0/0/0/1");
+        LH_CONTAINS(out, "S" + std::to_string(f) + " resized=3 stray=0 ");
+    }
+}
+
+LH_TEST(test_a_matrix_that_is_no_rotation) {
+    // Flattened onto a plane (a shadow): no rotation to follow.
+    auto flat = scenario(t, "flat");
+    for (int f = 1; f <= 5; ++f) LH_CONTAINS(flat, "T" + std::to_string(f) + " turning=0 runs=0/0/1/0");
+    // Mirrored at one end only: no turn between them.
+    LH_CONTAINS(scenario(t, "mirror"), "T1 turning=0 runs=0/0/1/0");
+    // Mirrored at both ends, or scaled unevenly: the rotation turns and the
+    // rest is kept, so the part keeps its size.
+    for (auto name : {"mirrored", "stretched"}) {
+        auto out = scenario(t, name);
+        for (int f = 2; f <= 5; ++f) {
+            LH_CONTAINS(out, "T" + std::to_string(f) + " turning=4 runs=1/0/0/0");
+            LH_CONTAINS(out, "S" + std::to_string(f) + " resized=0 stray=0 ");
+        }
     }
 }
 

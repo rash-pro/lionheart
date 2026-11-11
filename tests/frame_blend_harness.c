@@ -4,7 +4,11 @@
  *   F<number> reason=<why> moving=<corners>/<3D corners> polygons=<moving>/<3D> held=<service>/<projection>/<neighbour>/<reset>
  *   M<number> <polygon>=<mask of the corners that move at alpha 1/2>...
  *   E<number> ends=<exact|differ> shared=<kept|split>
- * Scenarios: move, held, touch, resets, late.
+ *   T<number> turning=<corners> runs=<turning>/<hanging>/<flat or mirrored>/<too far>
+ *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
+ * Scenarios: move, held, touch, resets, late; parts that turn: turn, chain,
+ * far, flat, mirror, mirrored; with "straight" after the name, every corner
+ * moves on a straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
 #include "frame_identity.h"
@@ -32,6 +36,42 @@ static struct {
 
 static uint32_t polygon_words[3][4];
 
+static double length(uint32_t a, uint32_t b) {
+    double x = (double)(int16_t)(a & 0xffffu) - (int16_t)(b & 0xffffu), y = (double)(int16_t)(a >> 16) - (int16_t)(b >> 16), r = x * x + y * y, n = r > 1 ? r : 1;
+    unsigned i;
+    for (i = 0; i < 64; ++i) n = (n + r / n) / 2;
+    return r > 0 ? n : 0;
+}
+
+/* Every quad's edges on screen at alpha 1/4, 1/2 and 3/4 against the same
+ * edges at the two ends, and the blender's own checks. A part seen face on
+ * keeps its size on screen as it turns about the line of sight. */
+static void sizes(const frame_identity_frame_t *f) {
+    static const unsigned edges[4][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}};
+    frame_blend_check_t check = {0, 0, 0};
+    double low = 1e9, high = 0;
+    uint32_t i, k, e;
+    for (i = 0; i < f->polygon_count; ++i) {
+        uint32_t zero[4], one[4];
+        if (f->polygons[i].corners != 4) continue;
+        memcpy(zero, f->polygons[i].xy, sizeof(zero)); memcpy(one, f->polygons[i].xy, sizeof(one));
+        if (frame_blend_polygon(blend, f->first_polygon + i, 0, 4, zero, NULL) != 15) continue;
+        for (k = 1; k < 4; ++k) {
+            uint32_t at[4];
+            memcpy(at, f->polygons[i].xy, sizeof(at));
+            frame_blend_polygon(blend, f->first_polygon + i, k, 4, at, &check);
+            for (e = 0; e < 4; ++e) {
+                double l = length(at[edges[e][0]], at[edges[e][1]]), l0 = length(zero[edges[e][0]], zero[edges[e][1]]),
+                       l1 = length(one[edges[e][0]], one[edges[e][1]]), r = l / ((l0 + l1) / 2);
+                if (r < low) low = r;
+                if (r > high) high = r;
+            }
+        }
+    }
+    if (high > 0)
+        printf("S%llu resized=%u stray=%u size=%.0f-%.0f\n", (unsigned long long)f->number, check.resized, check.stray, low * 100, high * 100);
+}
+
 static void sink(void *context, const frame_identity_frame_t *f) {
     const frame_blend_info_t *info;
     uint32_t i, k;
@@ -42,7 +82,10 @@ static void sink(void *context, const frame_identity_frame_t *f) {
     printf("F%llu reason=%s moving=%u/%u polygons=%u/%u held=%u/%u/%u/%u\n", (unsigned long long)f->number,
            reasons[info->reason], info->corners_moving, info->corners_3d, info->polygons_moving, info->polygons_3d,
            info->held_service, info->held_projection, info->held_neighbour, info->held_reset);
+    printf("T%llu turning=%u runs=%u/%u/%u/%u\n", (unsigned long long)f->number, info->corners_turning, info->runs_turning,
+           info->runs_attached, info->runs_flat, info->runs_far);
     if (!f->polygon_count) return;
+    sizes(f);
     {
         uint32_t half[3][4], zero[3][4], one[3][4];
         unsigned mask[3], m0, m1, n = f->polygon_count < 3 ? f->polygon_count : 3, exact = 1;
@@ -191,13 +234,100 @@ static void scenario_resets(void) {
     game_frame(330, 2400, 900, 0, 2);
 }
 
+/* Sine and cosine of degrees, by their series. */
+static double sine(double degrees) {
+    double x, term, sum;
+    unsigned n;
+    while (degrees > 180) degrees -= 360;
+    while (degrees < -180) degrees += 360;
+    x = degrees * 3.14159265358979323846 / 180; term = x; sum = x;
+    for (n = 1; n < 20; ++n) { term *= -x * x / ((2 * n) * (2 * n + 1)); sum += term; }
+    return sum;
+}
+static double cosine(double degrees) { return sine(degrees + 90); }
+
+static int16_t fixed(double v) { return (int16_t)(v >= 0 ? v * 4096 + 0.5 : v * 4096 - 0.5); }
+
+/* A rotation about the line of sight, times scale (sx, sy, sz) along the
+ * model's own axes, and a translation. */
+static void pose(double degrees, double sx, double sy, double sz, int tx, int ty, int tz) {
+    double c0 = cosine(degrees), s0 = sine(degrees);
+    int16_t r[9];
+    r[0] = fixed(c0 * sx); r[1] = fixed(-s0 * sy); r[2] = 0;
+    r[3] = fixed(s0 * sx); r[4] = fixed(c0 * sy); r[5] = 0;
+    r[6] = 0; r[7] = 0; r[8] = fixed(sz);
+    c->gte_ctrl[0] = (uint16_t)r[0] | (uint32_t)(uint16_t)r[1] << 16;
+    c->gte_ctrl[1] = (uint16_t)r[2] | (uint32_t)(uint16_t)r[3] << 16;
+    c->gte_ctrl[2] = (uint16_t)r[4] | (uint32_t)(uint16_t)r[5] << 16;
+    c->gte_ctrl[3] = (uint16_t)r[6] | (uint32_t)(uint16_t)r[7] << 16;
+    c->gte_ctrl[4] = (uint16_t)r[8];
+    c->gte_ctrl[5] = (uint32_t)tx; c->gte_ctrl[6] = (uint32_t)ty; c->gte_ctrl[7] = (uint32_t)tz;
+    c->gte_ctrl[24] = 160u << 16; c->gte_ctrl[25] = 120u << 16; c->gte_ctrl[26] = 300;
+}
+
+static void shown(void) {
+    unsigned i;
+    gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
+    back ^= 1;
+    for (i = 0; i < 4; ++i) gpu_vblank(g);
+}
+
+static void cleared(void) {
+    draw_area(back);
+    gpu_gp0(g, 0x02202020u); gpu_gp0(g, (back * 256u) << 16); gpu_gp0(g, 240u << 16 | 320u);
+}
+
+/* A square part, 200 units across, turning about the line of sight by step
+ * degrees each game frame, at scale sx along its own x (negative: mirrored);
+ * mirror_first mirrors only the first frame. */
+static void scenario_turn(double step, double sx, double sy, int mirror_first) {
+    static const int corner[4][2] = {{-100, -100}, {100, -100}, {-100, 100}, {100, 100}};
+    int f;
+    for (f = 0; f < 6; ++f) {
+        uint32_t xy[4];
+        unsigned i;
+        cleared();
+        pose(step * f, f == 0 && mirror_first ? -sx : sx, sy, 1, 10 * f, 0, 1000);
+        for (i = 0; i < 4; ++i) xy[i] = rtps(corner[i][0], corner[i][1], 0);
+        quad(0x0000c0u, xy);
+        shown();
+    }
+}
+
+/* Two rods, A from its origin along x and a thinner B hanging from A's far
+ * end, each its own run: A turns 40 degrees a game frame, B 30 more against
+ * A. B's first corners are A's last ones, projected in both runs. */
+static void scenario_chain(void) {
+    int f;
+    for (f = 0; f < 6; ++f) {
+        static const int rod[4][2] = {{0, -40}, {200, -40}, {0, 40}, {200, 40}}, tip[4][2] = {{0, -40}, {150, -30}, {0, 40}, {150, 30}};
+        uint32_t a[4], bq[4];
+        double turn = 40.0 * f, bend = 30.0 * f;
+        int tx = -150 + 5 * f, tz = 700, bx, by;
+        unsigned i;
+        cleared();
+        pose(turn, 1, 1, 1, tx, 0, tz);
+        for (i = 0; i < 4; ++i) a[i] = rtps(rod[i][0], rod[i][1], 0);
+        /* B's origin is A's (200, 0, 0), as the game would compute it. */
+        bx = tx + (int)((fixed(cosine(turn)) * 200) >> 12); by = (int)((fixed(sine(turn)) * 200) >> 12);
+        pose(turn + bend, 1, 1, 1, bx, by, tz);
+        for (i = 0; i < 4; ++i) bq[i] = rtps(tip[i][0], tip[i][1], 0);
+        /* B's first corners are drawn where A put them. */
+        bq[0] = a[1]; bq[2] = a[3];
+        quad(0x0000c0u, a);
+        quad(0x00c000u, bq);
+        shown();
+    }
+}
+
 int main(int argc, char **argv) {
-    const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 ? argv[2] : NULL;
+    const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 && strcmp(argv[2], "straight") ? argv[2] : NULL;
     frame_identity_config_t config;
     c = calloc(1, sizeof(*c));
     g = gpu_create();
     blend = frame_blend_create();
     if (!c || !g || !blend) return 2;
+    if (argc > 2 && !strcmp(argv[2], "straight")) frame_blend_straight(blend, 1);
     display();
     memset(&config, 0, sizeof(config));
     config.sink = sink; config.classify = classify;
@@ -209,6 +339,13 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "touch")) scenario_move(2);
     else if (!strcmp(name, "resets")) scenario_resets();
     else if (!strcmp(name, "late")) scenario_late();
+    else if (!strcmp(name, "turn")) scenario_turn(90, 1, 1, 0);
+    else if (!strcmp(name, "far")) scenario_turn(175, 1, 1, 0);
+    else if (!strcmp(name, "flat")) scenario_turn(90, 1, 0.001, 0);
+    else if (!strcmp(name, "mirror")) scenario_turn(60, 1, 1, 1);
+    else if (!strcmp(name, "mirrored")) scenario_turn(60, -1, 1, 0);
+    else if (!strcmp(name, "stretched")) scenario_turn(60, 2, 0.5, 0);
+    else if (!strcmp(name, "chain")) scenario_chain();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

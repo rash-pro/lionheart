@@ -2,7 +2,7 @@
  * docs/frame-blend.md) through the software rasterizer, and checks and
  * measures them:
  *   inbetween RECORD [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames]
- *             [--causes] [--packets V]
+ *             [--causes] [--packets V] [--straight]
  * Every VBlank of the recording is replayed and must show what the game showed.
  * Every game frame is drawn again with its polygons where they stand at the end
  * of its interval (alpha 1), which must give the game's picture pixel for
@@ -14,7 +14,8 @@
  * writes the pictures of the first blended game frame from VBlank V on, and
  * --frames prints what blending gave each game frame. --causes says what drew
  * the pixels that still jump and counts holes in the blended pictures;
- * --packets V lists the packets behind them for one game frame.
+ * --packets V lists the packets behind them for one game frame. --straight
+ * moves every corner on a straight line, as before parts turned.
  * The report goes to stdout; the exit status is 1 if a check failed. */
 #include "../../runtime/gpu.c"
 #include "frame_blend.h"
@@ -174,7 +175,7 @@ typedef struct {
 typedef struct {
     const frame_blend_t *blend;
     uint32_t num, den;
-    unsigned stray;
+    frame_blend_check_t check;
     uint64_t split;          /* polygon packets cut between chunks, drawn as recorded */
     trace_t *trace;          /* or NULL */
     const frame_identity_frame_t *frame;
@@ -385,7 +386,7 @@ static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t 
                     uint32_t xy[4], w[12];
                     unsigned corners = (op & 8) ? 4 : 3, i, k = 1, mask;
                     memcpy(packet, p, n * 4);
-                    mask = frame_blend_polygon(at->blend, c->serial, at->num, at->den, xy, &at->stray);
+                    mask = frame_blend_polygon(at->blend, c->serial, at->num, at->den, xy, &at->check);
                     for (i = 0; i < corners; ++i) {
                         if (i && (op & 16)) ++k;
                         if (mask & (1u << i)) put_le32(packet + k * 4, xy[i]);
@@ -556,6 +557,9 @@ int main(int argc, char **argv) {
     uint64_t holds = 0, skips = 0, split = 0, reset[FRAME_BLEND_REASONS] = {0}, jumps_blended = 0, jumps_held = 0;
     uint64_t polygons_3d = 0, polygons_moving = 0, corners_3d = 0, corners_moving = 0;
     uint64_t held_service = 0, held_projection = 0, held_neighbour = 0, held_reset = 0, held_jump = 0;
+    uint64_t sized = 0, resized = 0, resized_renders = 0, corners_turning = 0, runs_turning = 0, runs_attached = 0;
+    uint64_t runs_flat = 0, runs_far = 0;
+    char resized_list[1024] = "";
     char wrong_list[1024] = "", stray_list[1024] = "", reset_list[2048] = "", jump_list[1024] = "";
     /* --causes: what drew each pixel of the last two renders, on the canvas. */
     int causes = 0, have_probe = 0;
@@ -572,6 +576,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!strcmp(argv[i], "--frames")) verbose = 1;
         else if (!strcmp(argv[i], "--causes")) causes = 1;
+        else if (!strcmp(argv[i], "--straight")) frame_blend_straight(blend, 1);
         else if (!strcmp(argv[i], "--packets") && i + 1 < argc) { causes = 1; probe = strtoull(argv[++i], NULL, 10); }
         else if (!strcmp(argv[i], "--sheet") && i + 1 < argc) sheet = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--canvas") && i + 1 < argc) {
@@ -580,7 +585,7 @@ int main(int argc, char **argv) {
             }
         } else if (argv[i][0] != '-' && !path) path = argv[i];
         else {
-            fprintf(stderr, "Usage: inbetween RECORD [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames] [--causes] [--packets V]\n");
+            fprintf(stderr, "Usage: inbetween RECORD [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames] [--causes] [--packets V] [--straight]\n");
             return 2;
         }
     }
@@ -672,6 +677,8 @@ int main(int argc, char **argv) {
                 corners_3d += info->corners_3d; corners_moving += info->corners_moving;
                 held_service += info->held_service; held_projection += info->held_projection;
                 held_neighbour += info->held_neighbour; held_reset += info->held_reset; held_jump += info->held_jump;
+                corners_turning += info->corners_turning; runs_turning += info->runs_turning; runs_attached += info->runs_attached;
+                runs_flat += info->runs_flat; runs_far += info->runs_far;
             }
             continue; /* not journalled: it changes no GPU */
         } else if (in.tag == FRAME_RECORD_VBLK) {
@@ -695,7 +702,7 @@ int main(int argc, char **argv) {
              * frame again is what takes the time. */
             if (first_of_frame && a.valid && vblank + FRAME_IDENTITY_GAP >= from) {
                 /* Alpha 1 must be the game's picture; alpha 0 against the one before. */
-                blend_at_t at = {blend, 1, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
+                blend_at_t at = {blend, 1, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0};
                 size_t k, differ = 0;
                 /* cause_before keeps what drew the picture of the game frame before. */
                 if (causes) { uint8_t *t = cause_before; cause_before = cause_one; cause_one = t; }
@@ -712,7 +719,7 @@ int main(int argc, char **argv) {
                         snprintf(wrong_list + strlen(wrong_list), sizeof(wrong_list) - strlen(wrong_list), " alpha1@%" PRIu64 ":%zu", vblank, differ);
                 }
                 if (interval_ready && have_before) {
-                    blend_at_t zero = {blend, 0, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
+                    blend_at_t zero = {blend, 0, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0};
                     size_t same = 1;
                     int probing = causes && probe && !have_probe && in_window && frame_vblank >= probe;
                     if (causes) { zero.trace = &trace; trace_area(&trace, truth.gpu); trace.describe = probing; }
@@ -775,7 +782,7 @@ int main(int argc, char **argv) {
                     /* One game frame late, on the interval measured between the
                      * last two: alpha reaches 1 when the next is due. */
                     uint64_t step = vblank - frame_vblank + 1;
-                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, 0, 0, NULL, NULL, reason, reason_before, 0};
+                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, {0, 0, 0}, 0, NULL, NULL, reason, reason_before, 0};
                     if (step > interval) ++holds;
                     last_step = step;
                     if (causes) { at.trace = &trace; at.frame = &frame.frame; trace_area(&trace, truth.gpu); trace.describe = 0; }
@@ -800,11 +807,17 @@ int main(int argc, char **argv) {
                         }
                     }
                     ++renders;
-                    stray += at.stray; split += at.split;
-                    if (at.stray) {
+                    stray += at.check.stray; split += at.split;
+                    sized += at.check.polygons; resized += at.check.resized;
+                    if (at.check.resized) {
+                        ++resized_renders;
+                        if (strlen(resized_list) < sizeof(resized_list) - 40)
+                            snprintf(resized_list + strlen(resized_list), sizeof(resized_list) - strlen(resized_list), " %" PRIu64 ":%u", vblank, at.check.resized);
+                    }
+                    if (at.check.stray) {
                         ++stray_frames;
                         if (strlen(stray_list) < sizeof(stray_list) - 40)
-                            snprintf(stray_list + strlen(stray_list), sizeof(stray_list) - strlen(stray_list), " %" PRIu64 ":%u", vblank, at.stray);
+                            snprintf(stray_list + strlen(stray_list), sizeof(stray_list) - strlen(stray_list), " %" PRIu64 ":%u", vblank, at.check.stray);
                     }
                     if (sheet && !have_sheet && out && frame_vblank >= sheet) {
                         char name[64];
@@ -876,6 +889,9 @@ int main(int argc, char **argv) {
            corners_3d, corners_moving, corners_3d ? 100.0 * corners_moving / corners_3d : 0.0, polygons_3d, polygons_moving,
            polygons_3d ? 100.0 * polygons_moving / polygons_3d : 0.0, held_service, held_projection, held_neighbour, held_reset,
            held_jump);
+    printf("Turning: corners=%" PRIu64 " (%.2f%% of moving) runs=%" PRIu64 " hanging=%" PRIu64 " flat-or-mirrored=%" PRIu64
+           " too-far=%" PRIu64 "\n", corners_turning, corners_moving ? 100.0 * corners_turning / corners_moving : 0.0, runs_turning,
+           runs_attached, runs_flat, runs_far);
     printf("Game rate: changed=%" PRIu64 " jumped=%" PRIu64 " (%.2f%% of changed, %.2f%% of the screen per game frame)\n",
            changed, jumped, changed ? 100.0 * jumped / changed : 0.0,
            game_frames ? 100.0 * jumped / ((double)game_frames * cw * ch) : 0.0);
@@ -893,6 +909,9 @@ int main(int argc, char **argv) {
     printf("Jumps (median paired screen move of 32 pixels or more): held=%" PRIu64 " blended=%" PRIu64 " at:%s\n",
            jumps_held, jumps_blended, jump_list);
     printf("Stray: corners=%" PRIu64 " renders=%" PRIu64 " at:%s\n", stray, stray_frames, stray_list);
+    printf("Size (polygons moving whole, with an edge in view space a tenth shorter or longer than at both ends): polygons=%" PRIu64
+           " resized=%" PRIu64 " (%.2f%%) renders=%" PRIu64 " at:%s\n", sized, resized, sized ? 100.0 * resized / sized : 0.0,
+           resized_renders, resized_list);
     if (causes)
         printf("Holes (the clear colour where both game frames have 3D): pixels=%" PRIu64 " renders=%" PRIu64 " at:%s\n",
                hole_pixels, hole_renders, hole_list);
