@@ -6,9 +6,11 @@
  *   E<number> ends=<exact|differ> shared=<kept|split>
  *   T<number> turning=<corners> runs=<turning>/<hanging>/<flat or mirrored>/<too far>
  *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
+ *   R<number> resolved=<ambiguous corners resolved by the polygon drawn a game frame earlier>
  * Scenarios: move, held, touch, resets, late; parts that turn: turn, chain,
- * far, flat, mirror, mirrored; with "straight" after the name, every corner
- * moves on a straight line.
+ * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
+ * on screen: cross. With "straight" after the name, every corner moves on a
+ * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
 #include "frame_identity.h"
@@ -84,6 +86,7 @@ static void sink(void *context, const frame_identity_frame_t *f) {
            info->held_service, info->held_projection, info->held_neighbour, info->held_reset);
     printf("T%llu turning=%u runs=%u/%u/%u/%u\n", (unsigned long long)f->number, info->corners_turning, info->runs_turning,
            info->runs_attached, info->runs_flat, info->runs_far);
+    if (info->corners_resolved) printf("R%llu resolved=%u\n", (unsigned long long)f->number, info->corners_resolved);
     if (!f->polygon_count) return;
     sizes(f);
     {
@@ -320,6 +323,28 @@ static void scenario_chain(void) {
     }
 }
 
+/* One part sliding across the line of sight: a quad with a corner at its
+ * origin and, 300 units behind, a triangle with a corner there too. When the
+ * origin crosses the line of sight both corners land on the centre of the
+ * screen, having stood apart a game frame earlier: the service cannot tell
+ * which is which there. */
+static void scenario_cross(void) {
+    static const int front[4][3] = {{0, 0, 0}, {100, 0, 0}, {0, 100, 0}, {100, 100, 0}};
+    static const int back_[3][3] = {{0, 0, 300}, {-100, 0, 300}, {0, -100, 300}};
+    int f;
+    for (f = 0; f < 6; ++f) {
+        uint32_t q[4], t[3];
+        unsigned i;
+        cleared();
+        pose(0, 1, 1, 1, -60 + 20 * f, 0, 900);
+        for (i = 0; i < 4; ++i) q[i] = rtps(front[i][0], front[i][1], front[i][2]);
+        for (i = 0; i < 3; ++i) t[i] = rtps(back_[i][0], back_[i][1], back_[i][2]);
+        quad(0x0000c0u, q);
+        gpu_gp0(g, 0x20c00000u); gpu_gp0(g, t[0]); gpu_gp0(g, t[1]); gpu_gp0(g, t[2]);
+        shown();
+    }
+}
+
 int main(int argc, char **argv) {
     const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 && strcmp(argv[2], "straight") ? argv[2] : NULL;
     frame_identity_config_t config;
@@ -346,6 +371,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "mirrored")) scenario_turn(60, -1, 1, 0);
     else if (!strcmp(name, "stretched")) scenario_turn(60, 2, 0.5, 0);
     else if (!strcmp(name, "chain")) scenario_chain();
+    else if (!strcmp(name, "cross")) scenario_cross();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

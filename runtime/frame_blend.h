@@ -78,6 +78,9 @@ typedef struct {
      * hang from another run), whose matrix flattens space or mirrors at one
      * end only, and that turn farther than FRAME_BLEND_TURN_LIMIT. */
     uint32_t corners_turning, runs_turning, runs_attached, runs_flat, runs_far;
+    /* Corners the service held as ambiguous that the same polygon a game
+     * frame earlier resolved. */
+    uint32_t corners_resolved;
 } frame_blend_info_t;
 
 typedef struct frame_blend frame_blend_t;

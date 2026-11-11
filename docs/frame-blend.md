@@ -31,6 +31,13 @@ at a fraction alpha between that frame and the one before:
   projections of the frame before, paired with the frame before that.
 - A corner is followed only if both ends are what the GTE's equations give for them, with the same sf and lm,
   and neither end lies at or behind the camera plane, where the GTE's division saturates (SZ3 at most H/2).
+- A corner the service held as ambiguous (several projections at its position that stood apart before: parts
+  that cross on screen, a coiled chain drawn a few pixels across) is resolved by the same polygon a game frame
+  earlier: the polygon of the frame before with the same command whose linked corners are, corner by corner, the
+  pairs of this one's (the game draws a model's polygons from the same list every frame). Its packet word at
+  that corner is where the vertex stood, so the projection at this position whose pair stood exactly there is
+  the vertex; several that did stood together then and now, and are one vertex. Nothing is resolved when
+  several such polygons disagree there.
 - A corner whose transform run turns follows the run's motion instead of a straight line. Each paired run's
   matrix, at both ends, is split into a rotation and what stays besides it (scale, shear, a mirror), by the
   polar decomposition; the rotation is interpolated along the shorter arc at constant speed and the rest
@@ -106,7 +113,7 @@ Measures, over `--from` to `--until`:
 
 - `Blended`: 3D corners (those of polygons with a corner at a projection) and polygons that move, and why the rest
   stay: held by the service, ends the GTE does not give again or at the camera plane, in or next to a held polygon,
-  no history, a run that jumped by itself.
+  no history, a run that jumped by itself; and the ambiguous corners resolved.
 - `Game rate`: for each game frame, the pixels where alpha 0 differs from the picture shown just before it change
   only at game frames; of the pixels that change across the game frame, their share, and their share of the
   screen. Without blending both shares would be those of every changing pixel.
@@ -153,8 +160,8 @@ still moves only at game frames, by what the measures find on the battle and fie
 - 2D: sprites, the HUD and menus, and field backgrounds, which are drawn as tiles that scroll with the camera. A
   field's 3D moves smoothly over a background that steps; tying the two together is a separate stage.
 - 3D the service cannot link: effect geometry projected anew each frame (no pair), polygons whose corners the CPU
-  computes without the GTE, and positions where two projections meet that stood apart before (the joints of a
-  chain such as a whip). Holding a corner holds its polygon and the surface around it.
+  computes without the GTE, and ambiguous corners whose polygon was not drawn the same way a game frame earlier.
+  Holding a corner holds its polygon and the surface around it.
 - 3D that moves, but whose look changes at game frames: texture coordinates, colours, which polygons are drawn,
   or a texture or palette rewritten during the frame, as many spell and summon effects do.
 - Parts that turn more than 150 degrees within one game frame, and parts whose matrix is no rotation, move on

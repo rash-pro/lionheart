@@ -15,8 +15,15 @@ typedef struct {
     frame_identity_setup_t *setups;
     uint8_t *jumped;             /* per run: it jumped, by the cut rule applied to it alone */
     struct motion *motions;      /* per run: how it moves from the frame before */
-    size_t projection_count, run_count, setup_count;
-    size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity;
+    /* Its polygons, with the corners blending resolved, and an index of
+     * them by linked corner: (corner, age, projection) to the first polygon,
+     * then per polygon corner the next with the same. */
+    frame_identity_polygon_t *polygons;
+    uint64_t *corner_keys;
+    int32_t *corner_heads, *corner_next;
+    size_t projection_count, run_count, setup_count, polygon_count;
+    size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity, polygon_capacity;
+    size_t corner_capacity, next_capacity;
 } kept_t;
 
 /* Both ends of a vertex: where it stood in the frame before (a) and now (b). */
@@ -73,7 +80,8 @@ void frame_blend_destroy(frame_blend_t *b) {
     if (!b) return;
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
-        free(b->kept[i].motions);
+        free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
+        free(b->kept[i].corner_next);
     }
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
@@ -115,7 +123,11 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
     if (!grow((void **)&k->projections, &k->projection_capacity, f->projection_count, sizeof(*k->projections)) ||
         !grow((void **)&k->runs, &k->run_capacity, f->run_count, sizeof(*k->runs)) ||
         !grow((void **)&k->setups, &k->setup_capacity, f->setup_count, sizeof(*k->setups)) ||
-        !grow((void **)&k->jumped, &k->jumped_capacity, f->run_count, sizeof(*k->jumped))) return 0;
+        !grow((void **)&k->jumped, &k->jumped_capacity, f->run_count, sizeof(*k->jumped)) ||
+        !grow((void **)&k->polygons, &k->polygon_capacity, f->polygon_count, sizeof(*k->polygons)) ||
+        !grow((void **)&k->corner_next, &k->next_capacity, (size_t)f->polygon_count * 4, sizeof(*k->corner_next))) return 0;
+    if (f->polygon_count) memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
+    k->polygon_count = f->polygon_count;
     if (f->run_count) memset(k->jumped, 0, f->run_count);
     if (f->projection_count) memcpy(k->projections, f->projections, f->projection_count * sizeof(*k->projections));
     if (f->run_count) memcpy(k->runs, f->runs, f->run_count * sizeof(*k->runs));
@@ -727,6 +739,131 @@ static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsign
     return ENDS_OK;
 }
 
+/* The index of a kept frame's polygons by linked corner. */
+static uint64_t corner_key(unsigned c, unsigned age, int32_t projection) {
+    return (uint64_t)c << 40 | (uint64_t)age << 32 | (uint32_t)projection;
+}
+
+static size_t corner_slot(const kept_t *k, uint64_t key) {
+    size_t i = (size_t)(((key * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (k->corner_capacity - 1));
+    while (k->corner_heads[i] >= 0 && k->corner_keys[i] != key) i = (i + 1) & (k->corner_capacity - 1);
+    return i;
+}
+
+static int index_corners(kept_t *k) {
+    size_t n = 64, i;
+    unsigned c;
+    while (n < k->polygon_count * 8) n *= 2;
+    if (n > k->corner_capacity) {
+        uint64_t *keys = realloc(k->corner_keys, n * sizeof(*keys));
+        int32_t *heads;
+        if (!keys) return 0;
+        k->corner_keys = keys;
+        if (!(heads = realloc(k->corner_heads, n * sizeof(*heads)))) return 0;
+        k->corner_heads = heads; k->corner_capacity = n;
+    }
+    memset(k->corner_heads, 0xff, k->corner_capacity * sizeof(*k->corner_heads));
+    /* Backwards, so that each chain runs in drawing order. */
+    for (i = k->polygon_count; i-- > 0;)
+        for (c = 0; c < k->polygons[i].corners; ++c) {
+            const frame_identity_polygon_t *q = &k->polygons[i];
+            uint64_t key;
+            size_t slot;
+            k->corner_next[i * 4 + c] = -1;
+            if (q->state[c] != FRAME_IDENTITY_LINKED) continue;
+            key = corner_key(c, q->age[c], q->projection[c]);
+            slot = corner_slot(k, key);
+            k->corner_next[i * 4 + c] = k->corner_heads[slot];
+            k->corner_keys[slot] = key; k->corner_heads[slot] = (int32_t)i;
+        }
+    return 1;
+}
+
+/* Where a linked corner's projection stood a game frame earlier, by index in
+ * that frame's projections, or -1. */
+static int32_t pair_of(frame_blend_t *b, const frame_identity_polygon_t *q, unsigned c) {
+    const kept_t *at;
+    if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] > 1) return -1;
+    at = kept_at(b, q->age[c]);
+    if (!at->valid || q->projection[c] < 0 || (size_t)q->projection[c] >= at->projection_count) return -1;
+    return at->projections[q->projection[c]].previous;
+}
+
+/* The polygon the game drew a game frame earlier as this one: in the frame
+ * before, with the same command, whose linked corners are, corner by corner,
+ * the pairs of this one's. The game draws a model's polygons from the same
+ * list every frame, so that is the same polygon. -1 if there is none, or if
+ * several that differ where this one's corners are not linked. */
+static int32_t predecessor(frame_blend_t *b, const frame_identity_polygon_t *q) {
+    const kept_t *cur = kept_at(b, 0), *prev = kept_at(b, 1);
+    int32_t found = -1, at = -1, pair;
+    unsigned c, first = 4;
+    if (!prev->valid || prev->number + 1 != cur->number || !prev->corner_capacity) return -1;
+    for (c = 0; c < q->corners && first == 4; ++c) if (pair_of(b, q, c) >= 0) first = c;
+    if (first == 4) return -1;
+    pair = pair_of(b, q, first);
+    at = prev->corner_heads[corner_slot(prev, corner_key(first, q->age[first], pair))];
+    for (; at >= 0; at = prev->corner_next[(size_t)at * 4 + first]) {
+        const frame_identity_polygon_t *r = &prev->polygons[at];
+        unsigned same = r->opcode == q->opcode && r->corners == q->corners;
+        for (c = 0; c < q->corners && same; ++c) {
+            if (q->state[c] != FRAME_IDENTITY_LINKED) continue;
+            same = r->state[c] == FRAME_IDENTITY_LINKED && r->age[c] == q->age[c] && r->projection[c] == pair_of(b, q, c);
+        }
+        if (!same) continue;
+        if (found >= 0) {
+            for (c = 0; c < q->corners; ++c) if (prev->polygons[found].xy[c] != r->xy[c]) return -1;
+            continue;
+        }
+        found = at;
+    }
+    return found;
+}
+
+/* Corners the service held as ambiguous, several projections at their
+ * position that stood apart before (parts that cross on screen, a coiled
+ * chain drawn small), resolved by the same polygon a game frame earlier: its
+ * packet word there is where the vertex stood, so the projection at this
+ * position whose pair stood exactly there is the vertex. Several that did,
+ * all stood together then and now, and are one vertex. */
+static void resolve(frame_blend_t *b, kept_t *cur) {
+    size_t i, k;
+    unsigned c, n;
+    for (i = 0; i < cur->polygon_count; ++i) {
+        frame_identity_polygon_t *q = &cur->polygons[i];
+        const frame_identity_polygon_t *r;
+        const kept_t *at, *before;
+        int32_t from;
+        unsigned age = 2, ambiguous = 0;
+        for (c = 0; c < q->corners; ++c) {
+            if (q->state[c] == FRAME_IDENTITY_AMBIGUOUS) ++ambiguous;
+            else if (q->state[c] == FRAME_IDENTITY_LINKED) age = q->age[c];
+        }
+        if (!ambiguous || age > 1 || (from = predecessor(b, q)) < 0) continue;
+        r = &kept_at(b, 1)->polygons[from];
+        at = kept_at(b, age); before = kept_at(b, age + 1);
+        if (!at->valid || !before->valid || at->number != before->number + 1) continue;
+        for (c = 0; c < q->corners; ++c) {
+            int32_t chosen = -1;
+            if (q->state[c] != FRAME_IDENTITY_AMBIGUOUS) continue;
+            for (k = 0, n = 0; k < at->projection_count; ++k) {
+                const frame_identity_projection_t *p = &at->projections[k];
+                unsigned d;
+                if (p->sxy != q->xy[c] || p->previous < 0 || (size_t)p->previous >= before->projection_count ||
+                    before->projections[p->previous].sxy != r->xy[c]) continue;
+                ++n;
+                /* Prefer the run of the polygon's other corners. */
+                for (d = 0; d < q->corners; ++d)
+                    if (q->state[d] == FRAME_IDENTITY_LINKED && at->projections[q->projection[d]].run == p->run) chosen = (int32_t)k;
+                if (chosen < 0 && n == 1) chosen = (int32_t)k;
+            }
+            if (chosen < 0) continue;
+            q->state[c] = FRAME_IDENTITY_LINKED; q->age[c] = (uint8_t)age; q->projection[c] = chosen;
+            ++b->info.corners_resolved;
+        }
+    }
+}
+
 int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     kept_t *cur, *prev;
     frame_blend_info_t *info = &b->info;
@@ -757,11 +894,13 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     }
     info->reason = cur->reason;
     if (!motion_plan(b, cur, prev)) { cur->valid = 0; return 0; }
+    resolve(b, cur);
+    if (!index_corners(cur)) { cur->valid = 0; return 0; }
     /* Every position of a 3D surface is one vertex. A corner that cannot move
      * pins its position; so do projections that share a position now but
      * stood apart before, which are not one vertex. */
     for (i = 0; i < f->polygon_count; ++i) {
-        const frame_identity_polygon_t *q = &f->polygons[i];
+        const frame_identity_polygon_t *q = &cur->polygons[i];
         vertex_t v[4];
         unsigned good = 0, three_d = 0;
         for (c = 0; c < 4; ++c) b->corners[i][c] = -1;
@@ -789,7 +928,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     for (changed = 1; changed;) {
         changed = 0;
         for (i = 0; i < f->polygon_count; ++i) {
-            const frame_identity_polygon_t *q = &f->polygons[i];
+            const frame_identity_polygon_t *q = &cur->polygons[i];
             unsigned held = 0, far = 0;
             if (b->corners[i][0] < 0) continue;
             for (c = 0; c < q->corners; ++c) {
@@ -804,7 +943,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         }
     }
     for (i = 0; i < f->polygon_count; ++i) {
-        const frame_identity_polygon_t *q = &f->polygons[i];
+        const frame_identity_polygon_t *q = &cur->polygons[i];
         unsigned moving = 0;
         if (b->corners[i][0] < 0) continue;
         ++info->polygons_3d; info->corners_3d += q->corners;

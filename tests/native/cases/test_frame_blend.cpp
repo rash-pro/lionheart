@@ -229,6 +229,18 @@ LH_TEST(test_a_matrix_that_is_no_rotation) {
     }
 }
 
+LH_TEST(test_corners_that_meet_on_screen_are_told_apart_by_the_frame_before) {
+    // Two vertices of one part meet on one pixel for one game frame, having
+    // stood apart before: the service holds both corners there as ambiguous.
+    // The same polygons a game frame earlier say which vertex each corner is.
+    auto out = scenario(t, "cross");
+    LH_CONTAINS(out, "F3 reason=kept moving=7/7 polygons=2/2 held=0/0/0/0\nT3 turning=7 runs=1/0/0/0\nR3 resolved=2\n");
+    for (int f : {1, 2, 4, 5}) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=7/7 polygons=2/2");
+        LH_CHECK_MSG(out.find("R" + std::to_string(f) + " ") == std::string::npos, out);
+    }
+}
+
 // Recording changes nothing the game computes; replaying the recording gives
 // every picture the game showed, and every game frame drawn again with its
 // polygons at the end of their interval is that picture, pixel for pixel.
