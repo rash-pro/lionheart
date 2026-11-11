@@ -80,7 +80,11 @@ blended one game frame late, as a live presenter could run it without seeing the
 whose display start changed at VBlank `v` (shown from `v + 1`) is drawn at VBlank `v + j` with alpha
 `min(j, n) / n`, where `n` is the number of VBlanks between that change and the one before. When the next frame
 comes later than `n` the picture stays at alpha 1 (a hold); when it comes earlier, the rest of the way is skipped
-(a skip). A frame with nothing to blend from is shown as the game shows it. Game frames come every 2 to 6
+(a skip). Whether a corner moves depends on the identity frame its projection belongs to, not on the one that
+draws it: battle draws each game frame from the projections of the frame before, so a cut in a frame's projections
+shows a game frame later, and the frame whose projections cut still blends what it draws. Only a game frame that
+comes more than 8 VBlanks after the one before, or the first after the recording's state, is shown as the game
+shows it. Game frames come every 2 to 6
 VBlanks (fields about every 2, battle about every 4); each interval is the one measured before it, so a steady rate
 gives evenly spaced steps and a change of rate costs one hold or skip.
 
@@ -92,7 +96,8 @@ Measures, over `--from` to `--until`:
 - `Game rate`: for each game frame, the pixels where alpha 0 differs from the picture shown just before it change
   only at game frames; of the pixels that change across the game frame, their share, and their share of the
   screen. Without blending both shares would be those of every changing pixel.
-- `Resets` and their VBlanks; `Jumps`: frames whose paired projections moved a median of 32 pixels or more on
+- `Resets` and their VBlanks (of the frames whose projections have nothing to blend from; in battle the picture
+  cuts a game frame later); `Jumps`: frames whose paired projections moved a median of 32 pixels or more on
   screen, the measure frame identity's summary uses, held or blended.
 - `Stray`: blended corners more than two pixels off the line between their two ends where the GTE saturates
   nothing, which a straight move in view space never does: something drawn wrong.
@@ -101,7 +106,7 @@ Measures, over `--from` to `--until`:
   texture or palette was rewritten in the frame); 3D polygons held, by the first reason that applies (a frame
   without history, a corner no projection made, a projection without pair, an ambiguous or split corner, the
   blending rules above); polygons with no corner at a projection; sprites, lines, fills and transfers; what is
-  drawn after the display-start change; and frames not blended at all. Where alpha 0 draws a moving polygon or
+  drawn after the display-start change; and game frames not blended at all. Where alpha 0 draws a moving polygon or
   the background, the pixel is blamed on what the picture before had there (something held that left).
 - With `--causes`, `Holes`: pixels of the blended pictures left to the clear colour, or not drawn, where both game
   frames had 3D: geometry the newer frame no longer draws (gone past the screen edge in a fast camera move) or a

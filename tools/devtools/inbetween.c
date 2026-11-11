@@ -178,7 +178,9 @@ typedef struct {
     uint64_t split;          /* polygon packets cut between chunks, drawn as recorded */
     trace_t *trace;          /* or NULL */
     const frame_identity_frame_t *frame;
-    unsigned reason;         /* the blended frame's */
+    /* Why the frame blended has no history, and the one before it: a corner
+     * moves only if the frame its projection belongs to has one. */
+    unsigned reason, reason_before;
     int after;               /* past the display-start change that ends the frame */
 } blend_at_t;
 
@@ -255,19 +257,22 @@ static unsigned polygon_cause(const blend_at_t *at, uint64_t serial, unsigned op
     const frame_identity_frame_t *f = at->frame;
     const frame_identity_polygon_t *q;
     unsigned i, three_d = 0, cpu = 0, unpaired = 0, ambiguous = 0, history = 0;
+    unsigned reset = 0;
     if (!f || serial < f->first_polygon || serial - f->first_polygon >= f->polygon_count) return CAUSE_FLAT;
     q = &f->polygons[serial - f->first_polygon];
     for (i = 0; i < q->corners; ++i) {
         unsigned s = q->state[i];
         if (s == FRAME_IDENTITY_NO_PROJECTION) { ++cpu; continue; }
         ++three_d;
+        if (s == FRAME_IDENTITY_LINKED && (q->age[i] > 1 || (q->age[i] ? at->reason_before : at->reason) != FRAME_BLEND_KEPT))
+            ++reset;
         if (s == FRAME_IDENTITY_UNPAIRED) ++unpaired;
         else if (s == FRAME_IDENTITY_AMBIGUOUS || s == FRAME_IDENTITY_SPLIT) ++ambiguous;
         else if (s == FRAME_IDENTITY_NO_HISTORY || s == FRAME_IDENTITY_EXCLUDED_CORNER) ++history;
     }
     if (!three_d) return CAUSE_FLAT;
     if (mask == (1u << q->corners) - 1) return texture_rewritten(at->trace, w, op) ? CAUSE_MOVED_TEXTURE : CAUSE_MOVED;
-    if (history || at->reason != FRAME_BLEND_KEPT) return CAUSE_NO_HISTORY;
+    if (history || reset) return CAUSE_NO_HISTORY;
     if (cpu) return CAUSE_CPU_CORNER;
     if (unpaired) return CAUSE_UNPAIRED;
     if (ambiguous) return CAUSE_AMBIGUOUS;
@@ -543,6 +548,7 @@ int main(int argc, char **argv) {
     uint8_t *now, *before, *drawn, *start, *last;
     uint32_t *jumps, *smooth;
     uint64_t vblank = 0, frame_vblank = 0, previous_end = 0, interval = 0, last_step = 0, last_interval = 0;
+    unsigned reason = FRAME_BLEND_NO_HISTORY, reason_before = FRAME_BLEND_NO_HISTORY;
     int have_frame = 0, interval_ready = 0, have_before = 0;
     /* Totals over the window. */
     uint64_t pictures = 0, picture_wrong = 0, frames = 0, frames_checked = 0, frames_wrong = 0, wrong_pixels = 0;
@@ -612,6 +618,7 @@ int main(int argc, char **argv) {
         if (in.tag == FRAME_RECORD_SNAP) {
             if (size < 24 || !restore(&truth, p + 24, size - 24, le64(p + 8))) { fprintf(stderr, "Damaged GPU state\n"); return 2; }
             frame_blend_reset(blend);
+            reason = reason_before = FRAME_BLEND_NO_HISTORY;
             a.valid = b.valid = 0; j.chunks.size = j.mark = 0;
             have_frame = interval_ready = have_before = 0;
         } else if (in.tag == FRAME_RECORD_FRAM) {
@@ -619,6 +626,7 @@ int main(int argc, char **argv) {
             if (!frame_record_parse(&frame, p, size)) { fprintf(stderr, "Damaged identity frame\n"); return 2; }
             if (!frame_blend_add(blend, &frame.frame)) { fprintf(stderr, "Out of memory\n"); return 2; }
             info = frame_blend_info(blend);
+            reason_before = reason; reason = info->reason;
             /* The new game frame shows from here; it was drawn since the
              * display start changed before, the checkpoint that becomes a. */
             if (b.valid) {
@@ -635,7 +643,11 @@ int main(int argc, char **argv) {
             previous_end = frame.frame.vblank;
             have_frame = 1;
             frame_vblank = 0;
-            interval_ready = a.valid && info->reason == FRAME_BLEND_KEPT && interval > 0 && interval <= FRAME_IDENTITY_GAP;
+            /* A frame whose own projections cut or have no history still
+             * blends what it draws from the frame before: in battle that is
+             * all of its 3D, and a cut shows a game frame later. Each corner
+             * is held by the frame its projection belongs to. */
+            interval_ready = a.valid && interval > 0 && interval <= FRAME_IDENTITY_GAP;
             last_step = 0; last_interval = interval;
             if (frame.frame.vblank + 1 >= from && frame.frame.vblank < until) {
                 ++frames;
@@ -683,7 +695,7 @@ int main(int argc, char **argv) {
              * frame again is what takes the time. */
             if (first_of_frame && a.valid && vblank + FRAME_IDENTITY_GAP >= from) {
                 /* Alpha 1 must be the game's picture; alpha 0 against the one before. */
-                blend_at_t at = {blend, 1, 1, 0, 0, NULL, &frame.frame, frame_blend_info(blend)->reason, 0};
+                blend_at_t at = {blend, 1, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
                 size_t k, differ = 0;
                 /* cause_before keeps what drew the picture of the game frame before. */
                 if (causes) { uint8_t *t = cause_before; cause_before = cause_one; cause_one = t; }
@@ -700,7 +712,7 @@ int main(int argc, char **argv) {
                         snprintf(wrong_list + strlen(wrong_list), sizeof(wrong_list) - strlen(wrong_list), " alpha1@%" PRIu64 ":%zu", vblank, differ);
                 }
                 if (interval_ready && have_before) {
-                    blend_at_t zero = {blend, 0, 1, 0, 0, NULL, &frame.frame, FRAME_BLEND_KEPT, 0};
+                    blend_at_t zero = {blend, 0, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
                     size_t same = 1;
                     int probing = causes && probe && !have_probe && in_window && frame_vblank >= probe;
                     if (causes) { zero.trace = &trace; trace_area(&trace, truth.gpu); trace.describe = probing; }
@@ -763,7 +775,7 @@ int main(int argc, char **argv) {
                     /* One game frame late, on the interval measured between the
                      * last two: alpha reaches 1 when the next is due. */
                     uint64_t step = vblank - frame_vblank + 1;
-                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, 0, 0, NULL, NULL, FRAME_BLEND_KEPT, 0};
+                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, 0, 0, NULL, NULL, reason, reason_before, 0};
                     if (step > interval) ++holds;
                     last_step = step;
                     if (causes) { at.trace = &trace; at.frame = &frame.frame; trace_area(&trace, truth.gpu); trace.describe = 0; }

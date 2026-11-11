@@ -89,6 +89,27 @@ LH_TEST(test_a_cut_resets) {
     LH_CONTAINS(out, "F8 reason=kept moving=8/8");
 }
 
+LH_TEST(test_a_cut_shows_a_game_frame_later) {
+    // Drawn as battle draws, from the projections of the frame before: the
+    // frame whose projections cut still blends what it draws, and the next
+    // one, which draws the cut, holds everything.
+    auto out = scenario(t, "late");
+    LH_CONTAINS(out, "F3 reason=kept moving=8/8");
+    LH_CONTAINS(out, "F4 reason=cut moving=8/8 polygons=2/2");
+    LH_CONTAINS(out, "F5 reason=kept moving=0/8 polygons=0/2 held=0/0/0/8");
+    LH_CONTAINS(out, "F6 reason=kept moving=8/8");
+    auto record = t.temp() / "late.rec";
+    scenario(t, "late", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, "Alpha 1: game-frames=6 differ=0 pixels=0");
+    LH_CONTAINS(drawn, "renders=12 holds=0 skips=0");
+    LH_CONTAINS(drawn, "Resets: no-history=1 excluded=0 scene=0 cut=1");
+    LH_CONTAINS(drawn, "Stray: corners=0");
+    auto causes = lh::capture(drawn, R"(Causes \(share of the pixels that change only at game frames\):([^\n]*))");
+    LH_CHECK_MSG(causes.find(" 3d-no-history=") != std::string::npos, drawn);
+    for (auto other : {"frame-not-blended=", "3d-held-by-blending="}) LH_CHECK_MSG(causes.find(other) == std::string::npos, drawn);
+}
+
 LH_TEST(test_held_corners_do_not_move) {
     // C has a corner no projection made: it is held, and so are B's two
     // corners at its positions; A and B's other corners move.

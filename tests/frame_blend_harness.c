@@ -4,7 +4,7 @@
  *   F<number> reason=<why> moving=<corners>/<3D corners> polygons=<moving>/<3D> held=<service>/<projection>/<neighbour>/<reset>
  *   M<number> <polygon>=<mask of the corners that move at alpha 1/2>...
  *   E<number> ends=<exact|differ> shared=<kept|split>
- * Scenarios: move, held, touch, resets.
+ * Scenarios: move, held, touch, resets, late.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
 #include "frame_identity.h"
@@ -115,16 +115,21 @@ static void display(void) {
  * draw the HUD into the picture now shown, then let VBlanks pass. */
 /* With C 1, also C over B's right edge; with C 2, a triangle that only touches
  * A at one corner, its others never projected. */
-static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
+static void game_projections(int tx, int tz, int turn) {
     static const int qa[4][2] = {{0, 0}, {100, 0}, {0, 100}, {100, 100}}, qb[4][2] = {{100, 0}, {200, 0}, {100, 100}, {200, 100}};
     unsigned i;
-    draw_area(back);
-    gpu_gp0(g, 0x02202020u); gpu_gp0(g, (back * 256u) << 16); gpu_gp0(g, 240u << 16 | 320u);
     camera(tx, 0, tz, turn);
     for (i = 0; i < 4; ++i) drawn.a[i] = rtps(qa[i][0] - 100, qa[i][1] - 50, 0);
     /* B's own run: a different setup (R23 meets only z, which is 0 here), the same place. */
     camera(tx, 0, tz, turn); c->gte_ctrl[2] |= 1u << 16;
     for (i = 0; i < 4; ++i) drawn.b[i] = rtps(qb[i][0] - 100, qb[i][1] - 50, 0);
+}
+
+static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
+    unsigned i;
+    draw_area(back);
+    gpu_gp0(g, 0x02202020u); gpu_gp0(g, (back * 256u) << 16); gpu_gp0(g, 240u << 16 | 320u);
+    game_projections(tx, tz, turn);
     quad(0x0000c0u, drawn.a);
     quad(0x00c000u, drawn.b);
     if (with_c == 1) {
@@ -139,6 +144,31 @@ static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
     gpu_gp0(g, 0x60ffffffu); gpu_gp0(g, (8u << 16) | 8u); gpu_gp0(g, (8u << 16) | 40u);   /* HUD */
     back ^= 1;
     for (i = 0; i < vblanks; ++i) gpu_vblank(g);
+}
+
+/* As battle draws: each game frame draws, after the display start changed,
+ * the polygons the CPU projected in the frame before, then projects its own. */
+static void late_frame(int tx, int tz, int turn) {
+    static uint32_t a[4], b[4];
+    static int pending;
+    unsigned i;
+    draw_area(back);
+    gpu_gp0(g, 0x02202020u); gpu_gp0(g, (back * 256u) << 16); gpu_gp0(g, 240u << 16 | 320u);
+    if (pending) { quad(0x0000c0u, a); quad(0x00c000u, b); }
+    game_projections(tx, tz, turn);
+    memcpy(a, drawn.a, sizeof(a)); memcpy(b, drawn.b, sizeof(b));
+    pending = 1;
+    gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
+    back ^= 1;
+    for (i = 0; i < 2; ++i) gpu_vblank(g);
+}
+
+/* A cut in the projections shows a game frame later: the frame that cuts
+ * still draws, and blends, those of the frame before. */
+static void scenario_late(void) {
+    int f;
+    for (f = 0; f < 4; ++f) late_frame(f * 6, 900, 0);
+    for (f = 0; f < 4; ++f) late_frame(300 + f * 6, 2400, 900);
 }
 
 static void scenario_move(int with_c) {
@@ -178,6 +208,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "held")) scenario_move(1);
     else if (!strcmp(name, "touch")) scenario_move(2);
     else if (!strcmp(name, "resets")) scenario_resets();
+    else if (!strcmp(name, "late")) scenario_late();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }
