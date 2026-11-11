@@ -5,8 +5,8 @@
 //   at least 90% of the corners of drawn 3D polygons linked (interpolable),
 //   wrong pairs at most 0.01% of the pairs the oracle decides,
 //   wrong corner links at most 0.1% of the links it decides,
-// and the world map excluded: none of its projections paired for use. World
-// routes add the world map's own check (check_world).
+// and, on the routes that cross the world map, the world map's own check
+// (check_world), which it had to pass before it was published.
 #include "lh_test.h"
 #include <cstdlib>
 #include <sstream>
@@ -104,13 +104,21 @@ void check_scene(const std::string &route, const std::string &scene, const std::
 // provenance says another source and the camera another place, or where
 // provenance cannot decide and the camera says another place: at most 0.1% of
 // the decided. Another record of the same place (an edge both blocks keep) is
-// harmless. Linked corners whose pair neither can decide must stay rare.
+// harmless. Points with no record in the frame before (blocks coming into
+// view) are placed at their input less the step: right only where the step is
+// the camera's change. Linked corners whose pair neither can decide must stay
+// rare, and at least 90% of the corners of drawn 3D polygons must be linked.
 void check_world(const std::string &route, const std::string &service, const std::string &oracle) {
     auto s = fields(service, "Frame identity world points: "), o = fields(oracle, "T world ");
     const std::string where = route + " world: ";
     LH_CHECK_MSG(!s.empty() && !o.empty() && s["step-same"] > 0, where + "no world frames with a step");
     LH_CHECK_MSG(s["step-other"] == 0, where + std::to_string(s["step-other"]) + " frames whose step is not the camera's");
     LH_CHECK_MSG(s["place-other"] == 0, where + std::to_string(s["place-other"]) + " pairs at two places");
+    LH_CHECK_MSG(o["placed-wrong"] == 0, where + std::to_string(o["placed-wrong"]) + " points placed by a wrong step");
+    auto w = fields(service, "Frame identity world: ");
+    LH_CHECK_MSG(w["excluded"] == 0 && w["paired"] > 0, where + "the world map is not published");
+    LH_CHECK_MSG(w["linked"] >= 0.90 * w["corners3d"],
+                 where + "linked " + std::to_string(w["linked"]) + " of " + std::to_string(w["corners3d"]) + " 3D corners");
     double provenance = o["correct"] + o["wrong"] + o["equivalent"];
     double decided = provenance + o["place-correct"] + o["place-wrong"];
     double wrong = o["wrong"] - o["wrong-same-place"] + o["place-wrong"];
@@ -147,13 +155,6 @@ LH_GAME_TEST_P(test_routes_meet_the_identity_bars, routes) {
     std::string scene;
     while (scenes >> scene) check_scene(r.id, scene, on.out, text);
     if (r.world) check_world(r.id, on.out, text);
-    // The world map is measured but never published. (Corners drawn in its
-    // first frame from the battle frame before it keep that frame's links.)
-    auto world = fields(on.out, "Frame identity world: ");
-    if (!world.empty()) {
-        LH_EQ(world["paired"], 0.0);
-        LH_EQ(world["excluded"], world["frames"]);
-    }
 }
 
 // Native modules see the same GTE calls with the same values as the

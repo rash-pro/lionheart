@@ -28,7 +28,7 @@
 
 struct gpu;
 
-enum { FRAME_IDENTITY_HELD = -1, FRAME_IDENTITY_GAP = 8 };
+enum { FRAME_IDENTITY_HELD = -1, FRAME_IDENTITY_PLACED = -2, FRAME_IDENTITY_GAP = 8 };
 
 /* Frame flags. */
 #define FRAME_IDENTITY_RESET 1u    /* no history: the first frame, a gap, a reset or an overflow before */
@@ -62,7 +62,10 @@ typedef struct {
     uint32_t run;              /* its transform run in this frame */
     /* The vertex it is in the previous frame, by index in that frame's
      * projections, or FRAME_IDENTITY_HELD. Held in reset, excluded and
-     * overflowing frames. */
+     * overflowing frames. FRAME_IDENTITY_PLACED: a point the CPU moved by the
+     * frame's step (FRAME_IDENTITY_POINTS) that the frame before has no record
+     * of, a block coming into view; where it stood then is its input less the
+     * step, under the setup that the run's paired points had then. */
     int32_t previous;
     /* What the mechanism matched, also in excluded frames: for measurement
      * only, never for presentation. */

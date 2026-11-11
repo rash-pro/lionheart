@@ -15,6 +15,13 @@ typedef struct {
     frame_identity_setup_t *setups;
     uint8_t *jumped;             /* per run: it jumped, by the cut rule applied to it alone */
     struct motion *motions;      /* per run: how it moves from the frame before */
+    /* Points the CPU moved by a step (FRAME_IDENTITY_POINTS): the step from
+     * the frame before, as its pairs give it, and per run the setup of the
+     * frame before its paired points stood under, or -1. A placed point
+     * stood at its input less the step under that setup. */
+    int32_t step[3];
+    int stepped;
+    int32_t *placed;
     /* Its polygons, with the corners blending resolved, and an index of
      * them by linked corner: (corner, age, projection) to the first polygon,
      * then per polygon corner the next with the same. */
@@ -30,6 +37,7 @@ typedef struct {
     int32_t *corner_heads, *corner_next;
     size_t projection_count, run_count, setup_count, polygon_count;
     size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity, polygon_capacity;
+    size_t placed_capacity;
     size_t corner_capacity, next_capacity, colour_capacity, page_capacity, coloured_capacity, packet_capacity;
 } kept_t;
 
@@ -133,7 +141,7 @@ void frame_blend_destroy(frame_blend_t *b) {
     if (!b) return;
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
-        free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
+        free(b->kept[i].motions); free(b->kept[i].placed); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
     free(b->looks); free(b->before); free(b->hidden); free(b->fan); free(b->continued); free(b->forward[0]); free(b->forward[1]);
@@ -219,6 +227,39 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
     if (f->setup_count) memcpy(k->setups, f->setups, f->setup_count * sizeof(*k->setups));
     k->projection_count = f->projection_count; k->run_count = f->run_count; k->setup_count = f->setup_count;
     k->number = f->number; k->tag = f->tag; k->valid = 1;
+    return 1;
+}
+
+static int zero_translation(const kept_t *k, uint32_t run) {
+    const int32_t *t;
+    if (run >= k->run_count) return 0;
+    t = k->setups[k->runs[run].setup].translation;
+    return !t[0] && !t[1] && !t[2];
+}
+
+/* The step a frame's points moved by and, per run, the setup its paired
+ * points stood under a game frame earlier, for its placed points. Every pair
+ * of points under a zero translation outside runs paired whole is a step
+ * pair: they must agree. */
+static int place_plan(kept_t *cur, const kept_t *prev) {
+    size_t i;
+    cur->stepped = 0;
+    if (!grow((void **)&cur->placed, &cur->placed_capacity, cur->run_count, sizeof(*cur->placed))) return 0;
+    for (i = 0; i < cur->run_count; ++i) cur->placed[i] = -1;
+    if (!(cur->tag & FRAME_IDENTITY_POINTS) || !prev->valid || prev->number + 1 != cur->number) return 1;
+    for (i = 0; i < cur->projection_count; ++i) {
+        const frame_identity_projection_t *p = &cur->projections[i], *o;
+        int32_t d[3];
+        unsigned k;
+        if (p->previous < 0 || (size_t)p->previous >= prev->projection_count || !zero_translation(cur, p->run) ||
+            cur->runs[p->run].previous >= 0) continue;
+        o = &prev->projections[p->previous];
+        if (!zero_translation(prev, o->run)) { cur->stepped = 0; return 1; }
+        for (k = 0; k < 3; ++k) d[k] = p->input[k] - o->input[k];
+        if (!cur->stepped) { memcpy(cur->step, d, sizeof(d)); cur->stepped = 1; }
+        else if (memcmp(cur->step, d, sizeof(d))) { cur->stepped = 0; return 1; }
+        if (cur->placed[p->run] < 0) cur->placed[p->run] = (int32_t)prev->runs[o->run].setup;
+    }
     return 1;
 }
 
@@ -778,8 +819,10 @@ enum { ENDS_OK, ENDS_SERVICE, ENDS_PROJECTION, ENDS_RESET, ENDS_JUMP };
 /* The two ends of a linked corner, or why there are none to trust. */
 static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsigned c, vertex_t *v) {
     const kept_t *at, *before;
-    const frame_identity_projection_t *p, *o;
+    const frame_identity_projection_t *p;
     const frame_identity_setup_t *sp, *so;
+    int32_t oview[3];
+    uint32_t osxy;
     if (q->state[c] == FRAME_IDENTITY_NO_HISTORY || q->state[c] == FRAME_IDENTITY_EXCLUDED_CORNER) return ENDS_RESET;
     if (q->state[c] != FRAME_IDENTITY_LINKED) return ENDS_SERVICE;
     if (q->age[c] > 1) return ENDS_RESET;
@@ -788,22 +831,45 @@ static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsign
         return ENDS_RESET;
     if (q->projection[c] < 0 || (size_t)q->projection[c] >= at->projection_count) return ENDS_PROJECTION;
     p = &at->projections[q->projection[c]];
-    if (p->previous < 0 || (size_t)p->previous >= before->projection_count) return ENDS_PROJECTION;
-    if (p->run < at->run_count && at->jumped[p->run]) return ENDS_JUMP;
-    o = &before->projections[p->previous];
-    if (p->run >= at->run_count || o->run >= before->run_count) return ENDS_PROJECTION;
-    sp = &at->setups[at->runs[p->run].setup]; so = &before->setups[before->runs[o->run].setup];
+    if (p->run >= at->run_count) return ENDS_PROJECTION;
+    if (at->jumped[p->run] && p->previous >= 0) return ENDS_JUMP;
+    sp = &at->setups[at->runs[p->run].setup];
+    if (p->previous == FRAME_IDENTITY_PLACED) {
+        /* A point the frame before has no record of stood at its input less
+         * the step, under the setup the run's paired points stood under: what
+         * the GTE would have given for it then. */
+        int32_t r[9];
+        unsigned i, k;
+        if (!at->stepped || at->placed[p->run] < 0 || (size_t)at->placed[p->run] >= before->setup_count) return ENDS_PROJECTION;
+        so = &before->setups[at->placed[p->run]];
+        for (i = 0; i < 9; ++i) r[i] = i & 1 ? high(so->rotation[i / 2]) : low(so->rotation[i / 2]);
+        for (i = 0; i < 3; ++i) {
+            int64_t n = (int64_t)so->translation[i] * 4096;
+            for (k = 0; k < 3; ++k) n += (int64_t)r[i * 3 + k] * ((int64_t)p->input[k] - at->step[k]);
+            oview[i] = (int32_t)(uint32_t)(uint64_t)asr(n, so->shift);
+        }
+        osxy = frame_blend_project(oview, so->ofx, so->ofy, so->h, so->shift, so->lm);
+    } else {
+        const frame_identity_projection_t *o;
+        if (p->previous < 0 || (size_t)p->previous >= before->projection_count) return ENDS_PROJECTION;
+        o = &before->projections[p->previous];
+        if (o->run >= before->run_count) return ENDS_PROJECTION;
+        so = &before->setups[before->runs[o->run].setup];
+        /* Both ends must be what the GTE's equations give for them: a MAC
+         * that wrapped is not followed. */
+        if (frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return ENDS_PROJECTION;
+        memcpy(oview, o->view, sizeof(oview)); osxy = o->sxy;
+    }
     if (sp->shift != so->shift || sp->lm != so->lm) return ENDS_PROJECTION;
     /* At or behind the camera plane the GTE's division saturates and its
      * projection is no longer a perspective one: nothing between such an end
      * and the other is a place the vertex passed. */
-    if (near_plane(p->view, sp) || near_plane(o->view, so)) return ENDS_PROJECTION;
-    /* Both ends must be what the GTE's equations give for them: a MAC that
-     * wrapped, or a packet word other than the projection's, is not followed. */
-    if (q->xy[c] != p->sxy || frame_blend_project(p->view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm) != p->sxy ||
-        frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return ENDS_PROJECTION;
-    memcpy(v->view[0], o->view, sizeof(o->view)); memcpy(v->view[1], p->view, sizeof(p->view));
-    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = o->sxy;
+    if (near_plane(p->view, sp) || near_plane(oview, so)) return ENDS_PROJECTION;
+    /* Nor is a packet word other than the projection's. */
+    if (q->xy[c] != p->sxy || frame_blend_project(p->view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm) != p->sxy)
+        return ENDS_PROJECTION;
+    memcpy(v->view[0], oview, sizeof(oview)); memcpy(v->view[1], p->view, sizeof(p->view));
+    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = osxy;
     v->ofx[1] = sp->ofx; v->ofy[1] = sp->ofy; v->h[1] = sp->h; v->sxy[1] = p->sxy;
     v->shift = sp->shift; v->lm = sp->lm;
     v->pinned = 0;
@@ -871,7 +937,7 @@ static int32_t pair_of(frame_blend_t *b, const frame_identity_polygon_t *q, unsi
     if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] > 1) return -1;
     at = kept_at(b, q->age[c]);
     if (!at->valid || q->projection[c] < 0 || (size_t)q->projection[c] >= at->projection_count) return -1;
-    return at->projections[q->projection[c]].previous;
+    return at->projections[q->projection[c]].previous < 0 ? -1 : at->projections[q->projection[c]].previous;
 }
 
 /* The polygon the game drew a game frame earlier as this one: in the frame
@@ -1110,6 +1176,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         return 0;
     }
     attach_looks(b, cur, f);
+    if (!place_plan(cur, prev)) { cur->valid = 0; return 0; }
     if (f->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) cur->reason = FRAME_BLEND_NO_HISTORY;
     else if (f->flags & FRAME_IDENTITY_EXCLUDED) cur->reason = FRAME_BLEND_EXCLUDED;
     else if (!prev->valid || prev->number + 1 != f->number) cur->reason = FRAME_BLEND_NO_HISTORY;

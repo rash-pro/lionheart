@@ -1,6 +1,7 @@
 #include "frame_identity.h"
 #include "gpu.h"
 #include "gte.h"
+#include "gte_divide.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,7 +30,7 @@ typedef struct {
     size_t drawn_capacity, previous_capacity, sxy_capacity, key_capacity;
     table_t by_sxy, by_key;
     uint64_t first_projection, first_polygon;
-    uint32_t flags;
+    uint32_t flags, tag;
     int valid;                  /* ended and kept as history for the next frame */
 } segment_t;
 
@@ -434,6 +435,36 @@ static uint64_t point_key(const int16_t *input, const int32_t *step) {
     return key;
 }
 
+/* What the GTE gives for a point under a setup: its view-space position
+ * (TR * 4096 + RT * V) >> sf, and where RTPS puts that on screen. */
+static void place_then(const frame_identity_setup_t *s, const int16_t *input, const int32_t *step, int32_t view[3]) {
+    unsigned i, k;
+    for (i = 0; i < 3; ++i) {
+        int64_t n = (int64_t)s->translation[i] * 4096;
+        for (k = 0; k < 3; ++k) {
+            uint32_t w = s->rotation[(i * 3 + k) / 2];
+            int32_t r = (i * 3 + k) & 1 ? high(w) : low(w);
+            n += (int64_t)r * ((int64_t)input[k] - step[k]);
+        }
+        n = n >= 0 ? (int64_t)((uint64_t)n >> s->shift) : -1 - (int64_t)((uint64_t)(-1 - n) >> s->shift);
+        view[i] = (int32_t)(uint32_t)(uint64_t)n;
+    }
+}
+
+static int64_t clamp(int64_t n, int64_t lo, int64_t hi) { return n < lo ? lo : n > hi ? hi : n; }
+
+static int64_t shifted(int64_t n, unsigned bits) {
+    return n >= 0 ? (int64_t)((uint64_t)n >> bits) : -1 - (int64_t)((uint64_t)(-1 - n) >> bits);
+}
+
+static uint32_t screen_of(const int32_t view[3], const frame_identity_setup_t *s) {
+    int64_t ir1 = clamp(view[0], s->lm ? 0 : -32768, 32767), ir2 = clamp(view[1], s->lm ? 0 : -32768, 32767);
+    int64_t depth = s->shift ? view[2] : shifted(view[2], 12);
+    int64_t q = gte_divide(s->h & 65535u, (uint32_t)clamp(depth, 0, 65535));
+    int64_t x = clamp(shifted(q * ir1 + s->ofx, 16), -1024, 1023), y = clamp(shifted(q * ir2 + s->ofy, 16), -1024, 1023);
+    return ((uint32_t)x & 65535u) | (uint32_t)y << 16;
+}
+
 static int zero_translation(const segment_t *g, uint32_t run) {
     const int32_t *t = g->setups[g->runs[run].setup].translation;
     return !t[0] && !t[1] && !t[2];
@@ -539,6 +570,34 @@ static int pair_points(segment_t *cur, const segment_t *prev) {
             if (ok) p->match = first;
         }
     }
+    /* A point with no record in the frame before still has a place there: a
+     * block coming into view. Where the run's paired points all stood under one
+     * setup, so did it. */
+    for (run = 0; run < cur->run_count; ++run) {
+        const frame_identity_run_t *r = &cur->runs[run];
+        const frame_identity_setup_t *then = NULL;
+        int one = 1;
+        if (r->match >= 0 || !zero_translation(cur, (uint32_t)run)) continue;
+        for (i = r->first; i < (size_t)r->first + r->count && one; ++i) {
+            int32_t m = cur->projections[i].match;
+            const frame_identity_setup_t *s;
+            if (m < 0) continue;
+            s = &prev->setups[prev->runs[prev->projections[m].run].setup];
+            if (!then) then = s;
+            else if (memcmp(then, s, sizeof(*s))) one = 0;
+        }
+        if (!then || !one) continue;
+        for (i = r->first; i < (size_t)r->first + r->count; ++i) {
+            frame_identity_projection_t *p = &cur->projections[i];
+            int32_t view[3];
+            /* A place the frame before kept at two view positions stays held. */
+            if (p->match >= 0 || (point_key(p->input, s.step) >> 63) ||
+                table_get(points, point_key(p->input, s.step)) >= 0) continue;
+            p->match = FRAME_IDENTITY_PLACED;
+            place_then(then, p->input, s.step, view);
+            cur->previous_sxy[i] = screen_of(view, then);
+        }
+    }
     return 1;
 }
 
@@ -564,6 +623,39 @@ static size_t at_position(const segment_t *g, uint32_t xy, uint32_t limit, int32
     for (i = table_get(&g->by_sxy, xy); i >= 0 && (uint32_t)i < limit; i = g->same_sxy[i])
         if (n < CANDIDATES) out[n++] = i;
     return n;
+}
+
+/* Of the points at an ambiguous corner, all of them paired or placed points
+ * under a zero translation, the one whose place is at most half as far from
+ * the nearest of the polygon's linked corners as any other place there; -1 if
+ * none is. */
+static int32_t nearest_place(const segment_t *g, const frame_identity_polygon_t *q, unsigned c, uint8_t age,
+                             const int32_t *found, size_t count) {
+    int64_t best = INT64_MAX, second = INT64_MAX;
+    int32_t chosen = -1;
+    size_t k;
+    unsigned d, refs = 0;
+    for (k = 0; k < count; ++k) {
+        const frame_identity_projection_t *p = &g->projections[found[k]];
+        int64_t near = INT64_MAX;
+        if ((p->match < 0 && p->match != FRAME_IDENTITY_PLACED) || !zero_translation(g, p->run)) return -1;
+        for (d = 0, refs = 0; d < q->corners; ++d) {
+            const frame_identity_projection_t *r;
+            int64_t e = 0;
+            unsigned a;
+            if (d == c || q->age[d] != age || q->projection[d] < 0 ||
+                (q->state[d] != FRAME_IDENTITY_LINKED && q->state[d] != FRAME_IDENTITY_EXCLUDED_CORNER)) continue;
+            r = &g->projections[q->projection[d]];
+            for (a = 0; a < 3; ++a) e += ((int64_t)p->input[a] - r->input[a]) * ((int64_t)p->input[a] - r->input[a]);
+            if (e < near) near = e;
+            ++refs;
+        }
+        if (!refs) return -1;
+        if (chosen >= 0 && !memcmp(p->input, g->projections[chosen].input, sizeof(p->input))) continue;
+        if (near < best) { second = best; best = near; chosen = found[k]; }
+        else if (near < second) second = near;
+    }
+    return second == INT64_MAX || best * 4 < second ? chosen : -1;
 }
 
 static void associate(frame_identity_polygon_t *q, uint32_t drawn_at) {
@@ -603,7 +695,10 @@ static void associate(frame_identity_polygon_t *q, uint32_t drawn_at) {
         int32_t chosen = -1;
         size_t m = 0;
         state = FRAME_IDENTITY_LINKED;
-        for (k = 0; k < count[c]; ++k) if (g->projections[found[c][k]].match < 0) state = FRAME_IDENTITY_UNPAIRED;
+        for (k = 0; k < count[c]; ++k) {
+            int32_t matched = g->projections[found[c][k]].match;
+            if (matched < 0 && matched != FRAME_IDENTITY_PLACED) state = FRAME_IDENTITY_UNPAIRED;
+        }
         if (state == FRAME_IDENTITY_LINKED) {
             for (k = 0; k < count[c]; ++k) before[k] = g->previous_sxy[found[c][k]];
             if (within_pixel(before, count[c])) {
@@ -630,6 +725,25 @@ static void associate(frame_identity_polygon_t *q, uint32_t drawn_at) {
         } else if (g->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) state = FRAME_IDENTITY_NO_HISTORY;
         q->state[c] = state;
     }
+    /* A world drawn around a camera keeps some places twice on one ray from
+     * it, one copy farther than the other, and far away several places fall
+     * on one pixel: wherever points of more than one place stand at a corner,
+     * the polygon's other corners say which is its own, the place clearly
+     * nearest to them in the world, before the rule above. */
+    if (g->tag & FRAME_IDENTITY_POINTS)
+        for (c = 0; c < n; ++c) {
+            int32_t chosen;
+            size_t k;
+            int several = 0;
+            if (q->state[c] != FRAME_IDENTITY_AMBIGUOUS && q->state[c] != FRAME_IDENTITY_LINKED &&
+                q->state[c] != FRAME_IDENTITY_EXCLUDED_CORNER) continue;
+            for (k = 1; k < count[c]; ++k)
+                if (memcmp(g->projections[found[c][k]].input, g->projections[found[c][0]].input, sizeof(g->projections[0].input)))
+                    several = 1;
+            if (!several || (chosen = nearest_place(g, q, c, age, found[c], count[c])) < 0) continue;
+            q->age[c] = age; q->projection[c] = chosen;
+            q->state[c] = g->flags & FRAME_IDENTITY_EXCLUDED ? FRAME_IDENTITY_EXCLUDED_CORNER : FRAME_IDENTITY_LINKED;
+        }
 }
 
 static void end_frame(void) {
@@ -651,6 +765,7 @@ static void end_frame(void) {
         if (!table_reset(&cur->by_sxy, 0) || !table_reset(&cur->by_key, 0)) cur->by_sxy.capacity = cur->by_key.capacity = 0;
     }
     if (fresh) cur->flags |= FRAME_IDENTITY_RESET;
+    cur->tag = tag;
     if (tag & FRAME_IDENTITY_EXCLUDE) cur->flags |= FRAME_IDENTITY_EXCLUDED;
     s.step[0] = s.step[1] = s.step[2] = 0; s.step_votes = 0;
     if (!(cur->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) && !pair_runs(cur, prev))
@@ -664,7 +779,8 @@ static void end_frame(void) {
         frame_identity_projection_t *p = &cur->projections[i];
         if (cur->flags & FRAME_IDENTITY_OVERFLOW) p->match = FRAME_IDENTITY_HELD;
         if (!(cur->flags & FRAME_IDENTITY_OVERFLOW))
-            cur->previous_sxy[i] = p->match >= 0 ? prev->projections[p->match].sxy : 0;
+            cur->previous_sxy[i] = p->match >= 0 ? prev->projections[p->match].sxy :
+                                   p->match == FRAME_IDENTITY_PLACED ? cur->previous_sxy[i] : 0;
         p->previous = cur->flags & (FRAME_IDENTITY_EXCLUDED | FRAME_IDENTITY_OVERFLOW) ? FRAME_IDENTITY_HELD : p->match;
     }
     for (i = 0; i < cur->run_count; ++i)

@@ -83,7 +83,7 @@ uint32_t host_frame_identity_classify(void *context, const cpu_t *c) {
     (void)context;
     if (!c) return 0;
     mode = (uint32_t)c->ram[FF8_MODE] | (uint32_t)c->ram[FF8_MODE + 1] << 8;
-    return mode == 2 ? mode | FRAME_IDENTITY_POINTS | FRAME_IDENTITY_EXCLUDE : mode;
+    return mode == 2 ? mode | FRAME_IDENTITY_POINTS : mode;
 }
 
 static int32_t word(const uint8_t *p) {

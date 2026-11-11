@@ -124,9 +124,19 @@ LH_TEST(test_points_the_cpu_moves_pair_by_the_step_most_shapes_agree_on) {
                      "S step=8,0,-12 votes=73\n"
                      "R0 first=0 count=75 previous=- repeats=0\n"
                      "P0 run=0 previous=0 match=0\nP1 run=0 previous=1 match=1\n");
-    // A block that comes in has no place in the frame before.
+    // A block that comes in has no record in the frame before: it is placed,
+    // at its input less the step.
     LH_CONTAINS(out, "S step=5,1,3 votes=60\n");
-    LH_CONTAINS(out, "P74 run=0 previous=74 match=74\nP75 run=0 previous=- match=-\n");
+    LH_CONTAINS(out, "P74 run=0 previous=74 match=74\nP75 run=0 previous=placed match=placed\n");
+}
+
+LH_TEST(test_a_corner_where_places_share_a_pixel_takes_the_place_nearest_its_polygon) {
+    auto out = scenario(t, "copies");
+    // A copy of a triangle twice as far stands at its pixels; the copy is
+    // placed, the triangle pairs, and its polygon takes the triangle's corners.
+    LH_CONTAINS(out, "P75 run=0 previous=placed match=placed\n");
+    LH_CONTAINS(out, "P78 run=0 previous=78 match=78\n");
+    LH_CONTAINS(out, "Q0 L0:78 L0:79 L0:80\n");
 }
 
 LH_TEST(test_a_place_kept_at_two_view_positions_pairs_nothing) {

@@ -24,7 +24,9 @@ static void check(int ok, const char *what) {
 }
 
 static void print_index(int32_t i) {
-    if (i < 0) printf("-"); else printf("%d", (int)i);
+    if (i == FRAME_IDENTITY_PLACED) printf("placed");
+    else if (i < 0) printf("-");
+    else printf("%d", (int)i);
 }
 
 static void sink(void *context, const frame_identity_frame_t *f) {
@@ -293,6 +295,34 @@ static void scenario_points(void) {
     exclude = 0;
 }
 
+/* Some places twice on one ray from the camera: a triangle of the terrain
+ * and a copy of it twice as far, at the same pixels. The camera moves, the
+ * terrain pairs by the step, the copy (its points on no step) is placed, and
+ * the copy's points stood elsewhere a frame earlier: the triangle drawn at
+ * those pixels takes the terrain's own corners, nearest to its others. */
+static void copies(int ox, int oy, int oz, uint32_t out[3]) {
+    static const int tri[9] = {0, 0, 0, 100, 30, 0, 0, 60, 100};
+    int v[9], w[9];
+    unsigned k;
+    terrain(ox, oy, oz, 0, 25);
+    for (k = 0; k < 9; ++k) v[k] = tri[k] + (k % 3 == 0 ? ox + 2000 : k % 3 == 1 ? oy : oz);
+    for (k = 0; k < 9; ++k) w[k] = v[k] * 2;
+    camera(0, 0, 0);
+    rtpt(w, out);
+    rtpt(v, out);
+}
+
+static void scenario_copies(void) {
+    uint32_t a[3];
+    start_service(0);
+    exclude = 2 | FRAME_IDENTITY_POINTS;
+    copies(-250, 200, 1500, a); swap(); vblanks(2);
+    copies(-242, 200, 1488, a);
+    triangle(a[0], a[1], a[2]);
+    swap();
+    exclude = 0;
+}
+
 /* The recording entries leave the GTE exactly as the plain ones do. */
 static void scenario_entries(void) {
     static const uint32_t ops[] = {(1u << 19) | 0x01, 0x30, (1u << 19) | (1u << 10) | 0x30, 0x06, (1u << 19) | 0x12, 0x2d};
@@ -332,6 +362,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "shared")) scenario_shared();
     else if (!strcmp(name, "excluded")) scenario_excluded();
     else if (!strcmp(name, "points")) scenario_points();
+    else if (!strcmp(name, "copies")) scenario_copies();
     else if (!strcmp(name, "entries")) scenario_entries();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     frame_identity_stop();
