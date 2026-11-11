@@ -48,9 +48,10 @@ int host_gpu_resume(gpu_t *);
 void host_gpu_checkpoints(int on);
 void host_gpu_checkpoint(gpu_t *, int restore);
 /* Smooth motion draws a picture between game frames (on) or a whole one: above
- * the PlayStation's resolution, the software rasterizer only runs for the
- * pictures between where the renderer needs its pixels (feedback effects),
- * taking VRAM back from the GPU first. */
+ * the PlayStation's resolution, the software rasterizer only draws, in the
+ * pictures between, where the renderer reads its pixels (copies it draws
+ * natively, feedback textures) as the picture before did, taking VRAM back
+ * from the GPU first where it reads elsewhere. */
 void host_gpu_between(int on);
 void host_gpu_presentation(int scale_mode, int linear);
 const char *host_gpu_scaled_frames(void);

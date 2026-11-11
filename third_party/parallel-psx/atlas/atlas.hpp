@@ -230,10 +230,28 @@ public:
 	void set_status(unsigned block_x, unsigned block_y, StatusFlags flags)
 	{
 		info(block_x, block_y) = flags;
+		++generation;
+	}
+	// Host: a textured draw that reads the same texture as the one before, with
+	// no block's status or the render pass changed since, has nothing to
+	// synchronize: its checks are skipped (a host that draws the same commands
+	// many times turns this on).
+	void set_texture_memo(bool on)
+	{
+		memo.on = on;
+		memo.valid = false;
 	}
 
 private:
 	StatusFlags fb_info[NUM_BLOCKS_X * NUM_BLOCKS_Y];
+	uint64_t generation = 0;
+	struct
+	{
+		bool on = false, valid = false, palette = false;
+		Domain domain = Domain::Unscaled;
+		Rect texture, palette_rect;
+		uint64_t generation = 0;
+	} memo;
 	Renderer *listener = nullptr;
 
 	void read_domain(Domain domain, Stage stage, const Rect &rect);

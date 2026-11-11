@@ -99,3 +99,9 @@ again from one point. Device creation enables `VK_KHR_present_id`, `VK_KHR_prese
 `VK_EXT_present_mode_fifo_latest_ready` where the device has them, for a host that paces its own presents; a
 feature chain started by swapchain-maintenance1 now continues after it. These are original project changes
 under MIT.
+
+The atlas can skip the checks of a textured draw that reads the same texture and palette as the one before with
+no block's status and no render pass changed since, which would do nothing (`FBAtlas::set_texture_memo`,
+`Renderer::set_texture_memo`, the atlas' `generation` counting those changes). It is off unless a host turns it
+on; Lionheart turns it on with smooth motion, which draws the same commands many times. Original project changes
+under MIT.

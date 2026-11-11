@@ -453,6 +453,13 @@ public:
 		std::vector<StatusFlags> blocks;
 	};
 	void copy_vram(VramCopy &copy, const uint64_t tiles[2], bool restore);
+	// The same host draws the same textured primitives many times over: the atlas
+	// skips the checks of a texture read again with nothing changed since
+	// (FBAtlas::set_texture_memo).
+	void set_texture_memo(bool on)
+	{
+		atlas.set_texture_memo(on);
+	}
 
 	bool is_valid() const { return valid; }
 	unsigned get_scaling() const { return scaling; }

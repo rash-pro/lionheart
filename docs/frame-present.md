@@ -60,11 +60,19 @@ multisampled plane) and their atlas blocks, between the renderer's images and a 
 that is the back buffer and a few textures.
 
 The software rasterizer runs for the presentation GPU as for the guest's: the renderer takes some pixels from it
-(feedback textures, copies it draws natively), and at 1x it is the picture. Above 1x it is left out of the pictures
-between game frames, which nothing is kept from (`host_gpu_between`); when such a picture needs software pixels
-after all, VRAM is first taken back from the GPU, and the pictures after it keep the rasterizer on until one
-passes without needing them, so a stretch of effects does not wait on the GPU for every picture. Whole pictures,
-and therefore every checkpoint, are drawn exactly as before.
+(feedback textures, copies it draws natively), and at 1x it is the picture. Above 1x, in the pictures between game
+frames, which nothing is kept from (`host_gpu_between`), it draws only the primitives that meet the parts of VRAM
+(in blocks of 16x16 pixels) the picture before read software pixels from: the sources of copies the renderer
+draws natively, and the textures and palettes of the primitives it drew in software. The pictures of a game frame
+draw the same commands, so these are the parts this picture reads too; battle captures the picture it shows every
+frame, and of some 2,000 triangles a picture about 20 meet them. Where a picture reads a block it left out after
+all, VRAM is first taken back from the GPU. Whole pictures, and therefore every checkpoint, are drawn exactly as
+before.
+
+Each textured primitive asks the renderer's atlas whether the texture it reads was drawn to since, scanning every
+block of the texture page; drawing the same commands again, nearly all of these ask the same of an unchanged
+atlas. With smooth motion the atlas skips the scan of a texture read again with no block's status and no render
+pass changed since (`Renderer::set_texture_memo`).
 
 Fractions of a pixel: at an internal resolution above 1x, the corners blending moves are drawn where the GTE's
 equations put them before rounding (`frame_blend_fractions`), less the share of the game's own rounding at each

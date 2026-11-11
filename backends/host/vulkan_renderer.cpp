@@ -85,12 +85,34 @@ struct Backend {
     Renderer::VramCopy kept;
     uint64_t written[2]={0,0};
     // A picture between game frames is being drawn (host_gpu_between): above
-    // 1x the software rasterizer is left out, and the software VRAM is stale
-    // until taken back from the GPU (fresh()).
-    // A picture that needed software pixels keeps the rasterizer on for the
-    // next (demand, needed), so that a stretch of effects does not wait on the
-    // GPU for every picture.
-    bool between=false, stale=false, demand=false, needed=false;
+    // 1x the software rasterizer draws only into the parts of VRAM the picture
+    // before read software pixels from (read: what copies the renderer draws
+    // natively and the textures of primitives drawn in software read), which
+    // the pictures of a game frame share. What it left out is stale until
+    // taken back from the GPU (fresh()).
+    bool between=false;
+    // VRAM in blocks of 16x16 pixels: a palette next to the picture must not
+    // share a block with it.
+    struct Blocks {
+        uint64_t bits[32]={};
+        void clear() noexcept { std::fill(std::begin(bits),std::end(bits),uint64_t(0)); }
+        template<class F> static void each(unsigned x,unsigned y,unsigned w,unsigned h,F f) noexcept {
+            if (!w || !h) return;
+            if (w>=1024) { x=0; w=1024; }
+            if (h>=512) { y=0; h=512; }
+            for (unsigned by=(y&511)/16, rows=0; rows<(h+(y&511)%16+15)/16; ++rows, by=(by+1)%32)
+                for (unsigned bx=(x&1023)/16, cols=0; cols<(w+(x&1023)%16+15)/16; ++cols, bx=(bx+1)%64)
+                    f(by*64+bx);
+        }
+        void add(unsigned x,unsigned y,unsigned w,unsigned h) noexcept {
+            each(x,y,w,h,[&](unsigned bit) { bits[bit/64]|=uint64_t(1)<<(bit%64); });
+        }
+        bool meets(unsigned x,unsigned y,unsigned w,unsigned h) const noexcept {
+            bool found=false;
+            each(x,y,w,h,[&](unsigned bit) { found=found || (bits[bit/64]>>(bit%64)&1); });
+            return found;
+        }
+    } read, reading, stale;
     void touch(unsigned x,unsigned y,unsigned w,unsigned h) noexcept {
         if (!checkpoints || !w || !h) return;
         if (w>=1024) { x=0; w=1024; }
@@ -571,10 +593,11 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     for (auto &row:backend->dirty_rows) row.fill(0);
     backend->raster=gpu_raster_state(g);
     backend->effect_pages=0;
-    backend->stale=false;
+    backend->stale.clear();
     std::memset(backend->effect_counts,0,sizeof(backend->effect_counts));
     for (auto &row:backend->effect_pixels) row.fill(0);
     backend->checkpoints=checkpoints_wanted;
+    if (backend->renderer) backend->renderer->set_texture_memo(checkpoints_wanted);
     backend->upload({0,0,1024,512});
     // The GPU it now mirrors is where smooth motion keeps its point: all of
     // VRAM is kept again from here.
@@ -593,6 +616,7 @@ extern "C" void host_gpu_checkpoints(int on) {
     checkpoints_wanted=on!=0;
     if (!backend) return;
     backend->checkpoints=on!=0;
+    if (backend->renderer) backend->renderer->set_texture_memo(on!=0);
     if (!on) { backend->kept=Renderer::VramCopy(); backend->written[0]=backend->written[1]=0; }
 }
 extern "C" void host_gpu_checkpoint(gpu_t *g,int restore) try {
@@ -608,7 +632,7 @@ extern "C" void host_gpu_checkpoint(gpu_t *g,int restore) try {
         std::copy(std::begin(b.effect_counts),std::end(b.effect_counts),std::begin(b.kept_effect_counts));
         b.kept_effect_pages=b.effect_pages;
     } else {
-        backend->stale=false;
+        b.stale.clear();
         // What the drawing since left for upload lies in tiles put back now.
         b.dirty=false;
         for (auto &row:b.dirty_rows) row.fill(0);
@@ -654,18 +678,36 @@ void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
 }
 namespace {
 // Smooth motion's pictures between game frames leave the software rasterizer
-// out above 1x: nothing of them is kept, and the GPU draws them. Where the
-// renderer itself needs software pixels (feedback effects, copies it draws
-// natively), VRAM is first taken back from the GPU.
-bool soft_left_out(gpu_raster_t *s) {
-    return backend->checkpoints && backend->between && !native_pixels() && backend->raster==s;
+// out above 1x: nothing of them is kept, and the GPU draws them; except where
+// the renderer itself needs software pixels (feedback effects, copies it draws
+// natively), where the picture before needed them. A primitive drawn there
+// is drawn in software too; elsewhere what it covers turns stale.
+bool soft_left_out(gpu_raster_t *s,int x0,int y0,int x1,int y1) {
+    if (!backend->checkpoints || !backend->between || native_pixels() || backend->raster!=s) return false;
+    x0=std::max(x0,s->left); y0=std::max(y0,s->top); x1=std::min(x1,s->right); y1=std::min(y1,s->bottom);
+    if (x1<x0 || y1<y0) return true;
+    unsigned x=unsigned(x0), y=unsigned(y0), w=unsigned(x1-x0+1), h=unsigned(y1-y0+1);
+    if (backend->read.meets(x,y,w,h)) return false;
+    backend->stale.add(x,y,w,h);
+    return true;
 }
-void fresh(gpu_raster_t *s) {
-    backend->demand=true;
-    if (!backend->stale) return;
+// The renderer reads software pixels from a rectangle: where drawing was left
+// out there, VRAM is first taken back from the GPU.
+void fresh(gpu_raster_t *s,int x,int y,int w,int h) {
+    if (w<=0 || h<=0) return;
+    backend->reading.add(unsigned(x),unsigned(y),unsigned(w),unsigned(h));
+    if (!backend->stale.meets(unsigned(x),unsigned(y),unsigned(w),unsigned(h))) return;
     backend->begin(); backend->uploads();
     backend->renderer->copy_vram_to_cpu_synchronous({0,0,1024,512},s->vram);
-    backend->stale=false;
+    backend->stale.clear();
+}
+// A primitive drawn in software between game frames reads its texture page
+// and palette.
+void fresh_texture(gpu_raster_t *s,gpu_paint_t p) {
+    unsigned depth=(s->mode>>7)&3;
+    if (!p.textured || !backend->checkpoints || !backend->between || native_pixels()) return;
+    fresh(s,int(s->mode&15)*64,int((s->mode>>4)&1)*256,depth>=2 ? 256 : 256>>(2-depth),256);
+    if (depth<2) fresh(s,int(p.clut&63)*16,int((p.clut>>6)&511),depth ? 256 : 16,1);
 }
 }
 extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex_t b,gpu_vertex_t c,gpu_paint_t p) {
@@ -675,7 +717,7 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
 #endif
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
-        fresh(s);
+        fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
         dirty_bounds(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),
             std::max({a.x,b.x,c.x})-std::min({a.x,b.x,c.x})+1,
@@ -711,7 +753,8 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
         clipped(s,[&] { backend->renderer->draw_triangle(v); });
     }
     });
-    if (soft_left_out(s)) { backend->stale=true; return; }
+    if (soft_left_out(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),std::max({a.x,b.x,c.x}),std::max({a.y,b.y,c.y}))) return;
+    fresh_texture(s,p);
     { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
     if (!backend->failed && native_pixels()
 #ifdef FF8_PGXP
@@ -726,7 +769,7 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
     if (!active(s)) { __real_gpu_raster_rectangle(s,a,w,h,p); return; }
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
-        fresh(s);
+        fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
         dirty_bounds(s,a.x,a.y,w,h,true);
         return;
@@ -759,7 +802,8 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         clipped(s,[&] { backend->renderer->draw_quad(v); });
     }
     });
-    if (soft_left_out(s)) { backend->stale=true; return; }
+    if (soft_left_out(s,a.x,a.y,a.x+w-1,a.y+h-1)) return;
+    fresh_texture(s,p);
     { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
     if (!backend->failed && native_pixels()) dirty_bounds(s,a.x,a.y,w,h);
 }
@@ -779,7 +823,7 @@ extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex
         clipped(s,[&] { backend->renderer->draw_line(v); });
     }
     });
-    if (soft_left_out(s)) { backend->stale=true; return; }
+    if (soft_left_out(s,std::min(a.x,b.x)-1,std::min(a.y,b.y)-1,std::max(a.x,b.x)+1,std::max(a.y,b.y)+1)) return;
     { SoftTimer soft; __real_gpu_raster_line(s,a,b,p,skip); }
     if (!backend->failed && native_pixels())
         dirty_bounds(s,std::min(a.x,b.x)-1,std::min(a.y,b.y)-1,std::abs(b.x-a.x)+3,std::abs(b.y-a.y)+3);
@@ -844,7 +888,11 @@ extern "C" void __wrap_gpu_raster_copy(gpu_raster_t *s,int sx,int sy,int dx,int 
                                      {unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)});
     }
     });
-    if (native) fresh(s);
+    // A copy the renderer draws natively reads software pixels; one it draws
+    // itself leaves the software copy of stale pixels stale.
+    if (native) fresh(s,sx,sy,w,h);
+    else if (backend->stale.meets(unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)))
+        backend->stale.add(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h));
     { SoftTimer soft; __real_gpu_raster_copy(s,sx,sy,dx,dy,w,h); }
     if (effect || !(s->mask&2)) backend->effect(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h),effect);
     if (!backend->failed && native) for (int row=0;row<h;++row) backend->mark(unsigned(dx),unsigned(dy+row),unsigned(w));
@@ -1482,6 +1530,9 @@ extern "C" void host_gpu_paced(int on) {
 }
 extern "C" void host_gpu_between(int on) {
     if (!backend) return;
-    backend->needed=backend->demand; backend->demand=false;
-    backend->between=on && !backend->needed;
+    // What the picture just drawn read from the software rasterizer is what the
+    // next will.
+    backend->read=backend->reading;
+    backend->reading.clear();
+    backend->between=on!=0;
 }
