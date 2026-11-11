@@ -6,10 +6,12 @@
  *
  * A polygon corner the service linked to a projection moves from where that
  * projection's vertex stood in the frame before to where it stands now. Its
- * view-space position (the GTE's MAC1-3) is interpolated and projected again
- * with the GTE's own equations, so a vertex shared by several polygons gets
- * one position and nothing cracks, and the two ends of the interval are
- * exactly the screen positions the game computed. Everything else stays where
+ * view-space position (the GTE's MAC1-3) is interpolated, along its transform
+ * run's turn where the run is a rigid part that turns and on a straight line
+ * otherwise, and projected again with the GTE's own equations, so a vertex
+ * shared by several polygons gets one position and nothing cracks, and the
+ * two ends of the interval are exactly the screen positions the game
+ * computed. Colours follow the same polygon a game frame earlier. Everything else stays where
  * the newer frame has it: corners of polygons with any corner held, and every
  * corner at the position of such a corner on a polygon joined to it by shared
  * edges, so that a moving polygon never leaves a gap against a held one; and

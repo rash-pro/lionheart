@@ -192,3 +192,8 @@ still moves only at game frames, by what the measures find on the battle and fie
 - Parts that turn more than 150 degrees within one game frame, and parts whose matrix is no rotation, move on
   straight lines and shrink between the frames.
 - The game frame that shows a cut or a change of scene, and the first after a gap, are shown as the game shows them.
+  On the battle routes each cut holds one game frame and no more; the few frames the rule holds that are no cut
+  (a model filling the screen that spins half a turn in place, a fast pull-back of the camera) cannot be told
+  from a spell's run of cuts between close-ups by how far what is on the screen moves.
+- An edge of the screen can still show the background for an in-between where the newer frame culled a polygon
+  that is still partly on the screen, which is not drawn again for fear of a ghost.
