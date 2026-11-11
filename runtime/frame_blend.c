@@ -317,7 +317,9 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     else {
         if (!cut_measure(b, cur, prev, kept_at(b, 2), &info->move, &info->change)) { cur->valid = 0; return 0; }
         info->screen_move = screen_move(b, cur, prev);
-        cur->reason = info->move >= FRAME_BLEND_CUT_MOVE && info->change * 2 >= info->move ? FRAME_BLEND_CUT : FRAME_BLEND_KEPT;
+        cur->reason = (info->move >= FRAME_BLEND_CUT_MOVE ||
+                       (info->screen_move >= FRAME_BLEND_CUT_SCREEN && info->move >= FRAME_BLEND_CUT_NEAR)) &&
+                      info->change * 2 >= info->move ? FRAME_BLEND_CUT : FRAME_BLEND_KEPT;
     }
     info->reason = cur->reason;
     /* Every position of a 3D polygon is one vertex. A corner that cannot move

@@ -46,8 +46,11 @@ previous one, an overflow, a restored state), in excluded scenes (the world map)
   view space over its depth, and its change how far the centre stands from where the run's velocity one frame
   earlier would have put it (the whole move when there is no such velocity).
 - A frame is a cut when the vertex-weighted median move is at least 0.3 and the median change at least half of
-  that. A camera that swoops close past a model moves its runs by several times their depth each frame, but
-  steadily; a cut moves almost every run by a large part of its depth at once, and nothing before predicts it.
+  that. A cut to a distant shot moves runs little against their new depth but far on screen, so a frame
+  whose paired projections moved a median of 32 pixels or more on screen is a cut from a move of 0.1 on, with
+  the same rule for the change. A camera that swoops close past a model moves its runs by several times their
+  depth each frame, but steadily; a cut moves almost every run by a large part of its depth at once, and nothing
+  before predicts it.
   Erratic camera moves that large (a camera tumbling around a model) are held too.
 - A run that meets the same rule on its own is held alone: a model put somewhere else at once, such as an
   attacker placed in front of the camera, while the scene around it moves on.

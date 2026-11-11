@@ -42,8 +42,12 @@ enum { FRAME_BLEND_STRETCH = 8 };
  * FRAME_BLEND_CUT_MOVE / 1000 of their depth in view space, and at least half
  * of that move is not what the velocity they had one frame earlier predicts.
  * With few runs this also holds a single part that jumps that far, which is
- * the safe side. */
-enum { FRAME_BLEND_CUT_MOVE = 300 };
+ * the safe side. A cut to a distant shot moves runs little against the depth
+ * they have after it, but far on screen: a frame whose paired projections
+ * moved a median of FRAME_BLEND_CUT_SCREEN pixels or more is a cut from
+ * FRAME_BLEND_CUT_NEAR / 1000 of their depth on, under the same rule for the
+ * change. */
+enum { FRAME_BLEND_CUT_MOVE = 300, FRAME_BLEND_CUT_SCREEN = 32, FRAME_BLEND_CUT_NEAR = 100 };
 
 typedef struct {
     uint64_t number, vblank;      /* the identity frame's */
