@@ -1,7 +1,7 @@
 // Frame blending on a synthetic double-buffered scene (tests/frame_blend_harness.c):
 // two quads that share an edge, each its own transform run, moving and turning;
-// a triangle with a corner the GTE never projected; a cut, a scene change and a
-// gap. The harness records what it draws (runtime/frame_record.h), and the
+// a triangle with a corner the GTE never projected, over an edge or touching one
+// corner; a cut, a scene change and a gap. The harness records what it draws (runtime/frame_record.h), and the
 // offline renderer (tools/devtools/inbetween.c) draws it again.
 #include "lh_test.h"
 
@@ -113,6 +113,16 @@ LH_TEST(test_held_corners_do_not_move) {
     for (auto other : {"sprite=", "after-display-change=", "3d-unpaired=", "frame-not-blended="})
         LH_CHECK_MSG(causes.find(other) == std::string::npos, drawn);
     LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
+}
+
+LH_TEST(test_a_polygon_touching_one_corner_holds_nothing) {
+    // C shares no edge with A, only one position: A and B move whole, as
+    // without C. A gap can open only along a shared edge.
+    auto out = scenario(t, "touch");
+    for (int f = 1; f <= 7; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=8/11 polygons=2/3 held=3/0/0/0");
+        LH_CONTAINS(out, "M" + std::to_string(f) + " A=f B=f C=0");
+    }
 }
 
 // Recording changes nothing the game computes; replaying the recording gives

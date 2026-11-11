@@ -4,6 +4,7 @@
  *   F<number> reason=<why> moving=<corners>/<3D corners> polygons=<moving>/<3D> held=<service>/<projection>/<neighbour>/<reset>
  *   M<number> <polygon>=<mask of the corners that move at alpha 1/2>...
  *   E<number> ends=<exact|differ> shared=<kept|split>
+ * Scenarios: move, held, touch, resets.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
 #include "frame_identity.h"
@@ -112,6 +113,8 @@ static void display(void) {
 
 /* One game frame: clear the back buffer, project and draw the scene, show it,
  * draw the HUD into the picture now shown, then let VBlanks pass. */
+/* With C 1, also C over B's right edge; with C 2, a triangle that only touches
+ * A at one corner, its others never projected. */
 static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
     static const int qa[4][2] = {{0, 0}, {100, 0}, {0, 100}, {100, 100}}, qb[4][2] = {{100, 0}, {200, 0}, {100, 100}, {200, 100}};
     unsigned i;
@@ -124,9 +127,12 @@ static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
     for (i = 0; i < 4; ++i) drawn.b[i] = rtps(qb[i][0] - 100, qb[i][1] - 50, 0);
     quad(0x0000c0u, drawn.a);
     quad(0x00c000u, drawn.b);
-    if (with_c) {
+    if (with_c == 1) {
         gpu_gp0(g, 0x20c00000u);
         gpu_gp0(g, drawn.b[1]); gpu_gp0(g, drawn.b[3]); gpu_gp0(g, (200u << 16) | 300u);
+    } else if (with_c == 2) {
+        gpu_gp0(g, 0x20c0c000u);
+        gpu_gp0(g, drawn.a[0]); gpu_gp0(g, (200u << 16) | 10u); gpu_gp0(g, (220u << 16) | 60u);
     }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     draw_area(back);
@@ -170,6 +176,7 @@ int main(int argc, char **argv) {
     if (record && !frame_record_start(g, record, 1, 0)) { fprintf(stderr, "cannot record to %s\n", record); return 2; }
     if (!strcmp(name, "move")) scenario_move(0);
     else if (!strcmp(name, "held")) scenario_move(1);
+    else if (!strcmp(name, "touch")) scenario_move(2);
     else if (!strcmp(name, "resets")) scenario_resets();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);

@@ -11,9 +11,10 @@
  * one position and nothing cracks, and the two ends of the interval are
  * exactly the screen positions the game computed. Everything else stays where
  * the newer frame has it: corners of polygons with any corner held, and every
- * corner at the position of such a corner, so that a moving polygon never
- * leaves a gap against a held one; and whole polygons that would otherwise
- * stretch between held corners and corners that move far.
+ * corner at the position of such a corner on a polygon joined to it by shared
+ * edges, so that a moving polygon never leaves a gap against a held one; and
+ * whole polygons that would otherwise stretch between held corners and
+ * corners that move far.
  *
  * A frame gives no history to blend from after the service's own resets
  * (the first frame, a gap, an overflow, a restored state), in excluded

@@ -38,9 +38,11 @@ struct frame_blend {
     vertex_t *vertices;
     size_t vertex_count, vertex_capacity;
     /* Packet position to vertex, open addressing. */
-    uint32_t *keys;
+    uint64_t *keys;
     int32_t *slots;
     size_t table_capacity;
+    int32_t *surfaces;           /* per polygon: union-find over shared edges */
+    size_t surface_capacity;
     double *moves;               /* four arrays of one value per run */
     uint64_t histogram[2048];
     size_t move_capacity;
@@ -64,7 +66,7 @@ void frame_blend_destroy(frame_blend_t *b) {
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
     }
-    free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves);
+    free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
 
@@ -217,8 +219,8 @@ static uint32_t screen_move(frame_blend_t *b, const kept_t *cur, const kept_t *p
     return 0;
 }
 
-static size_t table_slot(const frame_blend_t *b, uint32_t key) {
-    size_t i = (size_t)((key * UINT32_C(2654435761)) & (b->table_capacity - 1));
+static size_t table_slot(const frame_blend_t *b, uint64_t key) {
+    size_t i = (size_t)(((key * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (b->table_capacity - 1));
     while (b->slots[i] >= 0 && b->keys[i] != key) i = (i + 1) & (b->table_capacity - 1);
     return i;
 }
@@ -227,7 +229,7 @@ static int table_reset(frame_blend_t *b, size_t entries) {
     size_t n = 64;
     while (n < entries * 2) n *= 2;
     if (n > b->table_capacity) {
-        uint32_t *keys = realloc(b->keys, n * sizeof(*keys));
+        uint64_t *keys = realloc(b->keys, n * sizeof(*keys));
         int32_t *slots;
         if (!keys) return 0;
         b->keys = keys;
@@ -238,17 +240,60 @@ static int table_reset(frame_blend_t *b, size_t entries) {
     return 1;
 }
 
-/* The vertex at a packet position, made if there is none. */
-static int32_t vertex_at(frame_blend_t *b, uint32_t xy) {
-    size_t i = table_slot(b, xy);
+/* The vertex at a packet position of a surface, made if there is none. */
+static int32_t vertex_at(frame_blend_t *b, uint32_t xy, uint32_t surface) {
+    uint64_t key = xy | (uint64_t)surface << 32;
+    size_t i = table_slot(b, key);
     if (b->slots[i] >= 0) return b->slots[i];
     if (!grow((void **)&b->vertices, &b->vertex_capacity, b->vertex_count + 1, sizeof(*b->vertices))) return -1;
     memset(&b->vertices[b->vertex_count], 0, sizeof(*b->vertices));
     b->vertices[b->vertex_count].pinned = -1; /* not yet given ends */
-    b->keys[i] = xy; b->slots[i] = (int32_t)b->vertex_count;
+    b->keys[i] = key; b->slots[i] = (int32_t)b->vertex_count;
     return (int32_t)b->vertex_count++;
 }
 
+
+static uint32_t surface_of(int32_t *surfaces, uint32_t i) {
+    uint32_t root = i, next;
+    while ((uint32_t)surfaces[root] != root) root = (uint32_t)surfaces[root];
+    while ((uint32_t)surfaces[i] != root) { next = (uint32_t)surfaces[i]; surfaces[i] = (int32_t)root; i = next; }
+    return root;
+}
+
+static int is_3d(const frame_identity_polygon_t *q) {
+    unsigned c;
+    for (c = 0; c < q->corners; ++c) if (q->state[c] != FRAME_IDENTITY_NO_PROJECTION) return 1;
+    return 0;
+}
+
+/* 3D polygons that share an edge, both its ends at the same packet positions,
+ * are one surface. Only along an edge can a moving polygon open a gap against
+ * a held one; two surfaces that meet at a single position, often by chance
+ * (an effect's corner on a vertex of the floor), do not hold each other. */
+static int surfaces(frame_blend_t *b, const frame_identity_frame_t *f) {
+    static const unsigned triangle[3][2] = {{0, 1}, {1, 2}, {2, 0}}, quad[4][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}};
+    uint32_t i, e;
+    if (!grow((void **)&b->surfaces, &b->surface_capacity, f->polygon_count, sizeof(*b->surfaces)) ||
+        !table_reset(b, (size_t)f->polygon_count * 4)) return 0;
+    for (i = 0; i < f->polygon_count; ++i) b->surfaces[i] = (int32_t)i;
+    for (i = 0; i < f->polygon_count; ++i) {
+        const frame_identity_polygon_t *q = &f->polygons[i];
+        if (!is_3d(q)) continue;
+        for (e = 0; e < q->corners; ++e) {
+            uint32_t p = q->xy[q->corners == 4 ? quad[e][0] : triangle[e][0]], r = q->xy[q->corners == 4 ? quad[e][1] : triangle[e][1]];
+            uint64_t key = p < r ? (uint64_t)p << 32 | r : (uint64_t)r << 32 | p;
+            size_t slot;
+            if (p == r) continue;
+            slot = table_slot(b, key);
+            if (b->slots[slot] < 0) { b->keys[slot] = key; b->slots[slot] = (int32_t)i; }
+            else {
+                uint32_t x = surface_of(b->surfaces, i), y = surface_of(b->surfaces, (uint32_t)b->slots[slot]);
+                if (x != y) b->surfaces[x > y ? x : y] = (int32_t)(x < y ? x : y);
+            }
+        }
+    }
+    return table_reset(b, (size_t)f->polygon_count * 4);
+}
 
 static int near_plane(const int32_t view[3], const frame_identity_setup_t *s) {
     int64_t depth = saturate(s->shift ? view[2] : asr(view[2], 12), 0, 65535);
@@ -306,7 +351,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     b->vertex_count = 0;
     if (!keep(cur, f) || !grow((void **)&b->corners, &b->corner_capacity, f->polygon_count, sizeof(*b->corners)) ||
         !grow((void **)&b->codes, &b->code_capacity, f->polygon_count, sizeof(*b->codes)) ||
-        !table_reset(b, (size_t)f->polygon_count * 4)) {
+        !surfaces(b, f)) {
         cur->valid = 0;
         return 0;
     }
@@ -322,7 +367,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
                       info->change * 2 >= info->move ? FRAME_BLEND_CUT : FRAME_BLEND_KEPT;
     }
     info->reason = cur->reason;
-    /* Every position of a 3D polygon is one vertex. A corner that cannot move
+    /* Every position of a 3D surface is one vertex. A corner that cannot move
      * pins its position; so do projections that share a position now but
      * stood apart before, which are not one vertex. */
     for (i = 0; i < f->polygon_count; ++i) {
@@ -337,7 +382,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         }
         if (!three_d) continue;
         for (c = 0; c < q->corners; ++c) {
-            int32_t at = vertex_at(b, q->xy[c]);
+            int32_t at = vertex_at(b, q->xy[c], surface_of(b->surfaces, i));
             vertex_t *w;
             if (at < 0) { cur->valid = 0; return 0; }
             b->corners[i][c] = at;
@@ -349,7 +394,8 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         }
     }
     /* A polygon with corners held and corners that move far would stretch:
-     * hold it whole, and with it every position it shares, until none is left. */
+     * hold it whole, and with it every position of its surface it shares, until
+     * none is left. */
     for (changed = 1; changed;) {
         changed = 0;
         for (i = 0; i < f->polygon_count; ++i) {

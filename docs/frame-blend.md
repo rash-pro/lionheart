@@ -31,11 +31,15 @@ at a fraction alpha between that frame and the one before:
   projections of the frame before, paired with the frame before that.
 - A corner is followed only if both ends are what the GTE's equations give for them, with the same sf and lm,
   and neither end lies at or behind the camera plane, where the GTE's division saturates (SZ3 at most H/2).
+- 3D polygons that share an edge (both its ends at the same packet positions) form one surface, and a position
+  is one vertex within a surface. A gap can open only along a shared edge; two surfaces that meet at a single
+  position, often by chance (an effect's corner on a vertex of the floor), do not hold each other.
 - Everything else stays where the newer frame has it: corners the service holds, every corner of a polygon with
-  a held corner, every corner at the position of such a corner, and every corner at a position where projections
-  that stand together now stood more than a pixel apart before.
+  a held corner, every corner of its surface at the position of such a corner, and every corner at a position
+  where projections that stand together now stood more than a pixel apart before.
 - A polygon whose held corners would stay while its other corners move more than 8 pixels over the interval is
-  held whole, and with it every position it shares, until no such polygon is left: it would stretch visibly.
+  held whole, and with it every position of its surface it shares, until no such polygon is left: it would
+  stretch visibly.
 - Drawing order is the newer frame's: the game's ordering table is replayed as it was.
 
 A frame gives nothing to blend from after the service's own resets (the first frame, more than 8 VBlanks since the
