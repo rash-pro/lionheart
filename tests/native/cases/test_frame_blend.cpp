@@ -157,6 +157,22 @@ LH_TEST(test_a_polygon_touching_one_corner_holds_nothing) {
     }
 }
 
+LH_TEST(test_a_stretched_surface_is_held_but_not_by_what_is_not_drawn) {
+    // Sliding far with C held over B's edge: B would stretch between C's
+    // corners and its own, so B is held, and A with it across their edge.
+    auto slide = scenario(t, "slide");
+    for (int f = 1; f <= 7; ++f) LH_CONTAINS(slide, "M" + std::to_string(f) + " A=0 B=0 C=0");
+    // The same with C's last corner clamped far below the screen: the GPU
+    // draws none of C, so nothing is held for it, however far A and B move.
+    for (auto name : {"slide-hidden", "hidden"}) {
+        auto out = scenario(t, name);
+        for (int f = 1; f <= 7; ++f) {
+            LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=8/11 polygons=2/3 held=3/0/0/0");
+            LH_CONTAINS(out, "M" + std::to_string(f) + " A=f B=f C=0");
+        }
+    }
+}
+
 LH_TEST(test_a_part_that_turns_keeps_its_size) {
     // A square turning a quarter turn each game frame about the line of
     // sight: between the frames it is the same square, turned part of the way.

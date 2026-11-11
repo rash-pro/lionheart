@@ -66,7 +66,9 @@ at a fraction alpha between that frame and the one before:
   where projections that stand together now stood more than a pixel apart before.
 - A polygon whose held corners would stay while its other corners move more than 8 pixels over the interval is
   held whole, and with it every position of its surface it shares, until no such polygon is left: it would
-  stretch visibly.
+  stretch visibly. A polygon the GPU draws none of (each of its triangles spans 1024 pixels or more across or
+  512 or more down, as one with a corner clamped far off screen does) holds nothing and is drawn as recorded:
+  otherwise its clamped corner held its neighbours and, through this rule, a whole floor.
 - Drawing order is the newer frame's: the game's ordering table is replayed as it was.
 
 A frame gives nothing to blend from after the service's own resets (the first frame, more than 8 VBlanks since the

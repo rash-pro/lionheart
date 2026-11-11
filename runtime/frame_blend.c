@@ -68,6 +68,8 @@ struct frame_blend {
     uint64_t *keys;
     int32_t *slots;
     size_t table_capacity;
+    uint8_t *hidden;             /* per polygon: the GPU draws none of it */
+    size_t hidden_capacity;
     int32_t *surfaces;           /* per polygon: union-find over shared edges */
     size_t surface_capacity;
     double *moves;               /* four arrays of one value per run */
@@ -102,7 +104,7 @@ void frame_blend_destroy(frame_blend_t *b) {
         free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
-    free(b->looks); free(b->before);
+    free(b->looks); free(b->before); free(b->hidden);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
@@ -927,6 +929,22 @@ static void attach_looks(frame_blend_t *b, kept_t *k, const frame_identity_frame
     b->look_count = kept;
 }
 
+/* Whether the GPU draws any of a polygon: it skips a triangle whose corners
+ * lie 1024 or more apart across or 512 or more down, as polygons with a
+ * corner far off screen, where the GTE clamps it, are. */
+static int drawn(const frame_identity_polygon_t *q) {
+    unsigned t, k;
+    for (t = 0; t + 3 <= q->corners; ++t) {
+        int l = 1 << 20, r = -(1 << 20), top = 1 << 20, bottom = -(1 << 20);
+        for (k = t; k < t + 3; ++k) {
+            int x = (int)(q->xy[k] & 1023u) - (int)(q->xy[k] & 1024u), y = (int)((q->xy[k] >> 16) & 1023u) - (int)((q->xy[k] >> 16) & 1024u);
+            l = x < l ? x : l; r = x > r ? x : r; top = y < top ? y : top; bottom = y > bottom ? y : bottom;
+        }
+        if (r - l < 1024 && bottom - top < 512) return 1;
+    }
+    return 0;
+}
+
 int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     kept_t *cur, *prev;
     frame_blend_info_t *info = &b->info;
@@ -940,6 +958,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     b->vertex_count = 0;
     if (!keep(cur, f) || !grow((void **)&b->corners, &b->corner_capacity, f->polygon_count, sizeof(*b->corners)) ||
         !grow((void **)&b->codes, &b->code_capacity, f->polygon_count, sizeof(*b->codes)) ||
+        !grow((void **)&b->hidden, &b->hidden_capacity, f->polygon_count, sizeof(*b->hidden)) ||
         !surfaces(b, f)) {
         cur->valid = 0;
         return 0;
@@ -984,14 +1003,19 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
             b->codes[i][c] = (uint8_t)ends(b, q, c, &v[c]);
             if (b->codes[i][c] == ENDS_OK) ++good;
         }
+        b->hidden[i] = 0;
         if (!three_d) continue;
+        /* What the GPU does not draw holds nothing: a polygon with a corner
+         * clamped far off screen would otherwise hold its neighbours, and
+         * through them, by the rule below, a whole floor. */
+        b->hidden[i] = (uint8_t)!drawn(q);
         for (c = 0; c < q->corners; ++c) {
             int32_t at = vertex_at(b, q->xy[c], surface_of(b->surfaces, i));
             vertex_t *w;
             if (at < 0) { cur->valid = 0; return 0; }
             b->corners[i][c] = at;
             w = &b->vertices[at];
-            if (good != q->corners) w->pinned = 1;
+            if (good != q->corners) { if (!b->hidden[i]) w->pinned = 1; }
             else if (w->pinned < 0) *w = v[c];
             else if (!w->pinned && (abs(low(w->sxy[0]) - low(v[c].sxy[0])) > 1 ||
                                     abs(high(w->sxy[0]) - high(v[c].sxy[0])) > 1)) w->pinned = 1;
@@ -1005,7 +1029,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         for (i = 0; i < f->polygon_count; ++i) {
             const frame_identity_polygon_t *q = &cur->polygons[i];
             unsigned held = 0, far = 0;
-            if (b->corners[i][0] < 0) continue;
+            if (b->corners[i][0] < 0 || b->hidden[i]) continue;
             for (c = 0; c < q->corners; ++c) {
                 const vertex_t *w = &b->vertices[b->corners[i][c]];
                 if (w->pinned) ++held;
@@ -1023,7 +1047,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         if (b->corners[i][0] < 0) continue;
         ++info->polygons_3d; info->corners_3d += q->corners;
         for (c = 0; c < q->corners; ++c) {
-            if (!b->vertices[b->corners[i][c]].pinned) { ++moving; continue; }
+            if (!b->vertices[b->corners[i][c]].pinned && !b->hidden[i]) { ++moving; continue; }
             switch (b->codes[i][c]) {
             case ENDS_OK: ++info->held_neighbour; break;
             case ENDS_SERVICE: ++info->held_service; break;
@@ -1035,7 +1059,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         info->corners_moving += moving;
         if (moving == q->corners) ++info->polygons_moving;
         for (c = 0; c < q->corners; ++c)
-            if (!b->vertices[b->corners[i][c]].pinned && b->vertices[b->corners[i][c]].run >= 0) ++info->corners_turning;
+            if (!b->vertices[b->corners[i][c]].pinned && !b->hidden[i] && b->vertices[b->corners[i][c]].run >= 0) ++info->corners_turning;
     }
     info->polygon_count = f->polygon_count;
     return 1;
@@ -1071,7 +1095,7 @@ unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t n
     unsigned c, mask = 0, corners = 0;
     int32_t at[4][3];
     const vertex_t *vs[4];
-    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num > den) return 0;
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num > den || b->hidden[i]) return 0;
     for (c = 0; c < 4; ++c) {
         const vertex_t *v;
         int32_t *view = at[c];

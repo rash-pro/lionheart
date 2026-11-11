@@ -8,7 +8,8 @@
  *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
  *   R<number> resolved=<ambiguous corners resolved by the polygon drawn a game frame earlier>
  *   C<number> <polygon>=<mask of the corners whose colour changes>[/<first corner's colour at alpha 0, 1/2 and 1>]...
- * Scenarios: move, held, touch, resets, late; parts that turn: turn, chain,
+ * Scenarios: move, held, touch, resets, late; a polygon the GPU skips:
+ * hidden; sliding far, with C held or skipped: slide, slide-hidden; parts that turn: turn, chain,
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
  * on screen: cross; colours that change: fade. With "straight" after the name, every corner moves on a
  * straight line.
@@ -208,6 +209,10 @@ static void game_frame(int tx, int tz, int turn, int with_c, unsigned vblanks) {
     quad(0x00c000u, drawn.b);
     if (with_c == 1) {
         triangle(0xc00000u, drawn.b[1], drawn.b[3], (200u << 16) | 300u);
+    } else if (with_c == 3) {
+        /* C's third corner far below the screen, where the GTE clamps: the
+         * GPU draws none of it. */
+        triangle(0xc00000u, drawn.b[1], drawn.b[3], (1023u << 16) | 300u);
     } else if (with_c == 2) {
         triangle(0xc0c000u, drawn.a[0], (200u << 16) | 10u, (220u << 16) | 60u);
     }
@@ -246,6 +251,12 @@ static void scenario_late(void) {
 static void scenario_move(int with_c) {
     int f;
     for (f = 0; f < 8; ++f) game_frame(-40 + f * 6, 900 - f * 15, f * 40, with_c, 2);
+}
+
+/* The same, sliding far each game frame. */
+static void scenario_slide(int with_c) {
+    int f;
+    for (f = 0; f < 8; ++f) game_frame(-160 + f * 60, 900, 0, with_c, 2);
 }
 
 static void scenario_resets(void) {
@@ -416,6 +427,9 @@ int main(int argc, char **argv) {
     if (!strcmp(name, "move")) scenario_move(0);
     else if (!strcmp(name, "held")) scenario_move(1);
     else if (!strcmp(name, "touch")) scenario_move(2);
+    else if (!strcmp(name, "hidden")) scenario_move(3);
+    else if (!strcmp(name, "slide")) scenario_slide(1);
+    else if (!strcmp(name, "slide-hidden")) scenario_slide(3);
     else if (!strcmp(name, "resets")) scenario_resets();
     else if (!strcmp(name, "late")) scenario_late();
     else if (!strcmp(name, "turn")) scenario_turn(90, 1, 1, 0);
