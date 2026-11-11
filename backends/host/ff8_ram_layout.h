@@ -16,4 +16,8 @@
 /* World map: three words the CPU adds to every terrain point before
  * projecting it (x, y, z), so each frame's terrain inputs move by their change. */
 #define FF8_WORLD_OFFSET 0xdb0e8u
+/* In the scratchpad: the origin of the block the camera is in (x, then z), a
+ * multiple of 2048. Crossing a block moves it by 2048 and the offset back by
+ * as much, so the camera's place is their sum. */
+#define FF8_WORLD_ORIGIN 0x320u
 #endif

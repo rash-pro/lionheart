@@ -5,7 +5,8 @@
 //   at least 90% of the corners of drawn 3D polygons linked (interpolable),
 //   wrong pairs at most 0.01% of the pairs the oracle decides,
 //   wrong corner links at most 0.1% of the links it decides,
-// and the world map excluded: none of its projections paired for use.
+// and the world map excluded: none of its projections paired for use. World
+// routes add the world map's own check (check_world).
 #include "lh_test.h"
 #include <cstdlib>
 #include <sstream>
@@ -17,13 +18,17 @@ struct Route {
     const char *id, *script, *card;
     unsigned vblanks;
     const char *scenes; // scenes held to the bars
+    bool world;         // the world map's own check
 };
 const Route routes[] = {
-    {"magic", "tests/scripts/battle-magic.txt", "disc1-early.mcr", 5400, "battle"},
-    {"summon", "tests/scripts/battle-summon.txt", "disc1-early.mcr", 5400, "battle"},
-    {"prison", "tests/scripts/play-disc2-prison.txt", "disc2-start.mcr", 32100, "field battle"},
-    {"identical_enemies", "tests/scripts/fps60-identical-enemies.txt", "disc2-start.mcr", 23000, "battle"},
-    {"camera_cuts", "tests/scripts/fps60-camera-cuts.txt", "disc1-early.mcr", 4400, "battle"},
+    {"magic", "tests/scripts/battle-magic.txt", "disc1-early.mcr", 5400, "battle", true},
+    {"summon", "tests/scripts/battle-summon.txt", "disc1-early.mcr", 5400, "battle", false},
+    {"prison", "tests/scripts/play-disc2-prison.txt", "disc2-start.mcr", 32100, "field battle", false},
+    {"identical_enemies", "tests/scripts/fps60-identical-enemies.txt", "disc2-start.mcr", 23000, "battle", false},
+    {"camera_cuts", "tests/scripts/fps60-camera-cuts.txt", "disc1-early.mcr", 4400, "battle", false},
+    {"world_walk", "tests/scripts/fps60-world-walk.txt", "disc1-early.mcr", 3000, "", true},
+    {"world_town", "tests/scripts/fps60-world-town.txt", "disc1-early.mcr", 3200, "", true},
+    {"world_car", "tests/scripts/fps60-world-car.txt", "disc3-start.mcr", 7600, "", true},
 };
 
 using Values = std::map<std::string, double>;
@@ -92,6 +97,33 @@ void check_scene(const std::string &route, const std::string &scene, const std::
     LH_CHECK_MSG(o["link-wrong"] <= 0.001 * links,
                  where + "wrong links " + std::to_string(o["link-wrong"]) + " of " + std::to_string(links) + " decided");
 }
+// The world map's own check. Its terrain is moved by the camera on the CPU and
+// paired by a voted step; the game's record of where its camera stood says
+// how far every such point went. Every frame's step must be that change and
+// every such pair one place in the world. Pairs are wrong where the oracle's
+// provenance says another source and the camera another place, or where
+// provenance cannot decide and the camera says another place: at most 0.1% of
+// the decided. Another record of the same place (an edge both blocks keep) is
+// harmless. Linked corners whose pair neither can decide must stay rare.
+void check_world(const std::string &route, const std::string &service, const std::string &oracle) {
+    auto s = fields(service, "Frame identity world points: "), o = fields(oracle, "T world ");
+    const std::string where = route + " world: ";
+    LH_CHECK_MSG(!s.empty() && !o.empty() && s["step-same"] > 0, where + "no world frames with a step");
+    LH_CHECK_MSG(s["step-other"] == 0, where + std::to_string(s["step-other"]) + " frames whose step is not the camera's");
+    LH_CHECK_MSG(s["place-other"] == 0, where + std::to_string(s["place-other"]) + " pairs at two places");
+    double provenance = o["correct"] + o["wrong"] + o["equivalent"];
+    double decided = provenance + o["place-correct"] + o["place-wrong"];
+    double wrong = o["wrong"] - o["wrong-same-place"] + o["place-wrong"];
+    LH_CHECK_MSG(provenance >= 0.3 * o["matched"], where + "the oracle decides too few pairs to judge");
+    LH_CHECK_MSG(wrong <= 0.001 * decided,
+                 where + "wrong pairs " + std::to_string(wrong) + " of " + std::to_string(decided) + " decided");
+    LH_CHECK_MSG(o["corner-pair-wrong"] <= 0.001 * o["linked"],
+                 where + "linked corners on wrong pairs " + std::to_string(o["corner-pair-wrong"]));
+    LH_CHECK_MSG(o["corner-pair-undecided"] <= 0.01 * o["linked"],
+                 where + "linked corners on undecided pairs " + std::to_string(o["corner-pair-undecided"]));
+    LH_CHECK_MSG(o["link-wrong"] <= 0.001 * (o["link-correct"] + o["link-equivalent"] + o["link-wrong"]),
+                 where + "wrong links " + std::to_string(o["link-wrong"]));
+}
 } // namespace
 
 LH_GAME_TEST_P(test_routes_meet_the_identity_bars, routes) {
@@ -114,6 +146,7 @@ LH_GAME_TEST_P(test_routes_meet_the_identity_bars, routes) {
     std::istringstream scenes(r.scenes);
     std::string scene;
     while (scenes >> scene) check_scene(r.id, scene, on.out, text);
+    if (r.world) check_world(r.id, on.out, text);
     // The world map is measured but never published. (Corners drawn in its
     // first frame from the battle frame before it keep that frame's links.)
     auto world = fields(on.out, "Frame identity world: ");

@@ -31,6 +31,7 @@ typedef struct {
     int32_t view[3];
     int16_t input[3];
     uint8_t zero;               /* projected under a zero translation */
+    uint8_t place;              /* by the world's offset: 0 not judged, 1 one place, 2 two */
     uint32_t sxy, previous_sxy;
     int32_t match;
     uint8_t verdict;
@@ -49,6 +50,9 @@ typedef struct {
      * leaves undecided or partial, at one place and at two; of those it finds
      * wrong, at one place. */
     uint64_t place_correct, place_wrong, wrong_same_place;
+    /* Linked corners whose projection's pair is judged wrong (by provenance
+     * and not at one place, or by place), and undecided by both. */
+    uint64_t corner_pair_wrong, corner_pair_undecided;
 } tally_t;
 
 /* Open addressing from a 64-bit key to a 32-bit value. */
@@ -439,6 +443,7 @@ static void add(tally_t *t, const tally_t *f) {
     t->held_known += f->held_known; t->held_unknown += f->held_unknown;
     t->instance_same += f->instance_same; t->instance_other += f->instance_other;
     t->place_correct += f->place_correct; t->place_wrong += f->place_wrong; t->wrong_same_place += f->wrong_same_place;
+    t->corner_pair_wrong += f->corner_pair_wrong; t->corner_pair_undecided += f->corner_pair_undecided;
 }
 
 void frame_oracle_judge(const frame_identity_frame_t *f) {
@@ -481,7 +486,7 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
             const int32_t *t = f->setups[f->runs[p->run].setup].translation;
             cur[i].zero = !t[0] && !t[1] && !t[2];
         }
-        cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE;
+        cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE; cur[i].place = 0;
         cur[i].previous_sxy = prev && p->match >= 0 ? prev[p->match].sxy : 0;
     }
     memset(&t, 0, sizeof(t));
@@ -524,6 +529,7 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                 unsigned k;
                 int same = 1;
                 for (k = 0; k < 3; ++k) if (cur[i].input[k] - a->input[k] != o.world_change[k]) same = 0;
+                cur[i].place = same ? 1 : 2;
                 if (v == UNDECIDED || v == PARTIAL) ++*(same ? &t.place_correct : &t.place_wrong);
                 else if (v == WRONG && same) ++t.wrong_same_place;
                 if ((v == UNDECIDED || v == PARTIAL) && !same && o.out && o.logged[scene_of(f->tag)][0] < 100) {
@@ -574,6 +580,12 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
             ++t.corners;
             if (!linked) { if (truth >= 0) ++t.held_known; else ++t.held_unknown; continue; }
             ++t.linked;
+            {
+                const kept_t *k = by_serial((q->age[c] ? o.kept_first[1] : f->first_projection) + (uint64_t)q->projection[c]);
+                int v = k ? k->verdict : NONE;
+                if (k && ((v == WRONG && k->place != 1) || k->place == 2)) ++t.corner_pair_wrong;
+                else if ((v == UNDECIDED || v == PARTIAL || v == NONE) && (!k || k->place != 1)) ++t.corner_pair_undecided;
+            }
             if (truth < 0) { ++t.link_undecided; continue; }
             {
                 uint64_t chosen = (q->age[c] ? o.kept_first[1] : f->first_projection) + (uint64_t)q->projection[c];
@@ -657,11 +669,13 @@ static void totals(const char *label, const tally_t *t) {
             " wrong=%" PRIu64 " equivalent=%" PRIu64 " undecided=%" PRIu64 " corners=%" PRIu64 " linked=%" PRIu64
             " link-correct=%" PRIu64 " link-equivalent=%" PRIu64 " link-wrong=%" PRIu64 " link-undecided=%" PRIu64
             " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64
-            " place-correct=%" PRIu64 " place-wrong=%" PRIu64 " wrong-same-place=%" PRIu64 "\n",
+            " place-correct=%" PRIu64 " place-wrong=%" PRIu64 " wrong-same-place=%" PRIu64
+            " corner-pair-wrong=%" PRIu64 " corner-pair-undecided=%" PRIu64 "\n",
             label, t->frames, t->projections, t->matched,
             t->verdicts[CORRECT], t->verdicts[PARTIAL], t->verdicts[WRONG], t->verdicts[EQUIVALENT], t->verdicts[UNDECIDED],
             t->corners, t->linked, t->link_correct, t->link_equivalent, t->link_wrong, t->link_undecided,
-            t->held_known, t->held_unknown, t->instance_same, t->instance_other, t->place_correct, t->place_wrong, t->wrong_same_place);
+            t->held_known, t->held_unknown, t->instance_same, t->instance_other, t->place_correct, t->place_wrong, t->wrong_same_place,
+            t->corner_pair_wrong, t->corner_pair_undecided);
 }
 
 int frame_oracle_stop(void) {

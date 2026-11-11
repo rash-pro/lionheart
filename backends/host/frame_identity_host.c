@@ -30,7 +30,7 @@ typedef struct {
     uint64_t frames, reset, excluded, projections, paired, matched;
     uint64_t polygons, corners, corners_3d, linked, linked_polygons, held[8];
     uint64_t jumps, jump_pairs;
-    /* The world map's check against the game's own offset (FF8_WORLD_OFFSET):
+    /* The world map's check against where the game says its camera stood:
      * frames whose voted step is its change, is not, or that voted none; pairs
      * of points under a zero translation that it puts at one place in the
      * world, and at two. */
@@ -86,17 +86,21 @@ uint32_t host_frame_identity_classify(void *context, const cpu_t *c) {
     return mode == 2 ? mode | FRAME_IDENTITY_POINTS | FRAME_IDENTITY_EXCLUDE : mode;
 }
 
-static int32_t word(const cpu_t *c, uint32_t address) {
-    return (int32_t)((uint32_t)c->ram[address] | (uint32_t)c->ram[address + 1] << 8 |
-                     (uint32_t)c->ram[address + 2] << 16 | (uint32_t)c->ram[address + 3] << 24);
+static int32_t word(const uint8_t *p) {
+    return (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
 }
 
-/* The same, noting the world offset the frame was drawn with. */
+/* The same, noting where the camera stood by the game's own record: the world
+ * offset plus the origin of its block. */
 static uint32_t classify(void *context, const cpu_t *c) {
     uint32_t tag = host_frame_identity_classify(context, c);
     unsigned k;
     h.offset_known = c && (tag & 0xffffu) == 2;
-    if (h.offset_known) for (k = 0; k < 3; ++k) h.offset[k] = word(c, FF8_WORLD_OFFSET + 4 * k);
+    if (h.offset_known) {
+        for (k = 0; k < 3; ++k) h.offset[k] = word(c->ram + FF8_WORLD_OFFSET + 4 * k);
+        h.offset[0] += word(c->scratch + FF8_WORLD_ORIGIN);
+        h.offset[2] += word(c->scratch + FF8_WORLD_ORIGIN + 4);
+    }
     return tag;
 }
 
