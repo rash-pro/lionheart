@@ -385,10 +385,12 @@ int frame_present_draw(frame_present_t *p, double t) {
     at.num = at.den = 1;
     if (!p->failed && p->have_mark) frame_present_clock_phase(&p->clock, t, &at.num, &at.den);
     if (p->consumed) at.num = at.den = 1;
-    /* Long without a frame (a load, a movie that sets no display start):
-     * nothing will blend from here, so the checkpoint follows the guest and
-     * the journal stays short; then everything is drawn, as it is kept. */
-    settle = p->consumed && p->vblanks - p->clock.end > FRAME_IDENTITY_GAP;
+    /* Long without a frame (a load, a movie that sets no display start), or
+     * none yet since the presenter started over (the screens before the
+     * first): nothing will blend from here, so the checkpoint follows the
+     * guest and the journal stays short; then everything is drawn, as it is
+     * kept. */
+    settle = p->have_mark ? p->consumed && p->vblanks - p->clock.end > FRAME_IDENTITY_GAP : 1;
     replay(p, p->failed ? NULL : &at, p->journal.size, settle);
     if (settle) {
         save(p);
