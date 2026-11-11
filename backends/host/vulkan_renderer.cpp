@@ -113,6 +113,8 @@ struct Backend {
             return found;
         }
     } read, reading, stale;
+    // When the next present is to be shown, in seconds of SDL's counter (host_gpu_present_at).
+    double present_target=0;
     void touch(unsigned x,unsigned y,unsigned w,unsigned h) noexcept {
         if (!checkpoints || !w || !h) return;
         if (w>=1024) { x=0; w=1024; }
@@ -554,6 +556,20 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
             b->wsi->pace(paced_wanted);
             if (b->context->get_enabled_device_features().supports_present_wait)
                 b->wsi->wait_present=reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(b->context->get_device(),"vkWaitForPresentKHR"));
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+            if (b->context->get_enabled_device_features().supports_present_timing) {
+                VkDevice d=b->context->get_device();
+                auto &api=b->wsi->timing_api;
+                api.queue_size=reinterpret_cast<PFN_vkSetSwapchainPresentTimingQueueSizeEXT>(vkGetDeviceProcAddr(d,"vkSetSwapchainPresentTimingQueueSizeEXT"));
+                api.properties=reinterpret_cast<PFN_vkGetSwapchainTimingPropertiesEXT>(vkGetDeviceProcAddr(d,"vkGetSwapchainTimingPropertiesEXT"));
+                api.domains=reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(vkGetDeviceProcAddr(d,"vkGetSwapchainTimeDomainPropertiesEXT"));
+                api.past=reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(vkGetDeviceProcAddr(d,"vkGetPastPresentationTimingEXT"));
+                api.calibrated=reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(vkGetDeviceProcAddr(d,"vkGetCalibratedTimestampsKHR"));
+                if (!api.calibrated) api.calibrated=reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(vkGetDeviceProcAddr(d,"vkGetCalibratedTimestampsEXT"));
+                api.absolute=b->context->get_enabled_device_features().supports_present_at_absolute_time;
+                if (!api.queue_size || !api.properties || !api.domains) api.past=nullptr;
+            }
+#endif
         }
         if (options.timings) { b->timings=std::fopen(options.timings,"w"); if (!b->timings) throw std::runtime_error("Cannot open GPU timings");
             std::fprintf(b->timings,"frame,cpu_ms,gpu_ms,wall_ms,draw_calls,vertices,render_passes,soft_ms,encode_ms,submit_ms,capture_ms,upload_bytes,submissions,backpressure,submit_wall_ms,present_ms,osd_ms,pipeline_ms,pipelines\n"); }
@@ -942,7 +958,30 @@ extern "C" int host_gpu_rgb(gpu_t *g,const uint8_t **out,int *w,int *h) try {
 catch (...) { degrade("host_gpu_rgb","unknown backend exception"); return 0; }
 // Presentation is appended to this frame's renderer command buffer. Submit once
 // with its fence and presentation semaphore, then recycle a context two frames later.
-namespace { int queue_present(); }
+namespace {
+int queue_present();
+double counter_seconds() { return double(SDL_GetPerformanceCounter())/double(SDL_GetPerformanceFrequency()); }
+// Present timing reports and takes times on a host clock; the host keeps time
+// in SDL's counter. The two are a fixed offset apart (sampled when needed:
+// the clocks may be slewed against each other).
+double domain_now(VkTimeDomainKHR domain) {
+#ifndef _WIN32
+    timespec now={};
+    if (clock_gettime(domain==VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR ? CLOCK_MONOTONIC_RAW : CLOCK_MONOTONIC,&now)) return -1;
+    return double(now.tv_sec)+double(now.tv_nsec)*1e-9;
+#else
+    (void)domain; return -1;
+#endif
+}
+double to_domain(VkTimeDomainKHR domain,double seconds) {
+    double now=domain_now(domain);
+    return now<0 ? -1 : seconds-counter_seconds()+now;
+}
+double from_domain(VkTimeDomainKHR domain,double time) {
+    double now=domain_now(domain);
+    return now<0 ? 0 : time-now+counter_seconds();
+}
+}
 extern "C" int host_gpu_frame(gpu_t *g) try {
     if (!backend || backend->failed || backend->raster!=gpu_raster_state(g)) return 1;
     auto &b=*backend;
@@ -1502,7 +1541,13 @@ int queue_present() {
     // An image acquired ahead and not drawn into yet waits for the next present.
     if (!b.acquired || !b.filled) return 1;
     b.acquired=b.filled=false;
-    b.wsi->present(b.present_index,b.wsi_frame(),wall_milliseconds());
+    uint64_t target=0;
+    if (b.present_target>0 && b.wsi->targets()) {
+        double at=to_domain(b.wsi->time_domain(),b.present_target);
+        if (at>0) target=uint64_t(at*1e9);
+    }
+    b.present_target=0;
+    b.wsi->present(b.present_index,b.wsi_frame(),wall_milliseconds(),target);
     return 1;
 }
 }
@@ -1518,12 +1563,27 @@ extern "C" unsigned host_gpu_test_maps(void) { return test_maps; }
 extern "C" uint64_t host_gpu_present_id(void) {
     return backend && !backend->failed && backend->wsi ? backend->wsi->last_id : 0;
 }
-namespace { double counter_seconds() { return double(SDL_GetPerformanceCounter())/double(SDL_GetPerformanceFrequency()); } }
 extern "C" int host_gpu_present_seen(uint64_t *id,double *seconds) {
-    if (!backend || backend->failed || !backend->wsi || !backend->wsi->wait_present) return 0;
+    if (!backend || backend->failed || !backend->wsi) return 0;
+    if (backend->wsi->timed()) {
+        uint64_t time=0;
+        if (!backend->wsi->shown(*id,time)) return 0;
+        *seconds=from_domain(backend->wsi->time_domain(),double(time)*1e-9);
+        return 1;
+    }
+    if (!backend->wsi->wait_present) return 0;
     backend->wsi->watch(counter_seconds);
     return backend->wsi->seen(*id,*seconds) ? 1 : 0;
 }
+extern "C" int host_gpu_present_timing(void) {
+    if (!backend || backend->failed || !backend->wsi || !backend->wsi->timed()) return 0;
+    return backend->wsi->targets() ? 2 : 1;
+}
+extern "C" double host_gpu_refresh(void) {
+    if (!backend || backend->failed || !backend->wsi || !backend->wsi->timed()) return 0;
+    return double(backend->wsi->refresh())*1e-9;
+}
+extern "C" void host_gpu_present_at(double seconds) { if (backend) backend->present_target=seconds; }
 extern "C" void host_gpu_paced(int on) {
     paced_wanted=on!=0;
     if (backend && backend->wsi) backend->wsi->pace(paced_wanted);

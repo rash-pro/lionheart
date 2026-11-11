@@ -32,9 +32,19 @@ int host_gpu_ready(void);
  * performance counter, in seconds); 0 when none is waiting. */
 uint64_t host_gpu_present_id(void);
 int host_gpu_present_seen(uint64_t *id, double *seconds);
-/* The host paces its presents itself (smooth motion): where the device can,
- * the window shows the latest picture ready at each refresh and presents do not
- * block; otherwise the swapchain stays FIFO. */
+/* Present timing (VK_EXT_present_timing) on the window: 0 none, 1 when each
+ * picture was shown, 2 also presents held until a time (host_gpu_present_at).
+ * With it, host_gpu_present_seen gives the times the presentation engine
+ * reports, and host_gpu_refresh the display's refresh period in seconds as it
+ * knows it (0 when it does not). */
+int host_gpu_present_timing(void);
+double host_gpu_refresh(void);
+/* The next present is not shown before this time (SDL's counter, seconds). */
+void host_gpu_present_at(double seconds);
+/* The host paces its presents itself (smooth motion): where presents can be
+ * held until a time, the window's swapchain is a mailbox, each picture held
+ * by the compositor until its refresh; elsewhere it shows the latest picture
+ * ready at each refresh where the device can, and is FIFO otherwise. */
 void host_gpu_paced(int on);
 int host_gpu_present(void);
 int host_gpu_scanout(gpu_t *);

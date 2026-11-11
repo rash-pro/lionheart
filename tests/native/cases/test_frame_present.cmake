@@ -16,3 +16,6 @@ lh_presentation_fixture()
 lh_harness(host FLAGS -std=c99 -O1 -g -Wall -Wextra -Werror ${LH_SDL_FLAGS} INCLUDES runtime backends/host RUNTIME_ALL
   SOURCES tests/frame_present_host_harness.c backends/host/frame_present_host.c backends/host/frame_identity_host.c
   LINK_FLAGS ${LH_SDL_LINK})
+lh_harness(pace FLAGS -std=c99 -O2 -g -Wall -Wextra -Werror -Wpedantic INCLUDES backends/host
+  SANITIZE_FLAGS -fsanitize=address,undefined -fno-sanitize-recover=all
+  SOURCES tests/present_pace_harness.c backends/host/present_pace.c LIBS -lm)

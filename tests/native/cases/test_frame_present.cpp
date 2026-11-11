@@ -4,6 +4,7 @@
 // the same picture at every VBlank as the offline renderer
 // (tools/devtools/inbetween.c) draws from the same recording.
 #include "lh_test.h"
+#include <map>
 #include <sstream>
 
 namespace {
@@ -95,4 +96,56 @@ LH_TEST(test_off_binds_nothing) {
     LH_CONTAINS(out, "before: plain binds=0");
     LH_CONTAINS(out, "running: recording entries, own GPU");
     LH_CONTAINS(out, "after: plain binds=2");
+}
+
+namespace {
+// One scenario's numbers, as the pacing harness prints them.
+struct Paced {
+    double on_time = 0, uneven = 100;
+    std::map<int, double> intervals;
+    std::string multiples, line;
+    long changes = -1;
+};
+Paced paced(const std::string &out, const std::string &name) {
+    Paced p;
+    p.line = phases(out, name);
+    p.on_time = std::stod(lh::capture(p.line, R"(on_time=([0-9.]+)%)"));
+    p.uneven = std::stod(lh::capture(p.line, R"(uneven=([0-9.]+)%)"));
+    p.multiples = lh::capture(p.line, R"(multiples=(\S*))");
+    p.changes = std::stol(lh::capture(p.line, R"(changes=(\d+))"));
+    std::istringstream in(lh::capture(p.line, R"(intervals=(\S*))"));
+    for (std::string item; std::getline(in, item, ',');)
+        if (!item.empty()) p.intervals[std::stoi(item)] = std::stod(item.substr(item.find(':') + 1));
+    return p;
+}
+} // namespace
+
+LH_TEST(test_pictures_come_on_the_refresh_they_are_drawn_for) {
+    auto out = t.ok(t.harness("pace")).out;
+    // Fixed grids at 60, 120 and 144 Hz whose compositor deadline drifts by
+    // most of a refresh, with reports off the grid, and a virtual output whose
+    // period is not said and is a little off: a picture every refresh, on the
+    // refresh it was drawn for, the game evenly spaced.
+    for (auto name : {"60", "120", "144", "virtual"}) {
+        auto p = paced(out, name);
+        LH_CHECK_MSG(p.on_time >= 99.5, p.line);
+        LH_CHECK_MSG(p.intervals[1] >= 99.5, p.line);
+        LH_CHECK_MSG(p.multiples == "1:" + lh::capture(p.line, R"(pictures=(\d+))") + ",", p.line);
+        LH_CHECK_MSG(p.uneven <= 1, p.line);
+    }
+    // A picture that does not fit a refresh: every second; one that does not
+    // fit two: every few, with copies of it between.
+    auto battle = paced(out, "144-battle");
+    LH_CHECK_MSG(battle.on_time >= 99.5 && battle.intervals[2] >= 99.5, battle.line);
+    auto heavy = paced(out, "144-heavy");
+    LH_CHECK_MSG(heavy.on_time >= 99.5 && heavy.intervals[4] >= 99.5, heavy.line);
+    // From every refresh to every second and back: once each way, every
+    // interval one refresh or two, and the game evenly spaced through both.
+    auto change = paced(out, "144-change");
+    LH_CHECK_MSG(change.on_time >= 99.5 && change.changes == 2, change.line);
+    LH_CHECK_MSG(change.intervals[1] + change.intervals[2] >= 99.9 && change.intervals[1] > 50 && change.intervals[2] > 10, change.line);
+    LH_CHECK_MSG(change.uneven <= 0.5, change.line);
+    // Without targets, handed over in the refresh before the one before.
+    auto untargeted = paced(out, "untargeted");
+    LH_CHECK_MSG(untargeted.on_time >= 99.5 && untargeted.intervals[1] >= 99.5, untargeted.line);
 }

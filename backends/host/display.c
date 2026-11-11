@@ -2,6 +2,7 @@
 #include "display.h"
 #ifdef FF8_VULKAN
 #include "vulkan_renderer.h"
+#include "present_pace.h"
 #endif
 #include "sio.h"
 #include "viewport.h"
@@ -13,6 +14,7 @@
 #endif
 #include <SDL.h>
 #include <errno.h>
+#include <math.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -677,20 +679,18 @@ host_gui_result_t host_display_gui_loop(int shell) {
 }
 #endif
 #ifdef FF8_VULKAN
-/* Smooth motion: pictures on the display's own clock, not the guest's. A new
- * picture is presented every k-th refresh of the display (k the refresh rate
- * over 60, rounded: about 60 pictures a second, every other refresh at 120 or
- * 144 Hz), each at the same moment of a refresh's period, which the compositor
- * turns into the same refresh after it every time. The picture is drawn ahead
- * and handed over at that moment, so neither the game thread's other work nor
- * the time a picture takes to draw moves it. Where the device says when each
- * present reaches the display (host_gpu_present_seen), the moments follow
- * those times, so they neither drift against the display nor sit near the
- * compositor's deadline, where pictures would land on two refreshes by
- * turns (see reached()). Elsewhere the clock runs on its own at the
- * display's nominal rate. Each picture shows the game at its moment on the
- * guest's VBlank clock. */
-enum { SMOOTH_PENDING = 16 };
+/* Smooth motion: pictures on the display's own clock, not the guest's
+ * (present_pace.h). Each picture is for one refresh of the display, every
+ * refresh or every few as its cost allows, and shows the game at the moment it
+ * is begun, kept at the same distance before that refresh, so that pictures
+ * evenly spaced on the display show the game evenly spaced. Where the device
+ * says when each picture was shown (present timing), pictures follow the
+ * display's refreshes and are held until their own, so that when they are
+ * handed over does not matter as long as it is before the refresh before.
+ * Elsewhere they are handed over just before that refresh, on the times each
+ * present was seen. The picture is drawn on a thread of its own, so neither
+ * the game thread's other work nor the time a picture takes moves it. */
+enum { SMOOTH_PENDING = 32 };
 /* The thread that draws and presents while smooth motion runs in a window: the
  * guest thread then only queues what it sends its GPU. The game thread parks
  * it (host_display_park) to use the renderer itself: the menu, shutting down. */
@@ -704,47 +704,57 @@ static struct {
     host_display_draw_t draw;
     void *context;
     gpu_t *shown;
-    unsigned k;
-    int rate, have, whole, phased;
-    unsigned vblanks;
+    int rate, timing, have, whole;
     double at, period, frequency, start;   /* the guest's last VBlank (smoothed) and its period, seconds */
-    double refresh, phase, offset, next;    /* a refresh period and time, where in it presents go, the next one */
-    double before;                          /* how long before a refresh pictures are handed over */
-    double drawing;                         /* how long drawing and handing over a picture take, lately */
+    double vblank;                          /* when the guest's last VBlank came */
+    double refresh;                         /* the display's refresh period as last found */
+    present_pace_t pace;
     double left, work;                      /* when the guest's work began, how long it takes */
     uint64_t ids[SMOOTH_PENDING];
-    double moments[SMOOTH_PENDING], drawn[SMOOTH_PENDING], presented[SMOOTH_PENDING], since[SMOOTH_PENDING];
+    double moments[SMOOTH_PENDING], targets[SMOOTH_PENDING], begun[SMOOTH_PENDING], presented[SMOOTH_PENDING];
+    double since[SMOOTH_PENDING], vblanks[SMOOTH_PENDING];
+    unsigned multiples[SMOOTH_PENDING];
+    int repeats[SMOOTH_PENDING];
     unsigned pending, first;
-    uint64_t presents, missed;
-    double spent[4];                        /* seconds drawing, handing over, waiting for moments, holding the guest */
+    uint64_t presents;
+    double spent[4];                        /* seconds drawing, handing over, waiting to hand over, holding the guest */
     double wake, checked;                   /* when the next picture is begun; the display last checked */
     FILE *stats;
 } smooth;
 static double seconds(void) { return (double)SDL_GetPerformanceCounter() / smooth.frequency; }
-/* The refresh rate of the display the window is on, checked again now and
- * then: the window may be moved to another display. */
+/* The display the window is on, checked again now and then: the window may be
+ * moved to another display, and what the device can say of the window's
+ * display is known only once it has presented to it. */
 static void smooth_display(void) {
     SDL_DisplayMode mode;
     int index = host.window ? SDL_GetWindowDisplayIndex(host.window) : -1;
     int rate = index >= 0 && !SDL_GetCurrentDisplayMode(index, &mode) && mode.refresh_rate > 0 ? mode.refresh_rate : 60;
-    if (smooth.k && rate == smooth.rate) return;
-    smooth.rate = rate;
-    smooth.k = (unsigned)((rate + 30) / 60);
-    if (!smooth.k) smooth.k = 1;
-    smooth.refresh = 1.0 / rate;
-    smooth.before = 0.001;
-    smooth.offset = smooth.refresh - smooth.before;
-    smooth.phased = 0; smooth.next = 0;
+    int timing = host_gpu_present_timing();
+    double reported = timing ? host_gpu_refresh() : 0;
+    /* Where the device does not say the period (a virtual output), the pacer
+     * finds it from when pictures were shown, starting from the mode's. */
+    double refresh = reported > 0 ? reported : 1.0 / rate;
+    if (smooth.pace.refresh > 0 && rate == smooth.rate && timing == smooth.timing && (reported > 0) == smooth.pace.known &&
+        fabs(refresh - smooth.refresh) < 1e-7) return;
+    smooth.rate = rate; smooth.timing = timing; smooth.refresh = refresh;
+    present_pace_start(&smooth.pace, refresh, reported > 0, timing > 0, timing > 1);
+}
+static void smooth_totals(const char *when) {
+    const present_pace_t *p = &smooth.pace;
+    fprintf(stderr, "Smooth motion%s: pictures=%" PRIu64 " on-time=%lu late=%lu early=%lu stray=%lu skipped=%lu changes=%lu"
+            " multiple=%u lead=%.1f ms drawing=%.1f s handing-over=%.1f s waiting=%.1f s holding=%.1f s\n",
+            when, smooth.presents, p->on_time, p->late, p->early, p->stray, p->skipped, p->changes, p->multiple,
+            p->lead * 1000, smooth.spent[0], smooth.spent[1], smooth.spent[2], smooth.spent[3]);
 }
 void host_display_smooth(host_display_draw_t draw, void *context) {
     if (!draw) {
         FILE *stats = smooth.stats;
-        if (smooth.draw) fprintf(stderr, "Smooth motion: pictures=%" PRIu64 " missed=%" PRIu64 "\n", smooth.presents, smooth.missed);
+        if (smooth.draw && smooth.presents) smooth_totals("");
         memset(&smooth, 0, sizeof(smooth)); smooth.stats = stats; host_gpu_paced(0); return;
     }
     host_gpu_paced(1);
     smooth.draw = draw; smooth.context = context;
-    if (!smooth.k) {
+    if (!smooth.frequency) {
         smooth.frequency = (double)SDL_GetPerformanceFrequency();
         smooth.start = seconds();
         smooth_display();
@@ -753,7 +763,8 @@ void host_display_smooth(host_display_draw_t draw, void *context) {
 int host_display_present_stats(const char *path) {
     if (!path) return 1;
     if (!(smooth.stats = fopen(path, "w"))) return 0;
-    return fprintf(smooth.stats, "picture,moment_ms,drawn_ms,presented_ms,reached_ms,refreshes_after,since,refresh_ms,k,offset_ms\n") > 0;
+    return fprintf(smooth.stats, "picture,moment_ms,begun_ms,presented_ms,shown_ms,refreshes_late,stray,since,refresh_ms,"
+                   "multiple,target_ms,repeat,vblank_ms\n") > 0;
 }
 uint64_t host_display_pictures(void) { return smooth.presents; }
 int host_display_smoothing(void) { return smooth.draw && host.window && host_gpu_enabled() && !host.quit; }
@@ -768,40 +779,61 @@ void host_display_smooth_vblank(int pal, int whole) {
      * late; the pictures follow its average clock, not each wake-up. */
     if (!smooth.have || now - (smooth.at + period) > 2 * period || now - (smooth.at + period) < -2 * period) smooth.at = now;
     else smooth.at += period + 0.05 * (now - (smooth.at + period));
-    smooth.period = period; smooth.have = 1; smooth.whole = whole;
+    smooth.period = period; smooth.have = 1; smooth.whole = whole; smooth.vblank = now;
     if (presenter.clock) SDL_UnlockMutex(presenter.clock);
 }
-static double nearest_refresh(double t) {
-    double cycles = (t - smooth.phase) / smooth.refresh;
-    return smooth.phase + (double)(int64_t)(cycles + (cycles >= 0 ? 0.5 : -0.5)) * smooth.refresh;
+static double ms(double t) { return (t - smooth.start) * 1000; }
+static void stats_line(unsigned i, const double *shown, int late, int stray) {
+    if (!smooth.stats) return;
+    fprintf(smooth.stats, "%" PRIu64 ",%.3f,%.3f,%.3f,", smooth.ids[i], ms(smooth.moments[i]), ms(smooth.begun[i]), ms(smooth.presented[i]));
+    if (shown) fprintf(smooth.stats, "%.3f,%d,%d,", ms(*shown), late, stray);
+    else fprintf(smooth.stats, ",,,");
+    fprintf(smooth.stats, "%.4f,%.4f,%u,", smooth.since[i], smooth.pace.refresh * 1000, smooth.multiples[i]);
+    if (smooth.targets[i] > 0) fprintf(smooth.stats, "%.3f", ms(smooth.targets[i]));
+    fprintf(smooth.stats, ",%d,%.3f\n", smooth.repeats[i], ms(smooth.vblanks[i]));
 }
-/* A present handed over at presented reached the display at when (to a fifth
- * of a millisecond, seen by the swapchain's watcher). The refreshes follow
- * those times. How long before a refresh the compositor must have a picture
- * to show it then varies, by most of a refresh at 144 Hz, so a picture handed
- * over somewhere in the middle of a refresh's period lands on one refresh or
- * the next by turns. Handed over just before a refresh (by before), it is
- * always too late for that one and always in time for the next. One that
- * still makes the earlier refresh halves the margin. */
-static void reached(double when, double moment, double presented) {
-    int landed;
-    if (!smooth.phased) { smooth.phase = when; smooth.phased = 1; }
-    smooth.phase += 0.1 * (when - nearest_refresh(when));
-    landed = (int)((when - presented) / smooth.refresh + 0.5);
-    if (landed < 1 && smooth.before > 0.0004) smooth.before *= 0.5;
-    smooth.offset = smooth.refresh - smooth.before;
-    if (smooth.stats) fprintf(smooth.stats, ",%.3f,%d", (when - smooth.start) * 1000, (int)((when - moment) / smooth.refresh + 0.5));
+/* What the display said of the pictures before. Presents it never reports
+ * (the swapchain was made again) are written without. */
+static void smooth_feedback(void) {
+    uint64_t seen;
+    double when;
+    while (host_gpu_present_seen(&seen, &when)) {
+        while (smooth.pending) {
+            unsigned i = smooth.first % SMOOTH_PENDING;
+            if (smooth.ids[i] > seen) break;
+            if (smooth.ids[i] == seen) {
+                int stray, late = present_pace_shown(&smooth.pace, smooth.moments[i], when, smooth.repeats[i], &stray);
+                stats_line(i, &when, late, stray);
+            } else stats_line(i, NULL, 0, 0);
+            ++smooth.first; --smooth.pending;
+        }
+    }
+}
+/* A present handed over, until the display reports it. */
+static void pending(const present_plan_t *plan, double moment, double target, double begun, double since, double vblank, int repeat) {
+    uint64_t id = host_gpu_present_id();
+    unsigned i;
+    if (smooth.pending == SMOOTH_PENDING) { stats_line(smooth.first % SMOOTH_PENDING, NULL, 0, 0); ++smooth.first; --smooth.pending; }
+    i = (smooth.first + smooth.pending++) % SMOOTH_PENDING;
+    smooth.ids[i] = id ? id : smooth.presents + 1; smooth.moments[i] = moment; smooth.targets[i] = target;
+    smooth.begun[i] = begun; smooth.presented[i] = seconds(); smooth.since[i] = since; smooth.multiples[i] = plan->multiple;
+    smooth.repeats[i] = repeat; smooth.vblanks[i] = vblank;
+    /* Without present ids nothing will report it. */
+    if (!id) { stats_line(i, NULL, 0, 0); --smooth.pending; }
 }
 /* The guest's next VBlank is due in ms: if the next picture would be due
  * while the guest works on it, it is drawn first, and the guest begins that
  * much later; its own clock and the audio do not change. */
-void host_display_hold(double ms) {
+void host_display_hold(double ms_left) {
     double now, start;
-    if (!host_display_smoothing()) return;
+    present_plan_t plan;
+    if (!host_display_smoothing() || smooth.pace.refresh <= 0) return;
     now = seconds();
-    smooth.left = now + ms / 1000;
-    start = smooth.next - smooth.drawing;
-    if (ms > 1.5 || !smooth.next || start > smooth.left + smooth.work || start < now - 0.25 * smooth.refresh) return;
+    smooth.left = now + ms_left / 1000;
+    if (ms_left > 1.5 || !smooth.presents) return;
+    present_pace_plan(&smooth.pace, now, &plan);
+    start = plan.begin;
+    if (start > smooth.left + smooth.work || start < now - 0.25 * smooth.pace.refresh) return;
     {
         double from = seconds();
         while (seconds() < start) SDL_Delay(start - seconds() > 0.0015 ? 1 : 0);
@@ -811,9 +843,10 @@ void host_display_hold(double ms) {
     smooth.left = seconds();
 }
 int host_display_tick(void) {
-    double now, since, moment, at, period;
+    double now, since, at, period, begun, drawn, waited = 0, handed, cost, vblank;
     int have, whole;
-    uint64_t id;
+    present_plan_t plan;
+    unsigned r;
     if (!host_display_smoothing()) return 0;
     now = seconds();
     smooth.wake = now + 0.002;
@@ -821,41 +854,18 @@ int host_display_tick(void) {
     if (host_gui_visible()) return 0;
 #endif
     if (now - smooth.checked > 1) { smooth.checked = now; smooth_display(); }
-    {
-        uint64_t seen;
-        double when;
-        while (host_gpu_present_seen(&seen, &when)) {
-            /* Presents never seen (the swapchain was made again) are written without. */
-            while (smooth.pending) {
-                unsigned i = smooth.first % SMOOTH_PENDING;
-                if (smooth.ids[i] > seen) break;
-                if (smooth.stats)
-                    fprintf(smooth.stats, "%" PRIu64 ",%.3f,%.3f,%.3f", smooth.ids[i], (smooth.moments[i] - smooth.start) * 1000,
-                            (smooth.drawn[i] - smooth.start) * 1000, (smooth.presented[i] - smooth.start) * 1000);
-                if (smooth.ids[i] == seen) reached(when, smooth.moments[i], smooth.presented[i]);
-                else if (smooth.stats) fprintf(smooth.stats, ",,");
-                if (smooth.stats) fprintf(smooth.stats, ",%.4f,%.4f,%u,%.3f\n", smooth.since[i], smooth.refresh * 1000, smooth.k, smooth.offset * 1000);
-                ++smooth.first; --smooth.pending;
-            }
-        }
-    }
-    /* The next moment, on the refreshes as they are known now. */
-    if (!smooth.next) smooth.next = now + smooth.drawing + smooth.refresh;
-    else if (smooth.phased) smooth.next = nearest_refresh(smooth.next - smooth.offset) + smooth.offset;
-    /* Begun early enough to be ready by its moment even when drawing is slow;
-     * too late for that by more than a quarter of a refresh, the picture is
-     * for a later moment. */
-    while (now > smooth.next - smooth.drawing + 0.25 * smooth.refresh) { smooth.next += smooth.k * smooth.refresh; ++smooth.missed; }
-    smooth.wake = smooth.next - smooth.drawing - 0.0005;
-    if (now < smooth.wake) return 0;
+    smooth_feedback();
+    present_pace_plan(&smooth.pace, now, &plan);
+    smooth.wake = plan.begin;
+    if (now < plan.begin) return 0;
     if (host_gpu_ready() <= 0) return 0;
-    moment = smooth.next;
     if (presenter.clock) SDL_LockMutex(presenter.clock);
-    at = smooth.at; period = smooth.period; have = smooth.have; whole = smooth.whole;
+    at = smooth.at; period = smooth.period; have = smooth.have; whole = smooth.whole; vblank = smooth.vblank;
     if (presenter.clock) SDL_UnlockMutex(presenter.clock);
-    since = have ? (moment - at) / period : 0;
+    since = have ? (plan.guest - at) / period : 0;
     if (since < 0) since = 0;
     if (since > 1) since = 1;
+    begun = seconds();
     smooth.shown = smooth.draw(smooth.context, since, whole);
     if (!host_gpu_scanout(smooth.shown)) return 0;
     {
@@ -865,6 +875,8 @@ int host_display_tick(void) {
         host_osd_hold(0);
         if (!ok) return 0;
     }
+    drawn = seconds();
+    smooth.spent[0] += drawn - begun;
     if (host_gpu_presented_frames()) {
         const uint8_t *rgb; int w, h;
         size_t size = strlen(host_gpu_presented_frames()) + 40;
@@ -876,34 +888,34 @@ int host_display_tick(void) {
         }
         free(path);
         if (!ok) { fail("cannot write presented PNG"); return 0; }
+        waited += seconds() - drawn;
     }
-    {
-        /* How long drawing takes: about the most it took lately. */
-        double took = seconds() - now;
-        smooth.drawing = took > smooth.drawing ? took : smooth.drawing - 0.05 * (smooth.drawing - took);
+    /* Held until its refresh where the device can; elsewhere handed over at
+     * its time. */
+    if (plan.target > 0) host_gpu_present_at(plan.target);
+    else if (plan.handover > 0) {
+        double from = seconds();
+        while (seconds() < plan.handover) SDL_Delay(plan.handover - seconds() > 0.0015 ? 1 : 0);
+        smooth.spent[2] += seconds() - from;
+        waited += seconds() - from;
     }
-    /* Handed over at its moment, so that it lands on the same refresh after it
-     * as the others. */
-    {
-        double drawn_at = seconds(), handed;
-        smooth.spent[0] += drawn_at - now;
-        while (seconds() < moment) SDL_Delay(moment - seconds() > 0.0015 ? 1 : 0);
-        handed = seconds();
-        smooth.spent[2] += handed - drawn_at;
+    handed = seconds();
+    host_gpu_frame(smooth.shown);
+    smooth.spent[1] += seconds() - handed;
+    pending(&plan, plan.moment, plan.target, begun, since, vblank, 0);
+    cost = seconds() - begun - waited;
+    /* The same picture again for each refresh until the next, held until its
+     * own, so that the compositor always has something for the next refresh. */
+    for (r = 1; r <= plan.repeats && host_gpu_ready() > 0; ++r) {
+        double moment = plan.moment + r * smooth.pace.refresh, from = seconds();
+        if (!host_gpu_present()) break;
+        host_gpu_present_at(plan.target + r * smooth.pace.refresh);
         host_gpu_frame(smooth.shown);
-        smooth.spent[1] += seconds() - handed;
+        smooth.spent[1] += seconds() - from;
+        pending(&plan, moment, plan.target + r * smooth.pace.refresh, from, since, vblank, 1);
     }
-    id = host_gpu_present_id();
-    if (smooth.stats && !id) fprintf(smooth.stats, "%" PRIu64 ",%.3f,%.3f,%.3f,,,%.4f,%.4f,%u\n", smooth.presents,
-                                     (moment - smooth.start) * 1000, (now - smooth.start) * 1000,
-                                     (seconds() - smooth.start) * 1000, since, smooth.refresh * 1000, smooth.k);
-    if (id && smooth.pending < SMOOTH_PENDING) {
-        unsigned i = (smooth.first + smooth.pending++) % SMOOTH_PENDING;
-        smooth.ids[i] = id; smooth.moments[i] = moment; smooth.drawn[i] = now;
-        smooth.presented[i] = seconds(); smooth.since[i] = since;
-    }
+    present_pace_done(&smooth.pace, &plan, cost, r > 1 ? (seconds() - begun - waited - cost) / (r - 1) : 0, seconds());
     ++smooth.presents;
-    smooth.next += smooth.k * smooth.refresh;
     return 1;
 }
 static int presenter_main(void *unused) {
@@ -912,9 +924,9 @@ static int presenter_main(void *unused) {
         double wait;
         SDL_LockMutex(presenter.running);
         /* A picture due goes first; what the guest queued is taken up in the
-         * time left before the next. */
+         * time left before the next (drawing takes it up anyway). */
         host_display_tick();
-        if (presenter.idle) presenter.idle(smooth.context);
+        if (presenter.idle && smooth.wake - seconds() > 0.002) presenter.idle(smooth.context);
         wait = smooth.wake - seconds();
         SDL_UnlockMutex(presenter.running);
         /* Asleep until a millisecond and a half before it, the rest awake. */
@@ -1129,9 +1141,9 @@ int host_display_shutdown(gpu_t *g) {
     unsigned port;
 #ifdef FF8_VULKAN
     host_display_presenter(NULL, 0);
-    if (smooth.presents)
-        fprintf(stderr, "Smooth motion: pictures=%" PRIu64 " missed=%" PRIu64 " drawing=%.1f s handing-over=%.1f s waiting=%.1f s holding=%.1f s\n",
-                smooth.presents, smooth.missed, smooth.spent[0], smooth.spent[1], smooth.spent[2], smooth.spent[3]);
+    if (smooth.presents) smooth_totals("");
+    /* Pictures the display never reported, as the window closed. */
+    while (smooth.pending) { stats_line(smooth.first++ % SMOOTH_PENDING, NULL, 0, 0); --smooth.pending; }
     if (smooth.stats && fclose(smooth.stats)) host.failed = 1;
     memset(&smooth, 0, sizeof(smooth));
 #endif

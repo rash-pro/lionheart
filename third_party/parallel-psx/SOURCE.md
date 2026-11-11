@@ -97,7 +97,9 @@ The renderer can keep a copy of its VRAM, both planes and the atlas' block statu
 (`Renderer::copy_vram`, `FBAtlas::get_status`, `FBAtlas::set_status`), for a host that draws the same commands
 again from one point. Device creation enables `VK_KHR_present_id`, `VK_KHR_present_wait` and
 `VK_EXT_present_mode_fifo_latest_ready` where the device has them, for a host that paces its own presents; a
-feature chain started by swapchain-maintenance1 now continues after it. These are original project changes
+feature chain started by swapchain-maintenance1 now continues after it. It also enables `VK_EXT_present_timing` and
+`VK_KHR_present_id2`, with a calibrated-timestamps extension they need, where the device has them, so that the
+host can learn when each picture was shown and hold a present until a time. These are original project changes
 under MIT.
 
 The atlas can skip the checks of a textured draw that reads the same texture and palette as the one before with

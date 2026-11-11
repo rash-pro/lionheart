@@ -82,8 +82,9 @@ renderer beside the commands (`gpu_subpixel`, `gpu_subpixel_offset`). A layer mo
 the same fraction, so tiles keep their shared edges.
 
 Changes inside `third_party/parallel-psx`: `FBAtlas::get_status`/`set_status`, `Renderer::copy_vram` and its
-`VramCopy`, and device creation enables `VK_KHR_present_id`, `VK_KHR_present_wait` and
-`VK_EXT_present_mode_fifo_latest_ready` where the device has them.
+`VramCopy`, the atlas' texture memo (`Renderer::set_texture_memo`), and device creation enables
+`VK_KHR_present_id`, `VK_KHR_present_wait`, `VK_EXT_present_mode_fifo_latest_ready`, `VK_EXT_present_timing` and
+`VK_KHR_present_id2` where the device has them.
 
 ## Pacing
 
@@ -94,22 +95,59 @@ The game thread parks it to use the renderer itself (the menu, a loaded state's 
 The guest's timing and audio are not touched: the guest runs on the audio clock as before, and nothing it does
 waits on a picture.
 
-A new picture is presented every k-th refresh of the display, k the refresh rate over 60 rounded (1 at 60 Hz, 2
-at 120 or 144 Hz: about 60 pictures a second), each at the same moment of a refresh's period: just before a
-refresh, which it is always too late for, so that it is always in time for the next. Where the device can say
-when each present reaches the display (`VK_KHR_present_wait`), a thread watches each present arrive
-(`HostGPU::Swapchain::watch`) and the moments follow those times, so they do not drift against the display; a
-picture that still makes the earlier refresh halves the margin. The swapchain shows the latest picture ready at
-each refresh where the device offers it (`VK_EXT_present_mode_fifo_latest_ready`), so that presenting never
-blocks; elsewhere it is FIFO. Without present times the clock runs on its own at the display's nominal rate. The
-picture is drawn ahead, by about the most drawing has taken lately, and handed over at its moment. The display
-the window is on is checked once a second, and the clock starts over when it moves to one of another rate.
+A picture can be drawn for any moment, so each is drawn for one refresh of the display and shown on it: on every
+refresh where a picture's cost fits the refresh period with a margin, on every second (or third...) where it does
+not. The pacing is `backends/host/present_pace.h`, apart from the device so that a test can drive it on synthetic
+displays.
 
-Each picture shows the game at its moment on the guest's VBlank clock (smoothed, since the guest's VBlanks come
-when pacing wakes, a millisecond early or late). The phase of the newest game frame follows its measured interval,
-as offline: the frame that ended n VBlanks after the one before is drawn at (t - end) / n, whole from the end of
-its interval until the next frame ends (a hold), and cut short when the next comes early (a skip). Game frames
-come every 2 to 6 VBlanks.
+**When a picture was shown.** Where the device has `VK_EXT_present_timing` (and the window's surface supports it),
+each present carries an id and asks when its first pixel went out; the presentation engine reports the
+compositor's own times, read back on the presentation thread (`HostGPU::Swapchain::shown`), in a swapchain time
+domain calibrated against the host's monotonic clock. `VK_KHR_present_wait` cannot stand in for this on every
+driver: on this machine's NVIDIA driver a wait only completes when some call into the swapchain takes up the
+compositor's events, so a watcher sees each present when the next present is handed over, and pacing by those
+times locks onto its own hand-overs instead of the display. That was the seven seconds of misses in the fields at
+60 Hz: the moments followed themselves, and handing over a picture took from 1 to 10 ms (inside the driver's
+present path), so some crossed the compositor's deadline and some did not. Without present timing the old
+watcher is still used.
+
+**The grid.** The refreshes are a grid: its period is the one the device reports (`refreshDuration`), or, where
+it reports none (a virtual output; this machine's 60 Hz output runs at 59.90 Hz), found from the time between
+reports on the grid. Its phase is locked onto the times most reports agree on and follows each report on the grid
+after that, so it does not drift against the display. A compositor may report a picture at another output's
+refresh (Hyprland does for a few percent of pictures here, at the laptop panel's refresh while the window is on
+the other display): a report off the grid by more than a tenth of a refresh says nothing of the picture and is set
+aside; many in a row and the grid is found again.
+
+**Handing over.** With present timing and presents that can be held until a time (`presentAtAbsoluteTime`), each
+picture is handed over before the refresh before its own and held until half a refresh before its own. A
+compositor takes what is due at each refresh (Hyprland releases a held commit at the refresh before the one it is
+for, or by a timer), so the picture is the compositor's a refresh ahead and shown on its own refresh wherever in
+the period the compositor's deadline lies, and wherever the grid is known to within half a refresh. The swapchain
+is a mailbox then, with room for the pictures held: with FIFO each present also waits for the one before to be
+shown, which Hyprland only does when something else on the output changes, and pictures stalled for seconds. A
+picture that comes late moves the hand-over half a refresh earlier; it comes back by half a millisecond for every
+five seconds with none late. Between two pictures every second refresh or more, copies of the picture are handed
+over for each refresh between, held until theirs: a compositor that has had nothing new for two refreshes takes
+one more to wake up, which made every third or fourth picture late. Without targets, pictures are handed over in
+the middle of the refresh before the one before their own and moved within it as they come early or late.
+
+**How often.** What a picture costs is about the most the last sixteen took (the second most, so that one slow
+picture does not move it), copies by their average. A picture every m refreshes, m the least for which a picture
+and m - 1 copies take three quarters of m refreshes; up as soon as the current multiple no longer fits with a
+little to spare (a picture that does not fit makes the next late), down only after two seconds in which the
+lower one would have fitted. A change of multiple changes nothing in how the game moves, since every picture is
+drawn for its own moment: the steps between pictures double or halve, evenly.
+
+**What a picture shows.** A picture shows the game at the moment it is begun, held at the same distance from the
+refresh it is for, so that pictures evenly spaced on the display show the game evenly spaced. That moment is
+taken on the guest's VBlank clock (smoothed, since the guest's VBlanks come when pacing wakes, a millisecond
+early or late). The phase of the newest game frame follows its measured interval, as offline: the frame that
+ended n VBlanks after the one before is drawn at (t - end) / n, whole from the end of its interval until the next
+frame ends (a hold), and cut short when the next comes early (a skip). Game frames come every 2 to 6 VBlanks.
+
+The display the window is on is checked once a second, and pacing starts over when it moves to one of another
+rate or the device learns more of it.
 
 Shown as the game shows it: fast-forward, the world map (excluded by frame identity), a frame more than eight
 VBlanks after the one before (loads, a disc change, a field change), a camera cut or a change of scene, and a
@@ -118,9 +156,11 @@ before. Movies are drawn like any other frame: with nothing that moves between f
 Without a window (headless) and with the software renderer, the picture is drawn once per guest VBlank on the
 guest's own timeline, as the offline renderer does.
 
-`--present-stats PATH.csv` writes one line per picture: the moment it was for, when it was drawn and presented,
-when it was seen reaching the display, how many refreshes after its moment that was, and its phase. At exit the
-player prints how many pictures it presented and missed and the time spent drawing, handing over and waiting.
+`--present-stats PATH.csv` writes one line per present: the refresh it was for, when it was begun and handed
+over, when the display reported it (and whether that report was off the grid), how many refreshes after its own
+that was, its phase, the refresh period, the multiple, the time it was held until, whether it is a copy, and when
+the guest VBlank whose game it shows came. At exit the player prints how many pictures were on time, late or
+reported off the grid, the multiple and the lead, and the time spent drawing and handing over.
 
 ## Measures
 
