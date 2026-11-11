@@ -727,15 +727,73 @@ bool Context::create_device(VkPhysicalDevice gpu, VkSurfaceKHR surface, const ch
 		if (maintenance.swapchainMaintenance1) {
 			if (ext.supports_physical_device_properties2) *ppNext = &maintenance;
 			else device_info.pNext = &maintenance;
+			if (ext.supports_physical_device_properties2) ppNext = &maintenance.pNext;
 			enabled_extensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 		}
 	}
+	// Host: when each present reaches the display, for a host that paces by it.
+	VkPhysicalDevicePresentIdFeaturesKHR present_id = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR };
+	VkPhysicalDevicePresentWaitFeaturesKHR present_wait = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR };
+	if (surface && vkGetPhysicalDeviceFeatures2 &&
+	    has_vk_extension(queried_extensions, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+	    has_vk_extension(queried_extensions, VK_KHR_PRESENT_WAIT_EXTENSION_NAME)) {
+		VkPhysicalDeviceFeatures2 probe = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		probe.pNext = &present_id;
+		present_id.pNext = &present_wait;
+		vkGetPhysicalDeviceFeatures2(gpu, &probe);
+		present_id.pNext = nullptr;
+		if (present_id.presentId && present_wait.presentWait) {
+			present_id.pNext = &present_wait;
+			if (ext.supports_physical_device_properties2)
+			{
+				*ppNext = &present_id;
+				ppNext = &present_wait.pNext;
+			}
+			else
+			{
+				present_wait.pNext = const_cast<void *>(device_info.pNext);
+				device_info.pNext = &present_id;
+			}
+			enabled_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+			enabled_extensions.push_back(VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+		}
+	}
+#ifdef VK_EXT_present_mode_fifo_latest_ready
+	// Host: a present mode that shows the latest picture ready at each refresh
+	// without blocking, for a host that paces its presents itself.
+	VkPhysicalDevicePresentModeFifoLatestReadyFeaturesEXT latest_ready = {
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_EXT };
+	if (surface && vkGetPhysicalDeviceFeatures2 &&
+	    has_vk_extension(queried_extensions, VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME)) {
+		VkPhysicalDeviceFeatures2 probe = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		probe.pNext = &latest_ready;
+		vkGetPhysicalDeviceFeatures2(gpu, &probe);
+		latest_ready.pNext = nullptr;
+		if (latest_ready.presentModeFifoLatestReady) {
+			if (ext.supports_physical_device_properties2)
+			{
+				*ppNext = &latest_ready;
+				ppNext = &latest_ready.pNext;
+			}
+			else
+			{
+				latest_ready.pNext = const_cast<void *>(device_info.pNext);
+				device_info.pNext = &latest_ready;
+			}
+			enabled_extensions.push_back(VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME);
+		}
+	}
+#endif
 	if (ext.supports_physical_device_properties2)
 		vkGetPhysicalDeviceFeatures2KHR(gpu, &features);
 	else
 		vkGetPhysicalDeviceFeatures(gpu, &features.features);
 
 	ext.supports_swapchain_maintenance1 = maintenance.swapchainMaintenance1 == VK_TRUE;
+	ext.supports_present_wait = present_id.presentId == VK_TRUE && present_wait.presentWait == VK_TRUE;
+#ifdef VK_EXT_present_mode_fifo_latest_ready
+	ext.supports_fifo_latest_ready = latest_ready.presentModeFifoLatestReady == VK_TRUE;
+#endif
 	// Enable device features we might care about.
 	{
 		VkPhysicalDeviceFeatures enabled_features = *required_features;

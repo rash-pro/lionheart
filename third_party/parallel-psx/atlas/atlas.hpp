@@ -222,6 +222,16 @@ public:
 	void notify_external_barrier(StatusFlags domains);
 	void flush_render_pass();
 
+	// Host: a block's status, kept with a copy of VRAM (Renderer::copy_vram).
+	StatusFlags get_status(unsigned block_x, unsigned block_y) const
+	{
+		return info(block_x, block_y);
+	}
+	void set_status(unsigned block_x, unsigned block_y, StatusFlags flags)
+	{
+		info(block_x, block_y) = flags;
+	}
+
 private:
 	StatusFlags fb_info[NUM_BLOCKS_X * NUM_BLOCKS_Y];
 	Renderer *listener = nullptr;

@@ -90,3 +90,12 @@ The atlas retains both accesses of a queued VRAM copy and both writes of a
 partial host upload after any intervening barrier. Global stage barriers also
 make retired writes visible to color attachment loads for either VRAM plane.
 These are original project changes under MIT.
+
+## Smooth motion
+
+The renderer can keep a copy of its VRAM, both planes and the atlas' block status, and put it back, tile by tile
+(`Renderer::copy_vram`, `FBAtlas::get_status`, `FBAtlas::set_status`), for a host that draws the same commands
+again from one point. Device creation enables `VK_KHR_present_id`, `VK_KHR_present_wait` and
+`VK_EXT_present_mode_fifo_latest_ready` where the device has them, for a host that paces its own presents; a
+feature chain started by swapchain-maintenance1 now continues after it. These are original project changes
+under MIT.

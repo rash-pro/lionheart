@@ -2,8 +2,9 @@
 
 The third stage of presenting frames between the game's own: fields. Frame blending (`docs/frame-blend.md`)
 moves 3D between game frames; in a field nearly everything that changes on screen is 2D, the prerendered
-background, and it stepped at the game's rate. This stage moves it as a layer. Like blending, it runs only
-offline, in the developer tool that draws recordings again, and changes nothing the game computes.
+background, and it stepped at the game's rate. This stage moves it as a layer, offline in the developer tool that draws
+recordings again and live in the player with smooth motion on (`docs/frame-present.md`); it changes nothing
+the game computes.
 
 ## How FF8 draws a field
 
@@ -142,7 +143,6 @@ is a change to frame identity, which battle uses too, and it is left for later.
 
 ## Limits
 
-- Offline only, like frame blending.
 - Offsets and sprite positions are whole pixels: a scroll of one pixel every few game frames steps a pixel at a
   time, as the game's does.
 - A layer must move rigidly. A background whose tiles move by themselves holds; a fade drawn by changing tile

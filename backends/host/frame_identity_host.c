@@ -64,7 +64,7 @@ static unsigned scene_of(uint32_t tag) {
 }
 
 /* FF8's mode word; the world map is excluded until it has a check of its own. */
-static uint32_t classify(void *context, const cpu_t *c) {
+uint32_t host_frame_identity_classify(void *context, const cpu_t *c) {
     uint32_t mode;
     (void)context;
     if (!c) return 0;
@@ -152,7 +152,7 @@ static void sink(void *context, const frame_identity_frame_t *f) {
 #endif
 }
 
-static void bind(int on) {
+void host_frame_identity_bind(int on) {
     interp_gte_command = on ? frame_identity_gte_command : gte_cmd;
     native_modules_bind_projection(on ? frame_identity_rtps : NULL, on ? frame_identity_rtpt : NULL);
 #ifdef FF8_FRAME_IDENTITY_LINKED
@@ -192,7 +192,7 @@ int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, in
         if (h.dump_path) strcpy(h.dump_path, dump);
     }
     memset(&config, 0, sizeof(config));
-    config.sink = sink; config.classify = classify;
+    config.sink = sink; config.classify = host_frame_identity_classify;
     if (!frame_identity_start(c->hw->gpu, &config)) { fprintf(stderr, "Cannot start frame identity\n"); return 0; }
     if (record) {
         if (!frame_record_start(c->hw->gpu, record, from, until)) {
@@ -202,7 +202,7 @@ int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, in
         }
         h.recording = 1;
     }
-    bind(1);
+    host_frame_identity_bind(1);
     h.running = 1;
     return 1;
 }
@@ -236,7 +236,7 @@ int host_frame_identity_stop(void) {
     unsigned i;
     int ok = 1;
     if (!h.running) return 1;
-    bind(0);
+    host_frame_identity_bind(0);
     if (h.recording && !frame_record_stop()) { fprintf(stderr, "Cannot write the frame recording\n"); ok = 0; }
     frame_identity_stop();
     if (h.dump && fclose(h.dump)) h.failed = 1;

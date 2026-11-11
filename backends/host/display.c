@@ -13,6 +13,7 @@
 #endif
 #include <SDL.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@ static struct {
     int dualshock, focused, paused;
     int ra_active, ra_strict;
     int scale_mode, linear, crt, crt_warned;
+    gpu_t *source;
 #ifdef FF8_GUI
     int gui_attached;
     void (*audio_pause)(void), (*audio_resume)(void);
@@ -490,7 +492,7 @@ void host_display_capture(unsigned step, uint64_t first_frame) {
 }
 
 #ifdef FF8_VULKAN
-int host_display_gpu(gpu_t *g) { return host_gpu_start(g,host.window) && soft_fallback(); }
+int host_display_gpu(gpu_t *g) { return host_gpu_start(host.source ? host.source : g,host.window) && soft_fallback(); }
 int host_display_scaled_dump(gpu_t *g, const char *path) {
     int w,h;
     const uint8_t *rgb;
@@ -585,10 +587,21 @@ int host_display_gui_fullscreen_exclusive(void) {
 }
 host_gui_result_t host_display_gui_loop(int shell) {
     uint64_t start;
+    host_gui_result_t result;
+#ifdef FF8_VULKAN
+    /* The menu draws with the renderer here: smooth motion's thread waits. */
+    host_display_park(1);
+#endif
     host_input_pause(1); clear_pad(); memset(host.keys,0,sizeof(host.keys));
     if (host.audio_pause) host.audio_pause();
     host_osd_pause(1);
-    if (!host_display_gui_attach()) { fail("cannot initialise GUI"); return HOST_GUI_ERROR; }
+    if (!host_display_gui_attach()) {
+        fail("cannot initialise GUI");
+#ifdef FF8_VULKAN
+        host_display_park(0);
+#endif
+        return HOST_GUI_ERROR;
+    }
     gui_ui_reset_input();
     while (host_gui_visible() && !host.quit && host_gui_result()==HOST_GUI_RUNNING) {
         int rw=(int)host.present_w,rh=(int)host.present_h,ok=1;
@@ -656,7 +669,277 @@ host_gui_result_t host_display_gui_loop(int shell) {
     host_osd_pause(0);
     if (host.audio_resume) host.audio_resume();
     host_input_pause(0);
-    return host.failed ? HOST_GUI_ERROR : host.quit ? HOST_GUI_QUIT : host_gui_result();
+    result = host.failed ? HOST_GUI_ERROR : host.quit ? HOST_GUI_QUIT : host_gui_result();
+#ifdef FF8_VULKAN
+    host_display_park(0);
+#endif
+    return result;
+}
+#endif
+#ifdef FF8_VULKAN
+/* Smooth motion: pictures on the display's own clock, not the guest's. A new
+ * picture is presented every k-th refresh of the display (k the refresh rate
+ * over 60, rounded: about 60 pictures a second, every other refresh at 120 or
+ * 144 Hz), each at the same moment of a refresh's period, which the compositor
+ * turns into the same refresh after it every time. The picture is drawn ahead
+ * and handed over at that moment, so neither the game thread's other work nor
+ * the time a picture takes to draw moves it. Where the device says when each
+ * present reaches the display (host_gpu_present_seen), the moments follow
+ * those times, so they neither drift against the display nor sit near the
+ * compositor's deadline, where pictures would land on two refreshes by
+ * turns (see reached()). Elsewhere the clock runs on its own at the
+ * display's nominal rate. Each picture shows the game at its moment on the
+ * guest's VBlank clock. */
+enum { SMOOTH_PENDING = 16 };
+/* The thread that draws and presents while smooth motion runs in a window: the
+ * guest thread then only queues what it sends its GPU. The game thread parks
+ * it (host_display_park) to use the renderer itself: the menu, shutting down. */
+static struct {
+    SDL_Thread *thread;
+    SDL_mutex *running, *clock;
+    SDL_atomic_t stop;
+    void (*idle)(void *context);
+} presenter;
+static struct {
+    host_display_draw_t draw;
+    void *context;
+    gpu_t *shown;
+    unsigned k;
+    int rate, have, whole, phased;
+    unsigned vblanks;
+    double at, period, frequency, start;   /* the guest's last VBlank (smoothed) and its period, seconds */
+    double refresh, phase, offset, next;    /* a refresh period and time, where in it presents go, the next one */
+    double before;                          /* how long before a refresh pictures are handed over */
+    double drawing;                         /* how long drawing and handing over a picture take, lately */
+    double left, work;                      /* when the guest's work began, how long it takes */
+    uint64_t ids[SMOOTH_PENDING];
+    double moments[SMOOTH_PENDING], drawn[SMOOTH_PENDING], presented[SMOOTH_PENDING], since[SMOOTH_PENDING];
+    unsigned pending, first;
+    uint64_t presents, missed;
+    double spent[4];                        /* seconds drawing, handing over, waiting for moments, holding the guest */
+    double wake, checked;                   /* when the next picture is begun; the display last checked */
+    FILE *stats;
+} smooth;
+static double seconds(void) { return (double)SDL_GetPerformanceCounter() / smooth.frequency; }
+/* The refresh rate of the display the window is on, checked again now and
+ * then: the window may be moved to another display. */
+static void smooth_display(void) {
+    SDL_DisplayMode mode;
+    int index = host.window ? SDL_GetWindowDisplayIndex(host.window) : -1;
+    int rate = index >= 0 && !SDL_GetCurrentDisplayMode(index, &mode) && mode.refresh_rate > 0 ? mode.refresh_rate : 60;
+    if (smooth.k && rate == smooth.rate) return;
+    smooth.rate = rate;
+    smooth.k = (unsigned)((rate + 30) / 60);
+    if (!smooth.k) smooth.k = 1;
+    smooth.refresh = 1.0 / rate;
+    smooth.before = 0.001;
+    smooth.offset = smooth.refresh - smooth.before;
+    smooth.phased = 0; smooth.next = 0;
+}
+void host_display_smooth(host_display_draw_t draw, void *context) {
+    if (!draw) {
+        FILE *stats = smooth.stats;
+        if (smooth.draw) fprintf(stderr, "Smooth motion: pictures=%" PRIu64 " missed=%" PRIu64 "\n", smooth.presents, smooth.missed);
+        memset(&smooth, 0, sizeof(smooth)); smooth.stats = stats; host_gpu_paced(0); return;
+    }
+    host_gpu_paced(1);
+    smooth.draw = draw; smooth.context = context;
+    if (!smooth.k) {
+        smooth.frequency = (double)SDL_GetPerformanceFrequency();
+        smooth.start = seconds();
+        smooth_display();
+    }
+}
+int host_display_present_stats(const char *path) {
+    if (!path) return 1;
+    if (!(smooth.stats = fopen(path, "w"))) return 0;
+    return fprintf(smooth.stats, "picture,moment_ms,drawn_ms,presented_ms,reached_ms,refreshes_after,since,refresh_ms,k,offset_ms\n") > 0;
+}
+uint64_t host_display_pictures(void) { return smooth.presents; }
+int host_display_smoothing(void) { return smooth.draw && host.window && host_gpu_enabled() && !host.quit; }
+void host_display_smooth_vblank(int pal, int whole) {
+    double now = seconds(), period = pal ? 1.0 / 50 : 1001.0 / 60000;
+    if (presenter.clock) SDL_LockMutex(presenter.clock);
+    if (smooth.left > 0) {
+        double work = now - smooth.left;
+        smooth.work = work > smooth.work ? work : smooth.work + 0.05 * (work - smooth.work);
+    }
+    /* The guest's VBlanks come when pacing lets them, a millisecond early or
+     * late; the pictures follow its average clock, not each wake-up. */
+    if (!smooth.have || now - (smooth.at + period) > 2 * period || now - (smooth.at + period) < -2 * period) smooth.at = now;
+    else smooth.at += period + 0.05 * (now - (smooth.at + period));
+    smooth.period = period; smooth.have = 1; smooth.whole = whole;
+    if (presenter.clock) SDL_UnlockMutex(presenter.clock);
+}
+static double nearest_refresh(double t) {
+    double cycles = (t - smooth.phase) / smooth.refresh;
+    return smooth.phase + (double)(int64_t)(cycles + (cycles >= 0 ? 0.5 : -0.5)) * smooth.refresh;
+}
+/* A present handed over at presented reached the display at when (to a fifth
+ * of a millisecond, seen by the swapchain's watcher). The refreshes follow
+ * those times. How long before a refresh the compositor must have a picture
+ * to show it then varies, by most of a refresh at 144 Hz, so a picture handed
+ * over somewhere in the middle of a refresh's period lands on one refresh or
+ * the next by turns. Handed over just before a refresh (by before), it is
+ * always too late for that one and always in time for the next. One that
+ * still makes the earlier refresh halves the margin. */
+static void reached(double when, double moment, double presented) {
+    int landed;
+    if (!smooth.phased) { smooth.phase = when; smooth.phased = 1; }
+    smooth.phase += 0.1 * (when - nearest_refresh(when));
+    landed = (int)((when - presented) / smooth.refresh + 0.5);
+    if (landed < 1 && smooth.before > 0.0004) smooth.before *= 0.5;
+    smooth.offset = smooth.refresh - smooth.before;
+    if (smooth.stats) fprintf(smooth.stats, ",%.3f,%d", (when - smooth.start) * 1000, (int)((when - moment) / smooth.refresh + 0.5));
+}
+/* The guest's next VBlank is due in ms: if the next picture would be due
+ * while the guest works on it, it is drawn first, and the guest begins that
+ * much later; its own clock and the audio do not change. */
+void host_display_hold(double ms) {
+    double now, start;
+    if (!host_display_smoothing()) return;
+    now = seconds();
+    smooth.left = now + ms / 1000;
+    start = smooth.next - smooth.drawing;
+    if (ms > 1.5 || !smooth.next || start > smooth.left + smooth.work || start < now - 0.25 * smooth.refresh) return;
+    {
+        double from = seconds();
+        while (seconds() < start) SDL_Delay(start - seconds() > 0.0015 ? 1 : 0);
+        smooth.spent[3] += seconds() - from;
+    }
+    host_display_tick();
+    smooth.left = seconds();
+}
+int host_display_tick(void) {
+    double now, since, moment, at, period;
+    int have, whole;
+    uint64_t id;
+    if (!host_display_smoothing()) return 0;
+    now = seconds();
+    smooth.wake = now + 0.002;
+#ifdef FF8_GUI
+    if (host_gui_visible()) return 0;
+#endif
+    if (now - smooth.checked > 1) { smooth.checked = now; smooth_display(); }
+    {
+        uint64_t seen;
+        double when;
+        while (host_gpu_present_seen(&seen, &when)) {
+            /* Presents never seen (the swapchain was made again) are written without. */
+            while (smooth.pending) {
+                unsigned i = smooth.first % SMOOTH_PENDING;
+                if (smooth.ids[i] > seen) break;
+                if (smooth.stats)
+                    fprintf(smooth.stats, "%" PRIu64 ",%.3f,%.3f,%.3f", smooth.ids[i], (smooth.moments[i] - smooth.start) * 1000,
+                            (smooth.drawn[i] - smooth.start) * 1000, (smooth.presented[i] - smooth.start) * 1000);
+                if (smooth.ids[i] == seen) reached(when, smooth.moments[i], smooth.presented[i]);
+                else if (smooth.stats) fprintf(smooth.stats, ",,");
+                if (smooth.stats) fprintf(smooth.stats, ",%.4f,%.4f,%u,%.3f\n", smooth.since[i], smooth.refresh * 1000, smooth.k, smooth.offset * 1000);
+                ++smooth.first; --smooth.pending;
+            }
+        }
+    }
+    /* The next moment, on the refreshes as they are known now. */
+    if (!smooth.next) smooth.next = now + smooth.drawing + smooth.refresh;
+    else if (smooth.phased) smooth.next = nearest_refresh(smooth.next - smooth.offset) + smooth.offset;
+    /* Begun early enough to be ready by its moment even when drawing is slow;
+     * too late for that by more than a quarter of a refresh, the picture is
+     * for a later moment. */
+    while (now > smooth.next - smooth.drawing + 0.25 * smooth.refresh) { smooth.next += smooth.k * smooth.refresh; ++smooth.missed; }
+    smooth.wake = smooth.next - smooth.drawing - 0.0005;
+    if (now < smooth.wake) return 0;
+    if (host_gpu_ready() <= 0) return 0;
+    moment = smooth.next;
+    if (presenter.clock) SDL_LockMutex(presenter.clock);
+    at = smooth.at; period = smooth.period; have = smooth.have; whole = smooth.whole;
+    if (presenter.clock) SDL_UnlockMutex(presenter.clock);
+    since = have ? (moment - at) / period : 0;
+    if (since < 0) since = 0;
+    if (since > 1) since = 1;
+    smooth.shown = smooth.draw(smooth.context, since, whole);
+    if (!host_gpu_scanout(smooth.shown)) return 0;
+    {
+        int ok;
+        host_osd_hold(1);
+        ok = host_gpu_present();
+        host_osd_hold(0);
+        if (!ok) return 0;
+    }
+    if (host_gpu_presented_frames()) {
+        const uint8_t *rgb; int w, h;
+        size_t size = strlen(host_gpu_presented_frames()) + 40;
+        char *path = malloc(size);
+        int ok = 0;
+        if (path && host_gpu_presented_rgb(&rgb, &w, &h)) {
+            snprintf(path, size, "%s/frame-%06llu.png", host_gpu_presented_frames(), (unsigned long long)smooth.presents);
+            ok = host_png(path, rgb, w, h);
+        }
+        free(path);
+        if (!ok) { fail("cannot write presented PNG"); return 0; }
+    }
+    {
+        /* How long drawing takes: about the most it took lately. */
+        double took = seconds() - now;
+        smooth.drawing = took > smooth.drawing ? took : smooth.drawing - 0.05 * (smooth.drawing - took);
+    }
+    /* Handed over at its moment, so that it lands on the same refresh after it
+     * as the others. */
+    {
+        double drawn_at = seconds(), handed;
+        smooth.spent[0] += drawn_at - now;
+        while (seconds() < moment) SDL_Delay(moment - seconds() > 0.0015 ? 1 : 0);
+        handed = seconds();
+        smooth.spent[2] += handed - drawn_at;
+        host_gpu_frame(smooth.shown);
+        smooth.spent[1] += seconds() - handed;
+    }
+    id = host_gpu_present_id();
+    if (smooth.stats && !id) fprintf(smooth.stats, "%" PRIu64 ",%.3f,%.3f,%.3f,,,%.4f,%.4f,%u\n", smooth.presents,
+                                     (moment - smooth.start) * 1000, (now - smooth.start) * 1000,
+                                     (seconds() - smooth.start) * 1000, since, smooth.refresh * 1000, smooth.k);
+    if (id && smooth.pending < SMOOTH_PENDING) {
+        unsigned i = (smooth.first + smooth.pending++) % SMOOTH_PENDING;
+        smooth.ids[i] = id; smooth.moments[i] = moment; smooth.drawn[i] = now;
+        smooth.presented[i] = seconds(); smooth.since[i] = since;
+    }
+    ++smooth.presents;
+    smooth.next += smooth.k * smooth.refresh;
+    return 1;
+}
+static int presenter_main(void *unused) {
+    (void)unused;
+    while (!SDL_AtomicGet(&presenter.stop)) {
+        double wait;
+        SDL_LockMutex(presenter.running);
+        /* A picture due goes first; what the guest queued is taken up in the
+         * time left before the next. */
+        host_display_tick();
+        if (presenter.idle) presenter.idle(smooth.context);
+        wait = smooth.wake - seconds();
+        SDL_UnlockMutex(presenter.running);
+        /* Asleep until a millisecond and a half before it, the rest awake. */
+        SDL_Delay(wait > 0.0025 ? (Uint32)((wait - 0.0015) * 1000) : 0);
+    }
+    return 0;
+}
+int host_display_presenter(void (*idle)(void *context), int on) {
+    if (on && !presenter.thread) {
+        if (!presenter.running && !(presenter.running = SDL_CreateMutex())) return 0;
+        if (!presenter.clock && !(presenter.clock = SDL_CreateMutex())) return 0;
+        presenter.idle = idle;
+        SDL_AtomicSet(&presenter.stop, 0);
+        if (!(presenter.thread = SDL_CreateThread(presenter_main, "lionheart-present", NULL))) return 0;
+    } else if (!on && presenter.thread) {
+        SDL_AtomicSet(&presenter.stop, 1);
+        SDL_WaitThread(presenter.thread, NULL);
+        presenter.thread = NULL;
+    }
+    return 1;
+}
+int host_display_presenting(void) { return presenter.thread != NULL; }
+void host_display_park(int park) {
+    if (!presenter.thread) return;
+    if (park) SDL_LockMutex(presenter.running); else SDL_UnlockMutex(presenter.running);
 }
 #endif
 static void present(gpu_t *g, int capture) {
@@ -666,7 +949,9 @@ static void present(gpu_t *g, int capture) {
     if (capture) { host_screenshot_frame(host.osd_frame); ++host.osd_frame; }
 #ifdef FF8_GUI
     if (host_gui_enabled()) {
-        host_gui_test_tick(host.frame); gui_poll();
+        host_gui_test_tick(host.frame); 
+        /* Toasts are drawn with the menu's state, by smooth motion's thread too. */
+        host_osd_hold(1); gui_poll(); host_osd_hold(0);
         if (host_gui_requested()) host_gui_open();
     } else
 #endif
@@ -688,6 +973,8 @@ static void present(gpu_t *g, int capture) {
         fprintf(stderr, "CRT preset %s needs the Vulkan renderer; presenting normally\n", host_crt_names[host.crt]);
     }
 #ifdef FF8_VULKAN
+    /* Smooth motion presents on the display's clock (host_display_tick). */
+    if (host_display_smoothing()) { if (capture) ++host.frame; return; }
     if (host_gpu_enabled()) {
         const char *scaled=host_gpu_scaled_frames(), *presented=host_gpu_presented_frames();
         int take_capture=capture && host.frame>=host.capture_from && (!host.capture_step || host.frame%host.capture_step==0);
@@ -812,9 +1099,20 @@ gpu_fallback:
 }
 
 void host_present(gpu_t *g) { present(g,1); }
-void host_display_recover(gpu_t *g, uint64_t vblank) {
+void host_display_source(gpu_t *g) { host.source = g; }
+void host_display_rebind(gpu_t *g) {
 #ifdef FF8_VULKAN
     if (host_gpu_enabled()) host_gpu_resume(g);
+#else
+    (void)g;
+#endif
+}
+void host_display_recover(gpu_t *g, uint64_t vblank) {
+    if (host.source) g = host.source;
+#ifdef FF8_VULKAN
+    /* Smooth motion's thread starts its renderer over itself, as it takes up
+     * the restored state. */
+    if (host_gpu_enabled() && !host_display_presenting()) host_gpu_resume(g);
 #endif
     host_osd_clear(HOST_OSD_FAST);
     memset(host.keys,0,sizeof(host.keys));
@@ -829,6 +1127,14 @@ int host_display_failed(void) { return host.failed; }
 int host_display_shutdown(gpu_t *g) {
     int ok;
     unsigned port;
+#ifdef FF8_VULKAN
+    host_display_presenter(NULL, 0);
+    if (smooth.presents)
+        fprintf(stderr, "Smooth motion: pictures=%" PRIu64 " missed=%" PRIu64 " drawing=%.1f s handing-over=%.1f s waiting=%.1f s holding=%.1f s\n",
+                smooth.presents, smooth.missed, smooth.spent[0], smooth.spent[1], smooth.spent[2], smooth.spent[3]);
+    if (smooth.stats && fclose(smooth.stats)) host.failed = 1;
+    memset(&smooth, 0, sizeof(smooth));
+#endif
     host_input_pause(1);
     if (host.vram_path && (!g || !host_vram_dump(g, host.vram_path))) fail("cannot write VRAM PNG");
     host_screenshot_shutdown();

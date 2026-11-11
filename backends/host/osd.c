@@ -38,10 +38,10 @@ static uint8_t opacity(void) {
     if (!osd.persistent && age>=1920) a=(2220-age)/300;
     return a<=0 ? 0 : a>=1 ? 255 : (uint8_t)(a*255+0.5);
 }
-void host_osd_shutdown(void) { free(osd.pixels); memset(&osd,0,sizeof(osd)); osd.enabled=1; }
-void host_osd_configure(int enabled,const char *tests) {
+static void shutdown_locked(void) { free(osd.pixels); memset(&osd,0,sizeof(osd)); osd.enabled=1; }
+static void configure_locked(int enabled,const char *tests) {
     const char *p=tests;
-    host_osd_shutdown(); osd.enabled=enabled;
+    shutdown_locked(); osd.enabled=enabled;
     while (p && *p && osd.count<32) {
         char *parsed; const char *end; size_t n; unsigned i=osd.count++;
         osd.tests[i].frame=strtoull(p,&parsed,10); end=parsed;
@@ -58,8 +58,8 @@ void host_osd_configure(int enabled,const char *tests) {
         if (*p=='\n') ++p;
     }
 }
-void host_osd_clock(double milliseconds) { osd.window=0; osd.now=milliseconds; }
-void host_osd_pause(int paused) {
+static void clock_locked(double milliseconds) { osd.window=0; osd.now=milliseconds; }
+static void pause_locked(int paused) {
     double age,stamp;
     if (!!paused==osd.paused) return;
     age=now()-osd.start; stamp=host_osd_now();
@@ -67,15 +67,16 @@ void host_osd_pause(int paused) {
     else osd.window=osd.saved_window;
     osd.start=now()-age; osd.clock_offset=stamp-now(); osd.paused=!!paused;
 }
-void host_osd_frame(int window,uint64_t frame) {
+static void post_locked(const char *label,const char *value,int persistent);
+static void frame_locked(int window,uint64_t frame) {
     unsigned i;
     osd.window=window; osd.now=frame*(1000.0/60);
     for (i=0;i<osd.count;++i) if (!osd.tests[i].fired && frame>=osd.tests[i].frame) {
         osd.tests[i].fired=1;
-        host_osd_post(osd.tests[i].label,osd.tests[i].value,0);
+        post_locked(osd.tests[i].label,osd.tests[i].value,0);
     }
 }
-void host_osd_post(const char *label,const char *value,int persistent) {
+static void post_locked(const char *label,const char *value,int persistent) {
     int replace=opacity()!=0;
     if (!value) value="";
     if (strcmp(osd.label,label) || strcmp(osd.value,value)) osd.dirty=1;
@@ -83,7 +84,7 @@ void host_osd_post(const char *label,const char *value,int persistent) {
     snprintf(osd.value,sizeof(osd.value),"%s",value);
     osd.persistent=persistent; osd.replacement=replace; osd.start=now(); osd.event=~0u;
 }
-void host_osd_event(unsigned event,unsigned number,const char *detail) {
+static void event_locked(unsigned event,unsigned number,const char *detail) {
     char value[512]; const char *format;
     if (event>=sizeof(copy)/sizeof(copy[0])) return;
     format=copy[event].value[0];
@@ -96,10 +97,10 @@ void host_osd_event(unsigned event,unsigned number,const char *detail) {
              event==HOST_OSD_LOADED || event==HOST_OSD_NO_STATE || event==HOST_OSD_DISC)
         snprintf(value,sizeof(value),format,number);
     else snprintf(value,sizeof(value),"%s",format);
-    host_osd_post(copy[event].label,value,copy[event].persistent); osd.event=event;
+    post_locked(copy[event].label,value,copy[event].persistent); osd.event=event;
 }
-const char *host_osd_showing(void) { return opacity() ? osd.label : ""; }
-void host_osd_clear(unsigned event) {
+static const char *showing_locked(void) { return opacity() ? osd.label : ""; }
+static void clear_locked(unsigned event) {
     if (osd.event==event) { *osd.label=0; osd.dirty=1; }
 }
 /* UTF-8 controller names; unsupported codepoints become one '?' each. */
@@ -148,7 +149,7 @@ static int font_index(int height) {
     return chosen;
 }
 float host_osd_corner_radius(int height) { return cell_heights[font_index(height)]*0.3f; }
-const host_osd_panel_t *host_osd_panel(int width,int height,host_rect_t area) {
+static const host_osd_panel_t *panel_locked(int width,int height,host_rect_t area) {
     static const int widths[]={8,12,16,12,32};
     static const uint8_t dim[]={165,165,175}, bright[]={242,242,242};
     const uint32_t *fonts[]={&spleen_16[0][0],&spleen_24[0][0],&spleen_32[0][0],&spleen_24[0][0],&spleen_64[0][0]};
@@ -181,4 +182,31 @@ const host_osd_panel_t *host_osd_panel(int width,int height,host_rect_t area) {
     if (*osd.value) text(osd.value,padx+(cells(osd.label)+1)*cw,pady,widths[chosen],ch/scale,scale,fonts[chosen],bright);
     osd.width=width; osd.height=height; osd.dirty=0; ++osd.panel.revision;
     return &osd.panel;
+}
+
+/* Smooth motion presents from a thread of its own, which reads what the game
+ * thread posts: every entry takes one lock, and a renderer holds it while it
+ * uses the panel it was given. */
+static SDL_SpinLock guard;
+static SDL_mutex *mutex;
+void host_osd_hold(int on) {
+    if (!mutex) {
+        SDL_AtomicLock(&guard);
+        if (!mutex) mutex = SDL_CreateMutex();
+        SDL_AtomicUnlock(&guard);
+    }
+    if (!mutex) return;
+    if (on) SDL_LockMutex(mutex); else SDL_UnlockMutex(mutex);
+}
+void host_osd_shutdown(void) { host_osd_hold(1); shutdown_locked(); host_osd_hold(0); }
+void host_osd_configure(int enabled,const char *tests) { host_osd_hold(1); configure_locked(enabled,tests); host_osd_hold(0); }
+void host_osd_clock(double milliseconds) { host_osd_hold(1); clock_locked(milliseconds); host_osd_hold(0); }
+void host_osd_pause(int paused) { host_osd_hold(1); pause_locked(paused); host_osd_hold(0); }
+void host_osd_frame(int window,uint64_t frame) { host_osd_hold(1); frame_locked(window,frame); host_osd_hold(0); }
+void host_osd_post(const char *label,const char *value,int persistent) { host_osd_hold(1); post_locked(label,value,persistent); host_osd_hold(0); }
+void host_osd_event(unsigned event,unsigned number,const char *detail) { host_osd_hold(1); event_locked(event,number,detail); host_osd_hold(0); }
+const char *host_osd_showing(void) { const char *s; host_osd_hold(1); s=showing_locked(); host_osd_hold(0); return s; }
+void host_osd_clear(unsigned event) { host_osd_hold(1); clear_locked(event); host_osd_hold(0); }
+const host_osd_panel_t *host_osd_panel(int width,int height,host_rect_t area) {
+    const host_osd_panel_t *p; host_osd_hold(1); p=panel_locked(width,height,area); host_osd_hold(0); return p;
 }

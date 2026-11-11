@@ -11,7 +11,7 @@ typedef struct {
     int ra, ra_notify;
     char screenshot_dir[512], screenshot_at[4096];
     char osd_tests[4096];
-    int renderer, true_color, pgxp, full_disc, snapshot_cards, crt;
+    int renderer, true_color, pgxp, full_disc, snapshot_cards, crt, smooth_motion;
     uint64_t internal_scale, msaa, save_at, present_size;
     char presented_frames[512];
     char movies[512], movie_stats[512], scaled_frames[512], gpu_timings[512];

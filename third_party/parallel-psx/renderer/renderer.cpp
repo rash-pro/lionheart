@@ -226,6 +226,89 @@ Renderer::SaveState Renderer::save_vram_state()
 	return { std::move(vram), render_state, tracker.save_state() };
 }
 
+void Renderer::copy_vram(VramCopy &copy, const uint64_t tiles[2], bool restore)
+{
+	// Everything queued reaches VRAM first, and nothing touches it while the
+	// copy runs.
+	atlas.pipeline_barrier(STATUS_ALL);
+	ensure_command_buffer();
+	bool whole = !copy.framebuffer;
+	if (whole)
+	{
+		if (restore)
+			return;
+		auto like = [&](const Image &image) {
+			ImageCreateInfo info = ImageCreateInfo::render_target(image.get_width(), image.get_height(), image.get_format());
+			info.samples = image.get_create_info().samples;
+			info.levels = 1;
+			info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			info.initial_layout = VK_IMAGE_LAYOUT_GENERAL;
+			ImageHandle made = device.create_image(info);
+			made->set_layout(Layout::General);
+			return made;
+		};
+		copy.framebuffer = like(*framebuffer);
+		copy.scaled = like(*scaled_framebuffer);
+		if (scaled_framebuffer_msaa)
+			copy.scaled_msaa = like(*scaled_framebuffer_msaa);
+		copy.blocks.assign(NUM_BLOCKS_X * NUM_BLOCKS_Y, 0);
+	}
+
+	// Rows of neighbouring tiles go as one region.
+	std::vector<VkImageCopy> native, scaled;
+	for (unsigned ty = 0; ty < VRAM_TILES_Y; ty++)
+	{
+		for (unsigned tx = 0; tx < VRAM_TILES_X;)
+		{
+			auto marked = [&](unsigned x) {
+				unsigned bit = ty * VRAM_TILES_X + x;
+				return whole || ((tiles[bit / 64] >> (bit % 64)) & 1u);
+			};
+			if (!marked(tx))
+			{
+				tx++;
+				continue;
+			}
+			unsigned end = tx + 1;
+			while (end < VRAM_TILES_X && marked(end))
+				end++;
+			VkImageCopy region = {};
+			region.srcSubresource = region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			region.srcOffset = region.dstOffset = { int(tx * VRAM_TILE), int(ty * VRAM_TILE), 0 };
+			region.extent = { (end - tx) * VRAM_TILE, VRAM_TILE, 1 };
+			native.push_back(region);
+			region.srcOffset = region.dstOffset = { int(tx * VRAM_TILE * scaling), int(ty * VRAM_TILE * scaling), 0 };
+			region.extent = { (end - tx) * VRAM_TILE * scaling, VRAM_TILE * scaling, 1 };
+			scaled.push_back(region);
+			for (unsigned by = ty * VRAM_TILE / BLOCK_HEIGHT; by < (ty + 1) * VRAM_TILE / BLOCK_HEIGHT; by++)
+				for (unsigned bx = tx * VRAM_TILE / BLOCK_WIDTH; bx < end * VRAM_TILE / BLOCK_WIDTH; bx++)
+				{
+					StatusFlags &kept = copy.blocks[by * NUM_BLOCKS_X + bx];
+					if (restore)
+						atlas.set_status(bx, by, kept);
+					else
+						kept = atlas.get_status(bx, by) & (STATUS_OWNERSHIP_MASK | STATUS_TEXTURE_RENDERED);
+				}
+			tx = end;
+		}
+	}
+	if (native.empty())
+		return;
+
+	cmd->full_barrier();
+	auto transfer = [&](const Image &live, const Image &kept, const std::vector<VkImageCopy> &regions) {
+		const Image &from = restore ? kept : live;
+		const Image &to = restore ? live : kept;
+		vkCmdCopyImage(cmd->get_command_buffer(), from.get_image(), VK_IMAGE_LAYOUT_GENERAL, to.get_image(),
+		               VK_IMAGE_LAYOUT_GENERAL, uint32_t(regions.size()), regions.data());
+	};
+	transfer(*framebuffer, *copy.framebuffer, native);
+	transfer(*scaled_framebuffer, *copy.scaled, scaled);
+	if (scaled_framebuffer_msaa)
+		transfer(*scaled_framebuffer_msaa, *copy.scaled_msaa, scaled);
+	cmd->full_barrier();
+}
+
 void Renderer::set_filter_mode(FilterMode mode)
 {
 	if (mode != primitive_filter_mode)

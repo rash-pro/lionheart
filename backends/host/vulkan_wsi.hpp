@@ -5,6 +5,13 @@
 #include <vector>
 #include <stdexcept>
 #include <string>
+#include <atomic>
+#include <chrono>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <utility>
+#include <cstdio>
 
 namespace HostGPU {
 struct WsiApi {
@@ -45,6 +52,14 @@ class Swapchain {
     bool maintenance;
     std::vector<Chain> retired;
     bool retry=true, presented=false;
+    // The watcher (watch()): the swapchain is externally synchronized, so it
+    // and the game thread take turns.
+    std::mutex lock;
+    std::thread watcher;
+    std::atomic<bool> stopping{false};
+    std::deque<uint64_t> watching;
+    std::deque<std::pair<uint64_t,double>> sightings;
+    double (*now_seconds)()=nullptr;
     uint64_t retry_after=0;
     void suboptimal(uint64_t now) { if (!retry) { retry=true; retry_after=now+250; } }
     VkExtent2D requested={};
@@ -57,6 +72,7 @@ class Swapchain {
         chain={};
     }
     void retire(uint64_t frame,uint64_t now) {
+        watching.clear();
         if (active.handle) { active.frame=frame; active.milliseconds=now; retired.push_back(std::move(active)); active={}; }
         retry=true; retry_after=0;
     }
@@ -70,6 +86,42 @@ public:
     VkExtent2D extent={};
     VkFormat format=VK_FORMAT_UNDEFINED;
     bool surface_lost=false;
+    // The host paces its own presents (pace()); the device can show the latest
+    // ready picture at each refresh (VK_EXT_present_mode_fifo_latest_ready).
+    bool paced=false, latest_ready=false;
+    VkPresentModeKHR mode=VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR announced=VK_PRESENT_MODE_FIFO_KHR;
+    void pace(bool on) { std::lock_guard<std::mutex> hold(lock); if (on!=paced) { paced=on; retry=true; retry_after=0; } }
+    // Present ids (VK_KHR_present_wait), when the device has them: the id of
+    // the latest present, 0 before any. watch() starts a thread that sees each
+    // present reach the display, as soon as it does, whatever the game thread
+    // is busy with; seen() hands those sightings over, clock() seconds.
+    PFN_vkWaitForPresentKHR wait_present=nullptr;
+    uint64_t last_id=0, next_id=0;
+    void watch(double (*clock)()) {
+        if (!wait_present || watcher.joinable()) return;
+        now_seconds=clock; stopping=false;
+        watcher=std::thread([this] {
+            while (!stopping) {
+                bool found=false;
+                {
+                    std::lock_guard<std::mutex> hold(lock);
+                    if (!watching.empty() && active.handle) {
+                        VkResult result=wait_present(device,active.handle,watching.front(),0);
+                        if (result==VK_SUCCESS) { sightings.push_back({watching.front(),now_seconds()}); found=true; }
+                        if (result!=VK_TIMEOUT) watching.pop_front();
+                    }
+                }
+                if (!found) std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+        });
+    }
+    bool seen(uint64_t &id,double &when) {
+        std::lock_guard<std::mutex> hold(lock);
+        if (sightings.empty()) return false;
+        id=sightings.front().first; when=sightings.front().second; sightings.pop_front();
+        return true;
+    }
     Swapchain(VkPhysicalDevice gpu,VkDevice device,VkQueue queue,bool maintenance,WsiApi api=WsiApi::current())
         :gpu(gpu),device(device),queue(queue),api(api),maintenance(maintenance) {}
     Swapchain(const Swapchain &)=delete;
@@ -87,6 +139,7 @@ public:
     }
     bool needs_present_grace() const noexcept { return presented && !maintenance; }
     void shutdown() noexcept {
+        if (watcher.joinable()) { stopping=true; watcher.join(); }
         // Called after the backend drains device work. Present fences also
         // cover presentation-engine semaphore use, which DeviceWaitIdle does not.
         if (maintenance) {
@@ -98,6 +151,7 @@ public:
         release(active); for (auto &chain:retired) release(chain); retired.clear();
     }
     bool prepare(VkExtent2D size,uint64_t frame,uint64_t now) {
+        std::lock_guard<std::mutex> hold(lock);
         collect(frame,now);
         if (!size.width || !size.height || !surface || surface_lost) return false;
         if (active.handle && (!retry || now<retry_after) && size.width==requested.width && size.height==requested.height) return true;
@@ -129,6 +183,20 @@ public:
         ci.preTransform=caps.currentTransform;
         ci.compositeAlpha=VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha&(~caps.supportedCompositeAlpha+1));
         ci.presentMode=VK_PRESENT_MODE_FIFO_KHR; ci.clipped=VK_TRUE; ci.oldSwapchain=active.handle;
+#ifdef VK_EXT_present_mode_fifo_latest_ready
+        // A host that paces its presents itself wants the latest picture ready at
+        // each refresh, without presents blocking, where the surface offers it.
+        if (paced && latest_ready) {
+            uint32_t modes=0;
+            if (vkGetPhysicalDeviceSurfacePresentModesKHR(gpu,surface,&modes,nullptr)==VK_SUCCESS && modes) {
+                std::vector<VkPresentModeKHR> list(modes);
+                if (vkGetPhysicalDeviceSurfacePresentModesKHR(gpu,surface,&modes,list.data())==VK_SUCCESS &&
+                    std::find(list.begin(),list.end(),VK_PRESENT_MODE_FIFO_LATEST_READY_EXT)!=list.end())
+                    ci.presentMode=VK_PRESENT_MODE_FIFO_LATEST_READY_EXT;
+            }
+        }
+#endif
+        mode=ci.presentMode;
         Chain chain;
         result=api.create(device,&ci,nullptr,&chain.handle);
         // Even a failed create can retire oldSwapchain. Never acquire it again.
@@ -148,9 +216,11 @@ public:
             require(api.create_semaphore(device,&sem,nullptr,&handle),"Present semaphore"); active.ready.push_back(handle);
         }
         requested=size; extent=next; this->format=ci.imageFormat; retry=false;
+        if (mode!=announced) { announced=mode; std::fprintf(stderr,"Vulkan: %s swapchain\n",mode==VK_PRESENT_MODE_FIFO_KHR ? "FIFO" : "latest-ready FIFO"); }
         return true;
     }
     bool acquire(VkSemaphore semaphore,uint32_t &index,uint64_t frame,uint64_t now) {
+        std::lock_guard<std::mutex> hold(lock);
         VkResult result=api.acquire(device,active.handle,0,semaphore,VK_NULL_HANDLE,&index);
         if (result==VK_TIMEOUT || result==VK_NOT_READY || recover(result,frame,now)) return false;
         if (result==VK_SUBOPTIMAL_KHR) suboptimal(now); else require(result,"Acquire Vulkan swapchain image");
@@ -159,6 +229,7 @@ public:
     VkImage image(unsigned index) const { return active.images.at(index); }
     VkSemaphore ready(unsigned index) const { return active.ready.at(index); }
     void present(unsigned index,uint64_t frame,uint64_t now) {
+        std::lock_guard<std::mutex> hold(lock);
         VkPresentInfoKHR info={}; info.sType=VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         VkSemaphore semaphore=ready(index);
         info.waitSemaphoreCount=1; info.pWaitSemaphores=&semaphore;
@@ -170,8 +241,16 @@ public:
             require(api.create_fence(device,&fi,nullptr,&fence),"Present completion fence");
             fence_info.swapchainCount=1; fence_info.pFences=&fence; info.pNext=&fence_info;
         }
+        // Each present's id, for a host that asks when it reached the display.
+        VkPresentIdKHR id_info={}; id_info.sType=VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+        if (wait_present) {
+            last_id=++next_id;
+            id_info.swapchainCount=1; id_info.pPresentIds=&last_id;
+            id_info.pNext=info.pNext; info.pNext=&id_info;
+        }
         VkResult result=api.present(queue,&info);
         presented=true;
+        if (wait_present && watcher.joinable() && (result==VK_SUCCESS || result==VK_SUBOPTIMAL_KHR)) watching.push_back(last_id);
         if (fence) {
             if (result==VK_SUCCESS || result==VK_SUBOPTIMAL_KHR) active.presents.push_back(fence);
             else active.uncertain.push_back(fence);

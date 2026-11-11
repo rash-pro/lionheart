@@ -95,8 +95,10 @@ endif()
 target_sources(ff8 PRIVATE backends/host/disc_iso.c backends/host/disc_id.c)
 include(cmake/native_module_abi.cmake)
 lh_native_module_abi_id(LH_MODULE_ABI_ID "${CMAKE_SOURCE_DIR}" "${FF8_STATS}")
-target_sources(ff8 PRIVATE backends/host/native_modules.c backends/host/frame_identity_host.c runtime/frame_record.c)
-set_source_files_properties(backends/host/frame_identity_host.c runtime/frame_record.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
+target_sources(ff8 PRIVATE backends/host/native_modules.c backends/host/frame_identity_host.c runtime/frame_record.c
+  backends/host/frame_present_host.c runtime/frame_present.c runtime/frame_blend.c runtime/frame_layer.c)
+set_source_files_properties(backends/host/frame_identity_host.c runtime/frame_record.c backends/host/frame_present_host.c
+  runtime/frame_present.c runtime/frame_blend.c runtime/frame_layer.c PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wpedantic")
 option(FF8_FRAME_IDENTITY_LINKED "Developer: let frame identity observe recompiled code linked into the host (one more call per projection)" OFF)
 if(FF8_FRAME_IDENTITY_LINKED AND NOT FF8_PLAYER)
   # Linked code then calls these through the binding modules get in lh_api.

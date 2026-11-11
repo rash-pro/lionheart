@@ -3,8 +3,9 @@
 The second stage of presenting frames between the game's own: drawing them. It builds on frame identity
 (`docs/frame-identity.md`), which says for every polygon corner the GPU draws which projected vertex it is and
 where that vertex stood a game frame earlier. This stage records play, draws it again away from the game through
-the software rasterizer, and draws the frames in between. Nothing here runs in the player unless a developer
-switch asks for a recording, and nothing changes what the game computes.
+the software rasterizer, and draws the frames in between. The player draws them live with smooth motion on
+(`docs/frame-present.md`); otherwise nothing here runs in it unless a developer switch asks for a recording, and
+nothing changes what the game computes.
 
 ## Recording
 
@@ -178,8 +179,8 @@ windows is drawn again exactly, with no stray corner.
 
 ## Limits
 
-Everything here is offline: nothing is presented live, and the timing of a live presenter is not measured. What
-still moves only at game frames, by what the measures find on the battle and field routes:
+The offline renderer here is the reference the player's live frames are checked against
+(`docs/frame-present.md`). What still moves only at game frames, by what the measures find on the battle and field routes:
 
 - 2D: sprites, the HUD and menus. Field backgrounds, drawn as tiles under a drawing offset that scrolls with the
   camera, move with that offset as layers, the 3D drawn under it with them (`docs/frame-layer.md`); their

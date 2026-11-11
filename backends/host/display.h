@@ -15,10 +15,40 @@ void host_display_crt(int preset);
 int host_display_crt_preset(void);
 extern const char *const host_crt_names[4];
 void host_display_state_pending(unsigned);
+/* The GPU the display shows and its renderer mirrors in place of the
+ * guest's, when smooth motion draws one of its own; NULL for the guest's. */
+void host_display_source(gpu_t *);
+/* The renderer mirrors this GPU from now on, starting from its VRAM. */
+void host_display_rebind(gpu_t *);
 void host_display_recover(gpu_t *, uint64_t);
 #ifdef FF8_VULKAN
 int host_display_gpu(gpu_t *);
 int host_display_scaled_dump(gpu_t *, const char *path);
+/* Smooth motion presents on the display's own clock instead of once per guest
+ * VBlank: draw gives the GPU to show, drawn for the moment since VBlanks after
+ * the guest's last (0 at it) or, whole, as the game shows it now; NULL stops.
+ * host_display_smooth_vblank notes each guest VBlank; host_display_tick
+ * presents when the window's next image is free, returning 1 when it drew a
+ * new picture. While smoothing, host_present leaves the window to the ticks. */
+typedef gpu_t *(*host_display_draw_t)(void *context, double since, int whole);
+void host_display_smooth(host_display_draw_t draw, void *context);
+int host_display_smoothing(void);
+void host_display_smooth_vblank(int pal, int whole);
+int host_display_tick(void);
+/* Called as pacing's wait ends, ms before the guest's next VBlank: draws the
+ * next picture first if it would come due while the guest works. */
+void host_display_hold(double ms);
+/* A CSV of every picture smooth motion presents: when it was for, drawn,
+ * presented and seen reaching the display. */
+int host_display_present_stats(const char *path);
+/* Draws and presents on a thread of its own (on): idle is called there
+ * between pictures, to take up what the guest queued. host_display_park holds
+ * it still (1) or lets it go (0) while the game thread uses the renderer. */
+int host_display_presenter(void (*idle)(void *context), int on);
+int host_display_presenting(void);
+void host_display_park(int park);
+/* Pictures smooth motion has presented. */
+uint64_t host_display_pictures(void);
 #endif
 void host_display_capture(unsigned step, uint64_t first_frame);
 void host_display_hotkeys(int off, unsigned discs);

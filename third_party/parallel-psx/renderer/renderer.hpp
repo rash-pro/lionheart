@@ -441,6 +441,19 @@ public:
 	 * constructor does not throw; on failure (e.g. RGBA8_UNORM not
 	 * supported) it leaves the object in a destroyable but otherwise
 	 * unusable state. Callers must check is_valid() before use. */
+	// Host: a copy of VRAM, both planes and the atlas' ownership, kept at one
+	// point of the command stream and put back later, in tiles of VRAM_TILE
+	// native pixels square, for a host that draws the same commands again from
+	// there with changes (Lionheart's smooth motion). tiles is a mask of
+	// VRAM_TILES_X by VRAM_TILES_Y bits, row by row; the first copy is whole.
+	enum { VRAM_TILE = 64, VRAM_TILES_X = FB_WIDTH / VRAM_TILE, VRAM_TILES_Y = FB_HEIGHT / VRAM_TILE };
+	struct VramCopy
+	{
+		Vulkan::ImageHandle framebuffer, scaled, scaled_msaa;
+		std::vector<StatusFlags> blocks;
+	};
+	void copy_vram(VramCopy &copy, const uint64_t tiles[2], bool restore);
+
 	bool is_valid() const { return valid; }
 	unsigned get_scaling() const { return scaling; }
 	unsigned get_msaa() const { return msaa; }
