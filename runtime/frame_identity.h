@@ -37,6 +37,11 @@ enum { FRAME_IDENTITY_HELD = -1, FRAME_IDENTITY_GAP = 8 };
 
 /* A host classification with this bit excludes the frame. */
 #define FRAME_IDENTITY_EXCLUDE 0x80000000u
+/* With this bit the frame's scene moves some of its points on the CPU, by a
+ * step common to all of them, and projects them under a zero translation: a
+ * world drawn around a camera. Such points also pair with the point of the
+ * frame before at their input less that step (see frame_identity_step). */
+#define FRAME_IDENTITY_POINTS 0x40000000u
 
 /* What a projection was computed with, as the GTE held it. */
 typedef struct {
@@ -109,6 +114,11 @@ typedef struct {
     uint32_t display_start;    /* the start this frame changed away from */
     uint32_t tag;              /* the host's classification, see frame_identity_config_t */
     uint32_t flags;
+    /* With FRAME_IDENTITY_POINTS: the step the CPU moved this frame's points
+     * by since the frame before, and how many of its shapes voted for it (0:
+     * none was found, and no point paired by it). Not in the stream. */
+    int32_t step[3];
+    uint32_t step_votes;
     uint32_t setup_count, run_count, projection_count, polygon_count;
     const frame_identity_setup_t *setups;
     const frame_identity_run_t *runs;

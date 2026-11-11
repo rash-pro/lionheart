@@ -13,4 +13,7 @@
 #define FF8_BATTLES_WON 0xcdcu
 #define FF8_PLAY_TIME 0xcd0u
 #define FF8_DISC 0xe2cu
+/* World map: three words the CPU adds to every terrain point before
+ * projecting it (x, y, z), so each frame's terrain inputs move by their change. */
+#define FF8_WORLD_OFFSET 0xdb0e8u
 #endif

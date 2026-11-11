@@ -29,6 +29,8 @@ static int zero(root_t r) { return r.src == ZERO; }
 typedef struct {
     root_t coord[3], matrix[2]; /* the vertex; the translation's and rotation's first halves */
     int32_t view[3];
+    int16_t input[3];
+    uint8_t zero;               /* projected under a zero translation */
     uint32_t sxy, previous_sxy;
     int32_t match;
     uint8_t verdict;
@@ -42,6 +44,11 @@ typedef struct {
     uint64_t frames, projections, matched, verdicts[5];
     uint64_t corners, linked, link_correct, link_equivalent, link_wrong, link_undecided, held_known, held_unknown;
     uint64_t instance_same, instance_other;
+    /* Pairs of points under a zero translation in frames whose world offset
+     * change the host gave (frame_oracle_world): of those the provenance
+     * leaves undecided or partial, at one place and at two; of those it finds
+     * wrong, at one place. */
+    uint64_t place_correct, place_wrong, wrong_same_place;
 } tally_t;
 
 /* Open addressing from a 64-bit key to a 32-bit value. */
@@ -76,6 +83,8 @@ static struct {
     size_t root_next_capacity;
     tally_t total, scene[SCENES];
     unsigned logged[SCENES][2];
+    int world_known;
+    int32_t world_change[3];
 } o;
 
 /* Maps. */
@@ -429,6 +438,7 @@ static void add(tally_t *t, const tally_t *f) {
     t->link_equivalent += f->link_equivalent; t->link_wrong += f->link_wrong; t->link_undecided += f->link_undecided;
     t->held_known += f->held_known; t->held_unknown += f->held_unknown;
     t->instance_same += f->instance_same; t->instance_other += f->instance_other;
+    t->place_correct += f->place_correct; t->place_wrong += f->place_wrong; t->wrong_same_place += f->wrong_same_place;
 }
 
 void frame_oracle_judge(const frame_identity_frame_t *f) {
@@ -465,6 +475,12 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
         memcpy(cur[i].coord, o.inputs[i], sizeof(cur[i].coord));
         memcpy(cur[i].matrix, o.inputs[i] + 3, sizeof(cur[i].matrix));
         memcpy(cur[i].view, p->view, sizeof(cur[i].view));
+        memcpy(cur[i].input, p->input, sizeof(cur[i].input));
+        cur[i].zero = 0;
+        if (p->run < f->run_count) {
+            const int32_t *t = f->setups[f->runs[p->run].setup].translation;
+            cur[i].zero = !t[0] && !t[1] && !t[2];
+        }
         cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE;
         cur[i].previous_sxy = prev && p->match >= 0 ? prev[p->match].sxy : 0;
     }
@@ -498,6 +514,26 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                         prev[j].sxy == a->sxy) { v = EQUIVALENT; break; }
             }
             cur[i].verdict = (uint8_t)v;
+            /* Where the game moved both points by its world offset, the
+             * offset's change says whether they are one place in the world:
+             * that decides what provenance cannot (a point whose input was
+             * moved by an addend it does not follow), and tells a wrong
+             * record at the right place (an edge both blocks keep) from a
+             * wrong place. */
+            if (o.world_known && cur[i].zero && a->zero) {
+                unsigned k;
+                int same = 1;
+                for (k = 0; k < 3; ++k) if (cur[i].input[k] - a->input[k] != o.world_change[k]) same = 0;
+                if (v == UNDECIDED || v == PARTIAL) ++*(same ? &t.place_correct : &t.place_wrong);
+                else if (v == WRONG && same) ++t.wrong_same_place;
+                if ((v == UNDECIDED || v == PARTIAL) && !same && o.out && o.logged[scene_of(f->tag)][0] < 100) {
+                    ++o.logged[scene_of(f->tag)][0];
+                    fprintf(o.out, "W place frame=%" PRIu64 " vblank=%" PRIu64 " tag=%u #%zu<-#%d in=%d,%d,%d<-%d,%d,%d"
+                            " change=%d,%d,%d\n", f->number, f->vblank, f->tag & 0xffffu, i, cur[i].match,
+                            cur[i].input[0], cur[i].input[1], cur[i].input[2], a->input[0], a->input[1], a->input[2],
+                            o.world_change[0], o.world_change[1], o.world_change[2]);
+                }
+            }
             /* Identical instances may share one vertex table, where the
              * vertex sources cannot tell them apart; where each instance's
              * matrix is copied from its own place, that place can. Only a
@@ -578,6 +614,11 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
     o.input_base = o.serial; o.polygon_base = o.polygons;
 }
 
+void frame_oracle_world(int known, const int32_t change[3]) {
+    o.world_known = known;
+    memcpy(o.world_change, change, sizeof(o.world_change));
+}
+
 static const frame_oracle_gpu_t gpu_hooks = {frame_oracle_packet_word, frame_oracle_polygon};
 
 int frame_oracle_start(cpu_t *c, const char *report) {
@@ -615,11 +656,12 @@ static void totals(const char *label, const tally_t *t) {
     fprintf(o.out, "T %s frames=%" PRIu64 " projections=%" PRIu64 " matched=%" PRIu64 " correct=%" PRIu64 " partial=%" PRIu64
             " wrong=%" PRIu64 " equivalent=%" PRIu64 " undecided=%" PRIu64 " corners=%" PRIu64 " linked=%" PRIu64
             " link-correct=%" PRIu64 " link-equivalent=%" PRIu64 " link-wrong=%" PRIu64 " link-undecided=%" PRIu64
-            " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64 "\n",
+            " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64
+            " place-correct=%" PRIu64 " place-wrong=%" PRIu64 " wrong-same-place=%" PRIu64 "\n",
             label, t->frames, t->projections, t->matched,
             t->verdicts[CORRECT], t->verdicts[PARTIAL], t->verdicts[WRONG], t->verdicts[EQUIVALENT], t->verdicts[UNDECIDED],
             t->corners, t->linked, t->link_correct, t->link_equivalent, t->link_wrong, t->link_undecided,
-            t->held_known, t->held_unknown, t->instance_same, t->instance_other);
+            t->held_known, t->held_unknown, t->instance_same, t->instance_other, t->place_correct, t->place_wrong, t->wrong_same_place);
 }
 
 int frame_oracle_stop(void) {

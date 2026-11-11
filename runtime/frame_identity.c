@@ -43,6 +43,15 @@ static struct {
     int have_start, reset_pending, have_end;
     uint64_t vblanks, end_vblank, frames, projections, polygons;
     const cpu_t *cpu;
+    /* Pairing points by a step (FRAME_IDENTITY_POINTS): scratch, and the
+     * step of the frame being ended. */
+    struct shape *shapes;
+    struct vote *votes;
+    int32_t *point_next;
+    size_t shape_capacity, vote_capacity, point_capacity;
+    table_t points;
+    int32_t step[3];
+    uint32_t step_votes;
 } s;
 
 static void display_start(void *context, uint32_t start);
@@ -153,6 +162,7 @@ void frame_identity_reset(void) {
 
 void frame_identity_stop(void) {
     if (s.gpu) gpu_observe(s.gpu, NULL, NULL);
+    free(s.shapes); free(s.votes); free(s.point_next); free(s.points.keys); free(s.points.heads);
     segment_free(&s.segments[0]);
     segment_free(&s.segments[1]);
     memset(&s, 0, sizeof(s));
@@ -393,6 +403,145 @@ static int pair_runs(segment_t *cur, const segment_t *prev) {
     return 1;
 }
 
+/* Points the CPU moved (FRAME_IDENTITY_POINTS). A world drawn around a camera
+ * moves its points by the camera on the CPU and projects them under a zero
+ * translation, so no run of them keeps its inputs from one frame to the next;
+ * but every point of the world moved by the same step. Three consecutive
+ * points of a run make a shape that the step does not change: a shape found
+ * once in each frame votes for the step between its two places, and the step
+ * most shapes agree on is the frame's. A point then pairs with the point of
+ * the frame before at its input less the step: the same place in the world.
+ * Several points there in the frame before (one place kept in several records)
+ * pair only if they stood at one place in view space too. */
+typedef struct shape {
+    uint64_t key;
+    uint32_t first;
+} shape_t;
+
+typedef struct vote {
+    int32_t d[3];
+} vote_t;
+
+/* A point's input less a step, packed; one that leaves 16 bits matches nothing. */
+static uint64_t point_key(const int16_t *input, const int32_t *step) {
+    uint64_t key = 0;
+    unsigned k;
+    for (k = 0; k < 3; ++k) {
+        int32_t x = input[k] - (step ? step[k] : 0);
+        if (x < -32768 || x > 32767) return UINT64_C(1) << 63;
+        key |= (uint64_t)(uint16_t)x << (16 * k);
+    }
+    return key;
+}
+
+static int zero_translation(const segment_t *g, uint32_t run) {
+    const int32_t *t = g->setups[g->runs[run].setup].translation;
+    return !t[0] && !t[1] && !t[2];
+}
+
+static int same_shape(const segment_t *a, uint32_t i, const segment_t *b, uint32_t j) {
+    unsigned k, n;
+    for (n = 1; n < 3; ++n)
+        for (k = 0; k < 3; ++k)
+            if (a->projections[i + n].input[k] - a->projections[i].input[k] !=
+                b->projections[j + n].input[k] - b->projections[j].input[k]) return 0;
+    return 1;
+}
+
+static int by_key(const void *x, const void *y) {
+    const shape_t *a = x, *b = y;
+    return a->key < b->key ? -1 : a->key > b->key ? 1 : a->first < b->first ? -1 : a->first > b->first;
+}
+
+static int by_step(const void *x, const void *y) {
+    const vote_t *a = x, *b = y;
+    unsigned k;
+    for (k = 0; k < 3; ++k) if (a->d[k] != b->d[k]) return a->d[k] < b->d[k] ? -1 : 1;
+    return 0;
+}
+
+static size_t shapes(const segment_t *g, shape_t *out) {
+    size_t i, n = 0;
+    for (i = 0; i + 2 < g->projection_count; ++i) {
+        const frame_identity_projection_t *a = &g->projections[i];
+        uint64_t h = mix(0, 3);
+        unsigned k;
+        if (a[1].run != a->run || a[2].run != a->run || !zero_translation(g, a->run)) continue;
+        for (k = 0; k < 3; ++k)
+            h = mix(h, (uint64_t)(uint32_t)(a[1].input[k] - a->input[k]) |
+                       (uint64_t)(uint32_t)(a[2].input[k] - a->input[k]) << 32);
+        out[n].key = h; out[n].first = (uint32_t)i; ++n;
+    }
+    qsort(out, n, sizeof(*out), by_key);
+    return n;
+}
+
+/* The end of the group of equal keys starting at i. */
+static size_t group(const shape_t *v, size_t n, size_t i) {
+    size_t j = i + 1;
+    while (j < n && v[j].key == v[i].key) ++j;
+    return j;
+}
+
+enum { STEP_VOTES = 8 };
+
+static int pair_points(segment_t *cur, const segment_t *prev) {
+    size_t na, nb, i, j, votes = 0, best = 0, run;
+    shape_t *a, *b;
+    vote_t *v;
+    int32_t *next;
+    table_t *points = &s.points;
+    s.step[0] = s.step[1] = s.step[2] = 0; s.step_votes = 0;
+    if (!grow((void **)&s.shapes, &s.shape_capacity, cur->projection_count + prev->projection_count + 1, sizeof(*s.shapes)) ||
+        !grow((void **)&s.votes, &s.vote_capacity, cur->projection_count + 1, sizeof(*s.votes))) return 0;
+    a = s.shapes; na = shapes(prev, a);
+    b = s.shapes + na; nb = shapes(cur, b);
+    v = s.votes;
+    /* Shapes found once in each frame. */
+    for (i = 0, j = 0; i < na && j < nb;) {
+        size_t ei = group(a, na, i), ej = group(b, nb, j);
+        if (a[i].key < b[j].key) { i = ei; continue; }
+        if (a[i].key > b[j].key) { j = ej; continue; }
+        if (ei == i + 1 && ej == j + 1 && same_shape(prev, a[i].first, cur, b[j].first)) {
+            unsigned k;
+            for (k = 0; k < 3; ++k)
+                v[votes].d[k] = cur->projections[b[j].first].input[k] - prev->projections[a[i].first].input[k];
+            ++votes;
+        }
+        i = ei; j = ej;
+    }
+    qsort(v, votes, sizeof(*v), by_step);
+    for (i = 0; i < votes; i = j) {
+        for (j = i + 1; j < votes && !by_step(&v[i], &v[j]); ++j) {}
+        if (j - i > best) { best = j - i; memcpy(s.step, v[i].d, sizeof(s.step)); }
+    }
+    /* A step most shapes agree on, and enough of them. */
+    if (best < STEP_VOTES || best * 2 <= votes) { s.step[0] = s.step[1] = s.step[2] = 0; return 1; }
+    s.step_votes = (uint32_t)best;
+    if (!grow((void **)&s.point_next, &s.point_capacity, prev->projection_count, sizeof(*s.point_next)) ||
+        !table_reset(points, prev->projection_count)) return 0;
+    next = s.point_next;
+    for (i = prev->projection_count; i-- > 0;)
+        if (prev->projections[i].run < prev->run_count && zero_translation(prev, prev->projections[i].run))
+            table_chain(points, point_key(prev->projections[i].input, NULL), (int32_t)i, next);
+    for (run = 0; run < cur->run_count; ++run) {
+        const frame_identity_run_t *r = &cur->runs[run];
+        if (r->match >= 0 || !zero_translation(cur, (uint32_t)run)) continue;
+        for (i = r->first; i < (size_t)r->first + r->count; ++i) {
+            frame_identity_projection_t *p = &cur->projections[i];
+            int32_t first, k;
+            int ok = 1;
+            if (p->match >= 0) continue;
+            first = table_get(points, point_key(p->input, s.step));
+            if (first < 0) continue;
+            for (k = next[first]; k >= 0 && ok; k = next[k])
+                if (memcmp(prev->projections[k].view, prev->projections[first].view, sizeof(p->view))) ok = 0;
+            if (ok) p->match = first;
+        }
+    }
+    return 1;
+}
+
 static int within_pixel(const uint32_t *positions, size_t n) {
     int minx = INT32_MAX, maxx = INT32_MIN, miny = INT32_MAX, maxy = INT32_MIN;
     size_t i;
@@ -503,7 +652,11 @@ static void end_frame(void) {
     }
     if (fresh) cur->flags |= FRAME_IDENTITY_RESET;
     if (tag & FRAME_IDENTITY_EXCLUDE) cur->flags |= FRAME_IDENTITY_EXCLUDED;
+    s.step[0] = s.step[1] = s.step[2] = 0; s.step_votes = 0;
     if (!(cur->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) && !pair_runs(cur, prev))
+        cur->flags |= FRAME_IDENTITY_OVERFLOW;
+    if ((tag & FRAME_IDENTITY_POINTS) && !(cur->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) &&
+        !pair_points(cur, prev))
         cur->flags |= FRAME_IDENTITY_OVERFLOW;
     if (cur->flags & FRAME_IDENTITY_OVERFLOW)
         for (i = 0; i < cur->run_count; ++i) cur->runs[i].match = FRAME_IDENTITY_HELD;
@@ -527,6 +680,7 @@ static void end_frame(void) {
     f.number = s.frames; f.vblank = s.vblanks;
     f.first_projection = cur->first_projection; f.first_polygon = cur->first_polygon;
     f.display_start = s.display_start; f.tag = tag; f.flags = cur->flags;
+    if (!(cur->flags & FRAME_IDENTITY_OVERFLOW)) { memcpy(f.step, s.step, sizeof(f.step)); f.step_votes = s.step_votes; }
     f.setup_count = (uint32_t)cur->setup_count; f.run_count = (uint32_t)cur->run_count;
     f.projection_count = (uint32_t)cur->projection_count; f.polygon_count = (uint32_t)cur->polygon_count;
     f.setups = cur->setups; f.runs = cur->runs; f.projections = cur->projections; f.polygons = cur->polygons;

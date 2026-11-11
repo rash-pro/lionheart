@@ -116,6 +116,38 @@ LH_TEST(test_excluded_frames_publish_no_pairs_and_no_links) {
     LH_CONTAINS(out, "Q0 L0:0 L0:1 L0:2\n");
 }
 
+LH_TEST(test_points_the_cpu_moves_pair_by_the_step_most_shapes_agree_on) {
+    auto out = scenario(t, "points");
+    // No run keeps its inputs, but every point moved by one step: each pairs
+    // with the point at its input less the step, vertex for vertex.
+    LH_CONTAINS(out, "F1 flags=- runs=1 projections=75 polygons=0 vblank=2\n"
+                     "S step=8,0,-12 votes=73\n"
+                     "R0 first=0 count=75 previous=- repeats=0\n"
+                     "P0 run=0 previous=0 match=0\nP1 run=0 previous=1 match=1\n");
+    // A block that comes in has no place in the frame before.
+    LH_CONTAINS(out, "S step=5,1,3 votes=60\n");
+    LH_CONTAINS(out, "P74 run=0 previous=74 match=74\nP75 run=0 previous=- match=-\n");
+}
+
+LH_TEST(test_a_place_kept_at_two_view_positions_pairs_nothing) {
+    auto out = scenario(t, "points");
+    LH_CONTAINS(out, "F4 flags=- runs=1 projections=75 polygons=0 vblank=8\n"
+                     "S step=4,0,0 votes=73\n"
+                     "R0 first=0 count=75 previous=- repeats=0\n"
+                     "P0 run=0 previous=- match=-\nP1 run=0 previous=1 match=1\n");
+}
+
+LH_TEST(test_points_pair_by_a_step_only_with_enough_votes_and_the_hosts_word) {
+    auto out = scenario(t, "points");
+    LH_CONTAINS(out, "F5 flags=- runs=1 projections=6 polygons=0 vblank=10\n"
+                     "S step=0,0,0 votes=0\n"
+                     "R0 first=0 count=6 previous=- repeats=0\n"
+                     "P0 run=0 previous=- match=-\n");
+    LH_CONTAINS(out, "F6 flags=- runs=1 projections=75 polygons=0 vblank=12\n"
+                     "R0 first=0 count=75 previous=- repeats=0\n"
+                     "P0 run=0 previous=- match=-\n");
+}
+
 LH_TEST(test_recording_entries_compute_what_the_plain_ones_do) {
     LH_CONTAINS(scenario(t, "entries"), "entries match");
 }
