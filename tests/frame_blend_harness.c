@@ -7,11 +7,13 @@
  *   T<number> turning=<corners> runs=<turning>/<hanging>/<flat or mirrored>/<too far>
  *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
  *   R<number> resolved=<ambiguous corners resolved by the polygon drawn a game frame earlier>
+ *   L<number> leftovers=<polygons of the frame before culled at the screen's edge, drawn between>
  *   C<number> <polygon>=<mask of the corners whose colour changes>[/<first corner's colour at alpha 0, 1/2 and 1>]...
  * Scenarios: move, held, touch, resets, late; a polygon the GPU skips:
  * hidden; sliding far, with C held or skipped: slide, slide-hidden; parts that turn: turn, chain,
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
- * on screen: cross; colours that change: fade. With "straight" after the name, every corner moves on a
+ * on screen: cross; colours that change: fade; a strip panning off the screen,
+ * its polygons culled once wholly off it: pan. With "straight" after the name, every corner moves on a
  * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
@@ -89,6 +91,7 @@ static void sink(void *context, const frame_identity_frame_t *f) {
     printf("T%llu turning=%u runs=%u/%u/%u/%u\n", (unsigned long long)f->number, info->corners_turning, info->runs_turning,
            info->runs_attached, info->runs_flat, info->runs_far);
     if (info->corners_resolved) printf("R%llu resolved=%u\n", (unsigned long long)f->number, info->corners_resolved);
+    if (info->leftovers) printf("L%llu leftovers=%u\n", (unsigned long long)f->number, info->leftovers);
     if (!f->polygon_count) return;
     sizes(f);
     {
@@ -410,6 +413,26 @@ static void scenario_fade(void) {
     }
 }
 
+/* A strip of ten quads, one run, sliding left 20 pixels a game frame; as a
+ * game does, quads wholly off the screen are not drawn. */
+static void scenario_pan(void) {
+    int f;
+    for (f = 0; f < 8; ++f) {
+        uint32_t top[11], bottom[11];
+        unsigned i;
+        cleared();
+        pose(0, 1, 1, 1, -80 * f, 0, 1200);
+        for (i = 0; i <= 10; ++i) { top[i] = rtps(-600 + 240 * (int)i, 0, 0); bottom[i] = rtps(-600 + 240 * (int)i, 240, 0); }
+        for (i = 0; i < 10; ++i) {
+            uint32_t xy[4] = {top[i], top[i + 1], bottom[i], bottom[i + 1]};
+            int16_t right = (int16_t)(top[i + 1] & 0xffffu), left = (int16_t)(top[i] & 0xffffu);
+            if (right < 0 || left >= 320) continue;
+            quad(i & 1 ? 0x0000c0u : 0x00c000u, xy);
+        }
+        shown();
+    }
+}
+
 int main(int argc, char **argv) {
     const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 && strcmp(argv[2], "straight") ? argv[2] : NULL;
     frame_identity_config_t config;
@@ -441,6 +464,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "chain")) scenario_chain();
     else if (!strcmp(name, "cross")) scenario_cross();
     else if (!strcmp(name, "fade")) scenario_fade();
+    else if (!strcmp(name, "pan")) scenario_pan();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

@@ -23,13 +23,14 @@ typedef struct {
      * polygon), the texture page word of a textured one, and whether its
      * packet was seen. */
     uint32_t (*colours)[4];
+    uint32_t (*packets)[12];
     uint32_t *pages;
     uint8_t *coloured;
     uint64_t *corner_keys;
     int32_t *corner_heads, *corner_next;
     size_t projection_count, run_count, setup_count, polygon_count;
     size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity, polygon_capacity;
-    size_t corner_capacity, next_capacity, colour_capacity, page_capacity, coloured_capacity;
+    size_t corner_capacity, next_capacity, colour_capacity, page_capacity, coloured_capacity, packet_capacity;
 } kept_t;
 
 /* A polygon packet as the GPU took it, waiting for its identity frame. */
@@ -37,7 +38,15 @@ typedef struct {
     uint64_t serial;
     uint32_t opcode, page;
     uint32_t colours[4];
+    uint32_t words[12];
 } look_t;
+
+/* A polygon of the frame before that the latest no longer draws, having left
+ * the screen: its packet and its corners' vertices. */
+typedef struct {
+    uint32_t words[12];
+    int32_t vertex[4];
+} leftover_t;
 
 /* Both ends of a vertex: where it stood in the frame before (a) and now (b). */
 typedef struct {
@@ -82,6 +91,14 @@ struct frame_blend {
      * index in the frame before, or -1. */
     int32_t *before;
     size_t before_capacity;
+    /* Polygons of the frame before with a successor in the latest; where the
+     * projections of the frames before stand a game frame later, by index;
+     * and what the latest frame no longer draws. */
+    uint8_t *continued;
+    int32_t *forward[2];
+    leftover_t *leftovers;
+    size_t continued_capacity, forward_capacity[2], leftover_count, leftover_capacity;
+    int32_t screen[2];           /* the picture's size in packet coordinates */
 };
 
 static int grow(void **items, size_t *capacity, size_t needed, size_t size) {
@@ -94,7 +111,13 @@ static int grow(void **items, size_t *capacity, size_t needed, size_t size) {
     return 1;
 }
 
-frame_blend_t *frame_blend_create(void) { return calloc(1, sizeof(frame_blend_t)); }
+frame_blend_t *frame_blend_create(void) {
+    frame_blend_t *b = calloc(1, sizeof(frame_blend_t));
+    if (b) { b->screen[0] = 320; b->screen[1] = 240; }
+    return b;
+}
+
+void frame_blend_screen(frame_blend_t *b, int32_t width, int32_t height) { b->screen[0] = width; b->screen[1] = height; }
 
 void frame_blend_destroy(frame_blend_t *b) {
     unsigned i;
@@ -102,9 +125,10 @@ void frame_blend_destroy(frame_blend_t *b) {
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
         free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
-        free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].pages); free(b->kept[i].coloured);
+        free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
-    free(b->looks); free(b->before); free(b->hidden);
+    free(b->looks); free(b->before); free(b->hidden); free(b->continued); free(b->forward[0]); free(b->forward[1]);
+    free(b->leftovers);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
@@ -113,7 +137,7 @@ void frame_blend_reset(frame_blend_t *b) {
     unsigned i;
     for (i = 0; i < 3; ++i) b->kept[i].valid = 0;
     memset(&b->info, 0, sizeof(b->info));
-    b->look_count = 0;
+    b->look_count = 0; b->leftover_count = 0;
 }
 
 const frame_blend_info_t *frame_blend_info(const frame_blend_t *b) { return &b->info; }
@@ -129,6 +153,7 @@ void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packe
     l = &b->looks[b->look_count++];
     memset(l, 0, sizeof(*l));
     l->serial = serial; l->opcode = op;
+    for (i = 0; i < 12 && i < 1 + corners * (1u + ((op & 4) ? 1u : 0u)) + ((op & 16) ? corners - 1 : 0); ++i) l->words[i] = packet[i];
     l->colours[0] = packet[0] & 0xffffffu;
     for (i = 0; i < corners; ++i) {
         if (i && (op & 16)) l->colours[i] = packet[k++] & 0xffffffu;
@@ -172,7 +197,8 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
         !grow((void **)&k->corner_next, &k->next_capacity, (size_t)f->polygon_count * 4, sizeof(*k->corner_next))) return 0;
     if (!grow((void **)&k->colours, &k->colour_capacity, f->polygon_count, sizeof(*k->colours)) ||
         !grow((void **)&k->pages, &k->page_capacity, f->polygon_count, sizeof(*k->pages)) ||
-        !grow((void **)&k->coloured, &k->coloured_capacity, f->polygon_count, sizeof(*k->coloured))) return 0;
+        !grow((void **)&k->coloured, &k->coloured_capacity, f->polygon_count, sizeof(*k->coloured)) ||
+        !grow((void **)&k->packets, &k->packet_capacity, f->polygon_count, sizeof(*k->packets))) return 0;
     if (f->polygon_count) {
         memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
         memset(k->coloured, 0, f->polygon_count);
@@ -923,6 +949,7 @@ static void attach_looks(frame_blend_t *b, kept_t *k, const frame_identity_frame
         if (l->serial >= f->first_polygon && at < f->polygon_count) {
             if (f->polygons[at].opcode != l->opcode) continue;
             memcpy(k->colours[at], l->colours, sizeof(l->colours));
+            memcpy(k->packets[at], l->words, sizeof(l->words));
             k->pages[at] = l->page; k->coloured[at] = 1;
         } else if (l->serial >= f->first_polygon + f->polygon_count) b->looks[kept++] = *l;
     }
@@ -943,6 +970,72 @@ static int drawn(const frame_identity_polygon_t *q) {
         if (r - l < 1024 && bottom - top < 512) return 1;
     }
     return 0;
+}
+
+/* Polygons of the frame before that the latest frame no longer draws because
+ * they left the screen: on a fast camera move, what the older picture had at
+ * the edge, which the newer one culls. Between the two they are drawn first,
+ * beneath everything, moved by their vertices' own motion, which their
+ * projections a game frame later give: the game projects a model's vertices
+ * before it culls its polygons. Only polygons whose every corner is, a game
+ * frame later, beyond one edge of the screen: anything still on it that the
+ * game no longer draws went for another reason (hidden, or a polygon held,
+ * which a ghost of would show). */
+static int leftovers(frame_blend_t *b, kept_t *cur) {
+    kept_t *prev = kept_at(b, 1);
+    size_t i, k;
+    unsigned c, a;
+    b->leftover_count = 0;
+    if (!prev->valid || prev->number + 1 != cur->number || cur->reason == FRAME_BLEND_NO_HISTORY) return 1;
+    if (!grow((void **)&b->continued, &b->continued_capacity, prev->polygon_count, sizeof(*b->continued))) return 0;
+    if (prev->polygon_count) memset(b->continued, 0, prev->polygon_count);
+    for (i = 0; i < cur->polygon_count; ++i) {
+        int32_t r = predecessor(b, &cur->polygons[i]);
+        if (r >= 0) b->continued[r] = 1;
+    }
+    /* Where each projection of the two frames before stands a game frame later. */
+    for (a = 0; a < 2; ++a) {
+        const kept_t *at = kept_at(b, a), *from = kept_at(b, a + 1);
+        if (!grow((void **)&b->forward[a], &b->forward_capacity[a], from->projection_count + 1, sizeof(*b->forward[a]))) return 0;
+        for (k = 0; k < from->projection_count; ++k) b->forward[a][k] = -1;
+        if (!at->valid || !from->valid || at->number != from->number + 1) continue;
+        for (k = 0; k < at->projection_count; ++k) {
+            int32_t p = at->projections[k].previous;
+            if (p >= 0 && (size_t)p < from->projection_count) b->forward[a][p] = (int32_t)k;
+        }
+    }
+    for (i = 0; i < prev->polygon_count; ++i) {
+        frame_identity_polygon_t q = prev->polygons[i];
+        int32_t x0 = INT32_MAX, x1 = INT32_MIN, y0 = INT32_MAX, y1 = INT32_MIN;
+        leftover_t *l;
+        if (b->continued[i] || !prev->coloured[i] || !drawn(&q)) continue;
+        for (c = 0; c < q.corners; ++c) {
+            int32_t p;
+            const kept_t *at;
+            if (q.state[c] != FRAME_IDENTITY_LINKED || q.age[c] > 1 || q.projection[c] < 0) break;
+            if ((p = b->forward[q.age[c]][q.projection[c]]) < 0) break;
+            at = kept_at(b, q.age[c]);
+            /* The corner as the latest frame would link it. */
+            q.projection[c] = p; q.xy[c] = at->projections[p].sxy;
+            x0 = low(q.xy[c]) < x0 ? low(q.xy[c]) : x0; x1 = low(q.xy[c]) > x1 ? low(q.xy[c]) : x1;
+            y0 = high(q.xy[c]) < y0 ? high(q.xy[c]) : y0; y1 = high(q.xy[c]) > y1 ? high(q.xy[c]) : y1;
+        }
+        if (c < q.corners || !(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1])) continue;
+        if (!grow((void **)&b->leftovers, &b->leftover_capacity, b->leftover_count + 1, sizeof(*b->leftovers)) ||
+            !grow((void **)&b->vertices, &b->vertex_capacity, b->vertex_count + q.corners, sizeof(*b->vertices))) return 0;
+        l = &b->leftovers[b->leftover_count];
+        for (c = 0; c < q.corners; ++c) {
+            vertex_t *v = &b->vertices[b->vertex_count + c];
+            if (ends(b, &q, c, v) != ENDS_OK) break;
+            l->vertex[c] = (int32_t)(b->vertex_count + c);
+        }
+        if (c < q.corners) continue;
+        memcpy(l->words, prev->packets[i], sizeof(l->words));
+        b->vertex_count += q.corners;
+        ++b->leftover_count;
+    }
+    b->info.leftovers = (uint32_t)b->leftover_count;
+    return 1;
 }
 
 int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
@@ -1062,6 +1155,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
             if (!b->vertices[b->corners[i][c]].pinned && !b->hidden[i] && b->vertices[b->corners[i][c]].run >= 0) ++info->corners_turning;
     }
     info->polygon_count = f->polygon_count;
+    if (!leftovers(b, cur)) { cur->valid = 0; return 0; }
     return 1;
 }
 
@@ -1089,6 +1183,34 @@ static int saturated(const vertex_t *v, uint32_t xy) {
            low(v->sxy[1]) <= -1024 || low(v->sxy[1]) >= 1023 || high(v->sxy[1]) <= -1024 || high(v->sxy[1]) >= 1023;
 }
 
+/* Where a vertex stands at alpha: its view-space position, projected again. */
+static uint32_t place(const frame_blend_t *b, const vertex_t *v, uint32_t num, uint32_t den, int32_t view[3]) {
+    unsigned a;
+    if (v->run >= 0 && num && num < den) turned(kept_seen(b, v->age)->motions, v, num, den, view);
+    else for (a = 0; a < 3; ++a) view[a] = between(v->view[0][a], v->view[1][a], num, den);
+    return frame_blend_project(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
+                               (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm);
+}
+
+unsigned frame_blend_leftovers(const frame_blend_t *b) { return (unsigned)b->leftover_count; }
+
+unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]) {
+    const leftover_t *l;
+    unsigned op, corners, c, k = 1, n;
+    if (index >= b->leftover_count || !den || num >= den) return 0;
+    l = &b->leftovers[index];
+    op = l->words[0] >> 24; corners = (op & 8) ? 4 : 3;
+    n = 1 + corners * (1u + ((op & 4) ? 1u : 0u)) + ((op & 16) ? corners - 1 : 0);
+    memcpy(words, l->words, sizeof(l->words));
+    for (c = 0; c < corners; ++c) {
+        int32_t view[3];
+        if (c && (op & 16)) ++k;
+        words[k++] = place(b, &b->vertices[l->vertex[c]], num, den, view);
+        if (op & 4) ++k;
+    }
+    return n;
+}
+
 unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den,
                              uint32_t xy[4], frame_blend_check_t *check) {
     uint64_t i = serial - b->info.first_polygon;
@@ -1105,15 +1227,7 @@ unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t n
         v = vs[c] = &b->vertices[b->corners[i][c]];
         if (v->pinned) continue;
         mask |= 1u << c;
-        if (v->run >= 0 && num && num < den) {
-            turned(kept_seen(b, v->age)->motions, v, num, den, view);
-            xy[c] = frame_blend_project(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
-                                        (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm);
-        } else {
-            for (a = 0; a < 3; ++a) view[a] = between(v->view[0][a], v->view[1][a], num, den);
-            xy[c] = frame_blend_project(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
-                                        (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm);
-        }
+        xy[c] = place(b, v, num, den, view);
         if (!check || saturated(v, xy[c])) continue;
         /* A straight line in view space is a straight line on screen, unless
          * the GTE saturates IR or SXY on the way: far off screen, where its

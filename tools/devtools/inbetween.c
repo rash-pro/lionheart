@@ -186,6 +186,7 @@ typedef struct {
      * moves only if the frame its projection belongs to has one. */
     unsigned reason, reason_before;
     int after;               /* past the display-start change that ends the frame */
+    int beneath;             /* what the latest frame culled at the screen's edge is drawn */
 } blend_at_t;
 
 /* The trace starts from the display area of the picture the replay ends on,
@@ -365,6 +366,23 @@ static unsigned cause_of(unsigned op) {
     return CAUSE_NONE;
 }
 
+/* What the frame before drew at the screen's edge and the blended frame
+ * culled, beneath its first polygon. It is no polygon of the recording: the
+ * serial stays that of the next one. */
+static void beneath(counted_t *c, blend_at_t *at) {
+    uint64_t serial = c->serial;
+    unsigned i, n, k;
+    at->beneath = 1;
+    for (i = 0; i < frame_blend_leftovers(at->blend); ++i) {
+        uint32_t words[12];
+        uint8_t packet[12 * 4];
+        if (!(n = frame_blend_leftover(at->blend, i, at->num, at->den, words))) continue;
+        for (k = 0; k < n; ++k) put_le32(packet + k * 4, words[k]);
+        draw(c, at, packet, n, CAUSE_MOVED, 0);
+        c->serial = serial;
+    }
+}
+
 /* GP0 words, with the polygons of the blended frame where blending puts them. */
 static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t *at) {
     gpu_t *g = c->gpu;
@@ -384,6 +402,8 @@ static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t 
             cause = cause_of(op);
             if (need <= words) {
                 n = need;
+                if (at && op >= 0x20 && op < 0x40 && !at->beneath && c->serial >= frame_blend_info(at->blend)->first_polygon)
+                    beneath(c, at);
                 if (at && op >= 0x20 && op < 0x40) {
                     uint8_t packet[12 * 4];
                     uint32_t xy[4], w[12], colours[4];
@@ -566,7 +586,7 @@ int main(int argc, char **argv) {
     uint64_t polygons_3d = 0, polygons_moving = 0, corners_3d = 0, corners_moving = 0;
     uint64_t held_service = 0, held_projection = 0, held_neighbour = 0, held_reset = 0, held_jump = 0;
     uint64_t sized = 0, resized = 0, resized_renders = 0, corners_turning = 0, runs_turning = 0, runs_attached = 0;
-    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0, polygons_recoloured = 0;
+    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0, polygons_recoloured = 0, leftovers = 0;
     char resized_list[1024] = "";
     char wrong_list[1024] = "", stray_list[1024] = "", reset_list[2048] = "", jump_list[1024] = "";
     /* --causes: what drew each pixel of the last two renders, on the canvas. */
@@ -638,6 +658,11 @@ int main(int argc, char **argv) {
         } else if (in.tag == FRAME_RECORD_FRAM) {
             const frame_blend_info_t *info;
             if (!frame_record_parse(&frame, p, size)) { fprintf(stderr, "Damaged identity frame\n"); return 2; }
+            {
+                int x, y, w, h, rgb24, enabled;
+                gpu_display(truth.gpu, &x, &y, &w, &h, &rgb24, &enabled);
+                if (w > 0 && h > 0) frame_blend_screen(blend, w, h);
+            }
             if (!frame_blend_add(blend, &frame.frame)) { fprintf(stderr, "Out of memory\n"); return 2; }
             info = frame_blend_info(blend);
             reason_before = reason; reason = info->reason;
@@ -687,7 +712,7 @@ int main(int argc, char **argv) {
                 held_service += info->held_service; held_projection += info->held_projection;
                 held_neighbour += info->held_neighbour; held_reset += info->held_reset; held_jump += info->held_jump;
                 corners_turning += info->corners_turning; runs_turning += info->runs_turning; runs_attached += info->runs_attached;
-                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved; polygons_recoloured += info->polygons_recoloured;
+                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved; polygons_recoloured += info->polygons_recoloured; leftovers += info->leftovers;
             }
             continue; /* not journalled: it changes no GPU */
         } else if (in.tag == FRAME_RECORD_VBLK) {
@@ -711,7 +736,7 @@ int main(int argc, char **argv) {
              * frame again is what takes the time. */
             if (first_of_frame && a.valid && vblank + FRAME_IDENTITY_GAP >= from) {
                 /* Alpha 1 must be the game's picture; alpha 0 against the one before. */
-                blend_at_t at = {blend, 1, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0};
+                blend_at_t at = {blend, 1, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0, 0};
                 size_t k, differ = 0;
                 /* cause_before keeps what drew the picture of the game frame before. */
                 if (causes) { uint8_t *t = cause_before; cause_before = cause_one; cause_one = t; }
@@ -728,7 +753,7 @@ int main(int argc, char **argv) {
                         snprintf(wrong_list + strlen(wrong_list), sizeof(wrong_list) - strlen(wrong_list), " alpha1@%" PRIu64 ":%zu", vblank, differ);
                 }
                 if (interval_ready && have_before) {
-                    blend_at_t zero = {blend, 0, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0};
+                    blend_at_t zero = {blend, 0, 1, {0, 0, 0}, 0, NULL, &frame.frame, reason, reason_before, 0, 0};
                     size_t same = 1;
                     int probing = causes && probe && !have_probe && in_window && frame_vblank >= probe;
                     if (causes) { zero.trace = &trace; trace_area(&trace, truth.gpu); trace.describe = probing; }
@@ -791,7 +816,7 @@ int main(int argc, char **argv) {
                     /* One game frame late, on the interval measured between the
                      * last two: alpha reaches 1 when the next is due. */
                     uint64_t step = vblank - frame_vblank + 1;
-                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, {0, 0, 0}, 0, NULL, NULL, reason, reason_before, 0};
+                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, {0, 0, 0}, 0, NULL, NULL, reason, reason_before, 0, 0};
                     if (step > interval) ++holds;
                     last_step = step;
                     if (causes) { at.trace = &trace; at.frame = &frame.frame; trace_area(&trace, truth.gpu); trace.describe = 0; }
@@ -894,10 +919,10 @@ int main(int argc, char **argv) {
            from, until == UINT64_MAX ? vblank : until, frames, renders, holds, skips);
     printf("Blended: corners3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%) polygons3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%)"
            " held-service=%" PRIu64 " held-projection=%" PRIu64 " held-neighbour=%" PRIu64 " held-reset=%" PRIu64
-           " held-jump=%" PRIu64 " resolved=%" PRIu64 " recoloured=%" PRIu64 "\n",
+           " held-jump=%" PRIu64 " resolved=%" PRIu64 " recoloured=%" PRIu64 " culled-at-edge=%" PRIu64 "\n",
            corners_3d, corners_moving, corners_3d ? 100.0 * corners_moving / corners_3d : 0.0, polygons_3d, polygons_moving,
            polygons_3d ? 100.0 * polygons_moving / polygons_3d : 0.0, held_service, held_projection, held_neighbour, held_reset,
-           held_jump, corners_resolved, polygons_recoloured);
+           held_jump, corners_resolved, polygons_recoloured, leftovers);
     printf("Turning: corners=%" PRIu64 " (%.2f%% of moving) runs=%" PRIu64 " hanging=%" PRIu64 " flat-or-mirrored=%" PRIu64
            " too-far=%" PRIu64 "\n", corners_turning, corners_moving ? 100.0 * corners_turning / corners_moving : 0.0, runs_turning,
            runs_attached, runs_flat, runs_far);

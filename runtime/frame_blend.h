@@ -84,6 +84,9 @@ typedef struct {
     /* Polygons whose colours change from the same polygon a game frame
      * earlier (blended where frame_blend_colours allows). */
     uint32_t polygons_recoloured;
+    /* Polygons of the frame before drawn between the two because the latest
+     * culled them at the edge of the screen (frame_blend_leftover). */
+    uint32_t leftovers;
 } frame_blend_info_t;
 
 typedef struct frame_blend frame_blend_t;
@@ -132,6 +135,18 @@ void frame_blend_packet(frame_blend_t *, uint64_t serial, const uint32_t *packet
  * returns a mask of those that differ from the latest frame's; 0 when its
  * colours stay as recorded. */
 unsigned frame_blend_colours(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, uint32_t colours[4]);
+
+/* What the frame before drew at the edge of the screen and the latest frame
+ * no longer draws, having moved it off the screen: a fast camera move would
+ * otherwise uncover the background there between the two. Between them
+ * (0 < num < den) these polygons are drawn first, beneath the latest frame's,
+ * where their vertices' own motion puts them. frame_blend_leftover writes
+ * leftover index's packet at alpha to words and returns its length in words,
+ * 0 at the ends. The screen is width by height in packet coordinates
+ * (320 by 240 unless set). */
+unsigned frame_blend_leftovers(const frame_blend_t *);
+unsigned frame_blend_leftover(const frame_blend_t *, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]);
+void frame_blend_screen(frame_blend_t *, int32_t width, int32_t height);
 
 /* Move every corner on a straight line in view space, as before runs turned
  * (for comparison); takes effect from the next frame added. */

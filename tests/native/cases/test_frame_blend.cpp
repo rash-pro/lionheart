@@ -173,6 +173,23 @@ LH_TEST(test_a_stretched_surface_is_held_but_not_by_what_is_not_drawn) {
     }
 }
 
+LH_TEST(test_what_leaves_the_screen_is_drawn_until_it_has_left) {
+    // A strip slides left; the game stops drawing a quad once it is wholly
+    // off the screen. Between the frame that still drew its last sliver and
+    // the next, that quad is drawn beneath the rest where its vertices move,
+    // so the screen's edge never shows the background.
+    auto out = scenario(t, "pan");
+    LH_CONTAINS(out, "L4 leftovers=1\n");
+    LH_CONTAINS(out, "L7 leftovers=1\n");
+    auto record = t.temp() / "pan.rec";
+    scenario(t, "pan", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, "Alpha 1: game-frames=6 differ=0 pixels=0");
+    LH_CONTAINS(drawn, "Alpha 0: game-frames-equal-to-previous=6");
+    LH_CONTAINS(drawn, " culled-at-edge=2\n");
+    LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
+}
+
 LH_TEST(test_a_part_that_turns_keeps_its_size) {
     // A square turning a quarter turn each game frame about the line of
     // sight: between the frames it is the same square, turned part of the way.

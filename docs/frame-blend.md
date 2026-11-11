@@ -70,6 +70,14 @@ at a fraction alpha between that frame and the one before:
   512 or more down, as one with a corner clamped far off screen does) holds nothing and is drawn as recorded:
   otherwise its clamped corner held its neighbours and, through this rule, a whole floor.
 - Drawing order is the newer frame's: the game's ordering table is replayed as it was.
+- On a fast camera move, the newer frame no longer draws what the older one had at the edge of the screen: the
+  game culls polygons that left it. A polygon of the frame before with no successor in the newer frame (no
+  polygon found for it as for ambiguous corners), every corner linked, whose vertices a game frame later all lie
+  beyond one edge of the screen, is drawn between the two frames first, beneath everything, where its vertices'
+  own motion puts them (the game projects a model's vertices before it culls its polygons), with its own packet;
+  `frame_blend_leftover` gives it, and never at alpha 1. A polygon still on the screen that the newer frame no
+  longer draws went for another reason (it turned away, or a polygon held in its place), and is not drawn: a
+  ghost of it would show. The host tells blending the screen's size (`frame_blend_screen`).
 
 A frame gives nothing to blend from after the service's own resets (the first frame, more than 8 VBlanks since the
 previous one, an overflow, a restored state), in excluded scenes (the world map), when the host's classification
@@ -122,7 +130,8 @@ Measures, over `--from` to `--until`:
 - `Blended`: 3D corners (those of polygons with a corner at a projection) and polygons that move, and why the rest
   stay: held by the service, ends the GTE does not give again or at the camera plane, in or next to a held polygon,
   no history, a run that jumped by itself; the ambiguous corners resolved, and the polygons whose colours change
-  from a game frame earlier.
+  from a game frame earlier, and the polygons of the frame before drawn between because the newer frame culled
+  them at the screen's edge (`culled-at-edge`).
 - `Game rate`: for each game frame, the pixels where alpha 0 differs from the picture shown just before it change
   only at game frames; of the pixels that change across the game frame, their share, and their share of the
   screen. Without blending both shares would be those of every changing pixel.
