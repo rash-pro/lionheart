@@ -4,7 +4,8 @@
  *   inbetween RECORD [--from V] [--until V] [--out DIR] [--canvas WxH] [--sheet V] [--frames]
  *             [--causes] [--packets V]
  * Every VBlank of the recording is replayed and must show what the game showed.
- * Every game frame is drawn again with its polygons where they stand at the end
+ * Every game frame is drawn again with its polygons, and the drawing offsets and
+ * sprites of its 2D layers (docs/frame-layer.md), where they stand at the end
  * of its interval (alpha 1), which must give the game's picture pixel for
  * pixel, and at its start (alpha 0), which is compared with the picture before
  * it: what differs there still moves only at the game's rate. Between from and
@@ -12,12 +13,13 @@
  * (the blended ones) as raw 24-bit frames of the canvas size, and heat.ppm:
  * where pixels changed at game frames (red) or between them (green). --sheet
  * writes the pictures of the first blended game frame from VBlank V on, and
- * --frames prints what blending gave each game frame. --causes says what drew
+ * --frames prints what blending and the layers gave each game frame. --causes says what drew
  * the pixels that still jump and counts holes in the blended pictures;
  * --packets V lists the packets behind them for one game frame.
  * The report goes to stdout; the exit status is 1 if a check failed. */
 #include "../../runtime/gpu.c"
 #include "frame_blend.h"
+#include "frame_layer.h"
 #include "frame_record.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -48,10 +50,13 @@ static uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] 
 static uint64_t le64(const uint8_t *p) { return le32(p) | (uint64_t)le32(p + 4) << 32; }
 static void put_le32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
 
-/* A GPU that counts the polygons it draws, as the identity service does. */
+/* A GPU that counts the polygons it draws, as the identity service does;
+ * the one that replays the game also hands each command to the layers. */
 typedef struct {
     gpu_t *gpu;
     uint64_t serial;
+    frame_layer_t *layer;
+    uint64_t layer_failures;
 } counted_t;
 static void count_polygon(void *context, unsigned opcode, const uint32_t *packet) {
     (void)opcode; (void)packet;
@@ -130,6 +135,7 @@ enum {
     CAUSE_BLEND,          /* a 3D polygon held by blending: next to a held one, would stretch, or its ends */
     CAUSE_FLAT,           /* a polygon with no corner at a projection: 2D, or corners the CPU made */
     CAUSE_SPRITE,         /* rectangles and sprites */
+    CAUSE_SPRITE_MOVED,   /* a sprite that moves with its layer, its look changed (animated, or come in) */
     CAUSE_LINE,
     CAUSE_FILL,
     CAUSE_TRANSFER,       /* uploads and copies into the picture */
@@ -139,11 +145,11 @@ enum {
 };
 static const char *const cause_names[CAUSES] = {
     "nothing-drawn", "3d-moved-look-changed", "3d-moved-texture-rewritten", "3d-no-history", "3d-corner-without-projection",
-    "3d-unpaired", "3d-ambiguous-or-split", "3d-held-by-blending", "polygon-without-projection", "sprite", "line",
+    "3d-unpaired", "3d-ambiguous-or-split", "3d-held-by-blending", "polygon-without-projection", "sprite", "sprite-moved-look-changed", "line",
     "fill", "transfer", "after-display-change", "frame-not-blended"};
 static const uint8_t cause_colours[CAUSES][3] = {
     {128, 128, 128}, {255, 230, 0}, {255, 140, 0}, {255, 255, 255}, {255, 0, 0}, {0, 200, 255}, {60, 60, 255},
-    {255, 0, 255}, {0, 210, 0}, {170, 255, 170}, {170, 90, 40}, {90, 90, 90}, {255, 160, 210}, {0, 140, 140},
+    {255, 0, 255}, {0, 210, 0}, {170, 255, 170}, {120, 255, 255}, {170, 90, 40}, {90, 90, 90}, {255, 160, 210}, {0, 140, 140},
     {200, 200, 200}};
 
 /* A packet that drew into the picture, for --packets. */
@@ -182,6 +188,13 @@ typedef struct {
      * moves only if the frame its projection belongs to has one. */
     unsigned reason, reason_before;
     int after;               /* past the display-start change that ends the frame */
+    /* The frame's 2D layers (or NULL), and how many of its offset commands
+     * and sprites the replay has drawn: they are asked for by order. */
+    const frame_layer_t *layer;
+    uint32_t offsets, sprites;
+    /* 3D corners that move but are drawn under an offset whose layer does
+     * not move while the main one does: they would slide against it. */
+    unsigned slide;
 } blend_at_t;
 
 /* The trace starts from the display area of the picture the replay ends on,
@@ -380,12 +393,40 @@ static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t 
             cause = cause_of(op);
             if (need <= words) {
                 n = need;
+                if (c->layer) {
+                    uint32_t w[12];
+                    unsigned i;
+                    for (i = 0; i < n && i < 12; ++i) w[i] = le32(p + i * 4);
+                    if (!frame_layer_command(c->layer, w, i)) ++c->layer_failures;
+                }
+                if (at && at->layer && !at->after && (op == 0xe5 || (op >= 0x60 && op < 0x80))) {
+                    /* The frame's own offsets and sprites, where its layers
+                     * stand at alpha. */
+                    uint8_t packet[12 * 4];
+                    uint32_t word;
+                    memcpy(packet, p, n * 4);
+                    if (op == 0xe5) {
+                        if (frame_layer_offset(at->layer, at->offsets, at->num, at->den, &word)) put_le32(packet, word);
+                        ++at->offsets;
+                    } else {
+                        word = le32(packet + 4);
+                        if (frame_layer_sprite(at->layer, at->sprites, at->num, at->den, &word)) cause = CAUSE_SPRITE_MOVED;
+                        put_le32(packet + 4, word);
+                        ++at->sprites;
+                    }
+                    draw(c, at, packet, n, cause, 0);
+                    p += n * 4; words -= n;
+                    continue;
+                }
                 if (at && op >= 0x20 && op < 0x40) {
                     uint8_t packet[12 * 4];
                     uint32_t xy[4], w[12];
                     unsigned corners = (op & 8) ? 4 : 3, i, k = 1, mask;
                     memcpy(packet, p, n * 4);
                     mask = frame_blend_polygon(at->blend, c->serial, at->num, at->den, xy, &at->stray);
+                    if (at->layer && !at->after && mask && frame_layer_info(at->layer)->reason == FRAME_LAYER_MOVED &&
+                        !frame_layer_moves(at->layer, at->offsets))
+                        for (i = 0; i < corners; ++i) at->slide += (mask >> i) & 1u;
                     for (i = 0; i < corners; ++i) {
                         if (i && (op & 16)) ++k;
                         if (mask & (1u << i)) put_le32(packet + k * 4, xy[i]);
@@ -450,6 +491,7 @@ static int write_ppm(const char *dir, const char *name, const uint8_t *rgb, int 
     return fclose(f) == 0 && ok;
 }
 
+static const char *const layer_reasons[FRAME_LAYER_REASONS] = {"moved", "no-history", "still", "changed", "not-rigid", "edge", "few"};
 static const char *const reasons[FRAME_BLEND_REASONS] = {"kept", "no-history", "excluded", "scene", "cut"};
 
 /* The trace follows the display area of the picture shown. */
@@ -541,6 +583,7 @@ int main(int argc, char **argv) {
     frame_record_reader_t in;
     frame_record_frame_t frame;
     frame_blend_t *blend = frame_blend_create();
+    frame_layer_t *layer = frame_layer_create();
     counted_t truth, scratch;
     checkpoint_t a, b;
     journal_t j;
@@ -556,6 +599,9 @@ int main(int argc, char **argv) {
     uint64_t holds = 0, skips = 0, split = 0, reset[FRAME_BLEND_REASONS] = {0}, jumps_blended = 0, jumps_held = 0;
     uint64_t polygons_3d = 0, polygons_moving = 0, corners_3d = 0, corners_moving = 0;
     uint64_t held_service = 0, held_projection = 0, held_neighbour = 0, held_reset = 0, held_jump = 0;
+    /* The main 2D layer of each game frame: why it holds, and its sprites. */
+    uint64_t layer_reason[FRAME_LAYER_REASONS] = {0}, layer_frames = 0, layer_tiles = 0, layer_paired = 0, layer_unpaired = 0;
+    uint64_t layer_disagree = 0, layer_untextured = 0, layer_parallax = 0, slide = 0, slide_renders = 0;
     char wrong_list[1024] = "", stray_list[1024] = "", reset_list[2048] = "", jump_list[1024] = "";
     /* --causes: what drew each pixel of the last two renders, on the canvas. */
     int causes = 0, have_probe = 0;
@@ -584,9 +630,10 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!path || !blend || !frame_record_open(&in, path)) { fprintf(stderr, "Cannot read recording: %s\n", path ? path : ""); return 2; }
+    if (!path || !blend || !layer || !frame_record_open(&in, path)) { fprintf(stderr, "Cannot read recording: %s\n", path ? path : ""); return 2; }
     memset(&frame, 0, sizeof(frame)); memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b)); memset(&j, 0, sizeof(j));
     truth.gpu = gpu_create(); scratch.gpu = gpu_create(); truth.serial = scratch.serial = 0;
+    truth.layer = layer; scratch.layer = NULL; truth.layer_failures = scratch.layer_failures = 0;
     now = calloc((size_t)cw * ch, 3); before = calloc((size_t)cw * ch, 3); drawn = calloc((size_t)cw * ch, 3);
     start = calloc((size_t)cw * ch, 3); last = calloc((size_t)cw * ch, 3);
     jumps = calloc((size_t)cw * ch, sizeof(*jumps)); smooth = calloc((size_t)cw * ch, sizeof(*smooth));
@@ -618,6 +665,7 @@ int main(int argc, char **argv) {
         if (in.tag == FRAME_RECORD_SNAP) {
             if (size < 24 || !restore(&truth, p + 24, size - 24, le64(p + 8))) { fprintf(stderr, "Damaged GPU state\n"); return 2; }
             frame_blend_reset(blend);
+            frame_layer_reset(layer);
             reason = reason_before = FRAME_BLEND_NO_HISTORY;
             a.valid = b.valid = 0; j.chunks.size = j.mark = 0;
             have_frame = interval_ready = have_before = 0;
@@ -626,6 +674,9 @@ int main(int argc, char **argv) {
             if (!frame_record_parse(&frame, p, size)) { fprintf(stderr, "Damaged identity frame\n"); return 2; }
             if (!frame_blend_add(blend, &frame.frame)) { fprintf(stderr, "Out of memory\n"); return 2; }
             info = frame_blend_info(blend);
+            /* The layers move only where the 3D blends from the frame before:
+             * after a reset, a change of scene or a cut they hold too. */
+            if (!frame_layer_end(layer, info->reason == FRAME_BLEND_KEPT)) ++truth.layer_failures;
             reason_before = reason; reason = info->reason;
             /* The new game frame shows from here; it was drawn since the
              * display start changed before, the checkpoint that becomes a. */
@@ -670,6 +721,20 @@ int main(int argc, char **argv) {
                 }
                 polygons_3d += info->polygons_3d; polygons_moving += info->polygons_moving;
                 corners_3d += info->corners_3d; corners_moving += info->corners_moving;
+                {
+                    const frame_layer_info_t *li = frame_layer_info(layer);
+                    if (li->tiles >= FRAME_LAYER_TILES) {
+                        ++layer_frames; ++layer_reason[li->reason];
+                        layer_tiles += li->tiles; layer_paired += li->paired; layer_unpaired += li->unpaired;
+                        layer_disagree += li->disagree; layer_untextured += li->untextured;
+                        if (li->layers > 1) ++layer_parallax;
+                    }
+                    if (verbose)
+                        printf("layer %" PRIu64 " reason=%s move=%d,%d offset=%d,%d tiles=%u paired=%u unpaired=%u disagree=%u"
+                               " layers=%u segments=%u/%u\n", info->number, layer_reasons[li->reason], li->dx, li->dy,
+                               li->offset_dx, li->offset_dy, li->tiles, li->paired, li->unpaired, li->disagree, li->layers,
+                               li->moving_segments, li->segments);
+                }
                 held_service += info->held_service; held_projection += info->held_projection;
                 held_neighbour += info->held_neighbour; held_reset += info->held_reset; held_jump += info->held_jump;
             }
@@ -695,7 +760,7 @@ int main(int argc, char **argv) {
              * frame again is what takes the time. */
             if (first_of_frame && a.valid && vblank + FRAME_IDENTITY_GAP >= from) {
                 /* Alpha 1 must be the game's picture; alpha 0 against the one before. */
-                blend_at_t at = {blend, 1, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
+                blend_at_t at = {blend, 1, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0, layer, 0, 0, 0};
                 size_t k, differ = 0;
                 /* cause_before keeps what drew the picture of the game frame before. */
                 if (causes) { uint8_t *t = cause_before; cause_before = cause_one; cause_one = t; }
@@ -712,7 +777,7 @@ int main(int argc, char **argv) {
                         snprintf(wrong_list + strlen(wrong_list), sizeof(wrong_list) - strlen(wrong_list), " alpha1@%" PRIu64 ":%zu", vblank, differ);
                 }
                 if (interval_ready && have_before) {
-                    blend_at_t zero = {blend, 0, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0};
+                    blend_at_t zero = {blend, 0, 1, 0, 0, NULL, &frame.frame, reason, reason_before, 0, layer, 0, 0, 0};
                     size_t same = 1;
                     int probing = causes && probe && !have_probe && in_window && frame_vblank >= probe;
                     if (causes) { zero.trace = &trace; trace_area(&trace, truth.gpu); trace.describe = probing; }
@@ -775,7 +840,7 @@ int main(int argc, char **argv) {
                     /* One game frame late, on the interval measured between the
                      * last two: alpha reaches 1 when the next is due. */
                     uint64_t step = vblank - frame_vblank + 1;
-                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, 0, 0, NULL, NULL, reason, reason_before, 0};
+                    blend_at_t at = {blend, (uint32_t)(step < interval ? step : interval), (uint32_t)interval, 0, 0, NULL, NULL, reason, reason_before, 0, layer, 0, 0, 0};
                     if (step > interval) ++holds;
                     last_step = step;
                     if (causes) { at.trace = &trace; at.frame = &frame.frame; trace_area(&trace, truth.gpu); trace.describe = 0; }
@@ -801,6 +866,7 @@ int main(int argc, char **argv) {
                     }
                     ++renders;
                     stray += at.stray; split += at.split;
+                    slide += at.slide; slide_renders += at.slide != 0;
                     if (at.stray) {
                         ++stray_frames;
                         if (strlen(stray_list) < sizeof(stray_list) - 40)
@@ -892,6 +958,13 @@ int main(int argc, char **argv) {
     printf("\nReset at:%s\n", reset_list);
     printf("Jumps (median paired screen move of 32 pixels or more): held=%" PRIu64 " blended=%" PRIu64 " at:%s\n",
            jumps_held, jumps_blended, jump_list);
+    printf("Layer (the main 2D layer of each game frame with %d tiles or more): frames=%" PRIu64, FRAME_LAYER_TILES, layer_frames);
+    for (i = 0; i < FRAME_LAYER_REASONS; ++i) printf(" %s=%" PRIu64, layer_reasons[i], layer_reason[i]);
+    printf(" with-parallax=%" PRIu64 " tiles=%" PRIu64 " paired=%" PRIu64 " unpaired=%" PRIu64 " disagree=%" PRIu64
+           " untextured=%" PRIu64 "\n", layer_parallax, layer_tiles, layer_paired, layer_unpaired, layer_disagree, layer_untextured);
+    printf("Slide (3D corners that move under an offset whose layer holds while the main one moves): corners=%" PRIu64
+           " renders=%" PRIu64 "\n", slide, slide_renders);
+    if (truth.layer_failures) { printf("Layer failures: %" PRIu64 "\n", truth.layer_failures); failed = 1; }
     printf("Stray: corners=%" PRIu64 " renders=%" PRIu64 " at:%s\n", stray, stray_frames, stray_list);
     if (causes)
         printf("Holes (the clear colour where both game frames have 3D): pixels=%" PRIu64 " renders=%" PRIu64 " at:%s\n",
@@ -901,5 +974,6 @@ int main(int argc, char **argv) {
     frame_record_close(&in);
     frame_record_frame_free(&frame);
     frame_blend_destroy(blend);
+    frame_layer_destroy(layer);
     return failed ? 1 : 0;
 }
