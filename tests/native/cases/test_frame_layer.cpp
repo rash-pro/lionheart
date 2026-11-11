@@ -34,6 +34,33 @@ void moves_every_frame(const std::string &out, const char *move = "move=-6,0") {
     }
 }
 
+// The field routes: the Garden walk and the prison, with the windows where
+// the fields are.
+struct Route {
+    const char *id, *script, *card;
+    unsigned vblanks;
+    const char *window;
+};
+const Route routes[] = {
+    {"garden", "tests/scripts/fps60-fields-garden.txt", "disc1-start-maxed.mcr", 9300, "1800:9200"},
+    {"prison", "tests/scripts/play-disc2-prison.txt", "disc2-start.mcr", 14000, "13100:14000"},
+};
+
+std::string play(lh::Case &t, lh::Command command, const Route &r, const fs::path &dir) {
+    for (auto sub : {"states", "shots", "config", "data"}) fs::create_directories(dir / sub);
+    lh::write_file(dir / "empty.ini", "");
+    fs::copy_file(lh::owned_path(std::string("saves/") + r.card), dir / "card.mcr", fs::copy_options::overwrite_existing);
+    command.args({"--config", dir / "empty.ini", "--headless", "--fast", "--mute", "--renderer", "soft", "--stall", "0",
+                  "--max-instructions", "0", "--max-vblanks", r.vblanks, "--input-script", t.root() / r.script,
+                  "--card1", dir / "card.mcr", "--savestate-dir", dir / "states", "--screenshot-dir", dir / "shots",
+                  "--log", fs::path("/dev/null"), "--dump-state", dir / "state.bin", "--native-off"});
+    for (int n = 1; n <= 4; ++n) command.arg("--disc").arg(lh::owned_disc(n));
+    command.cwd(dir).timeout(7200).env("SDL_VIDEODRIVER", "dummy").env("SDL_AUDIODRIVER", "dummy")
+        .env("XDG_CONFIG_HOME", dir / "config").env("XDG_DATA_HOME", dir / "data");
+    auto result = t.ok(command);
+    LH_CONTAINS(result.out + result.err, "VBlank limit reached");
+    return lh::sha256_file(dir / "state.bin");
+}
 } // namespace
 
 LH_TEST(test_the_layer_moves_by_the_fraction_of_the_scroll) {
@@ -148,3 +175,21 @@ LH_TEST(test_the_edge_is_never_uncovered) {
                        "changed=0 not-rigid=0 edge=2 ");
 }
 
+// Recording changes nothing the game computes, and every game frame of the
+// field routes drawn again with its layers and polygons at the end of their
+// interval is the game's picture, pixel for pixel; the layers move, and no 3D
+// moves under an offset its layer does not.
+LH_GAME_TEST_P(test_field_routes_draw_again_exactly, routes) {
+    const Route &r = p;
+    auto record = t.temp() / "on" / "frames.rec";
+    auto off = play(t, t.player(), r, t.temp() / "off");
+    auto on = play(t, t.player().args({"--frame-record", record, "--frame-record-window", r.window}), r, t.temp() / "on");
+    LH_EQ(on, off);
+    auto result = t.run(t.harness("inbetween").arg(record).timeout(3600));
+    lh::write_file(t.temp() / "inbetween.txt", result.out + result.err);
+    LH_CHECK_MSG(result.rc == 0, "the replay differs:\n" + lh::excerpt(result.out + result.err));
+    LH_CHECK_MSG(lh::capture(result.out, R"(Alpha 1: game-frames=(\d+))") != "0", result.out);
+    LH_CHECK_MSG(std::stoi(lh::capture(result.out, R"(Layer \([^)]*\): frames=\d+ moved=(\d+))")) > 0, result.out);
+    LH_CONTAINS(result.out, "Slide (3D corners that move under an offset whose layer holds while the main one moves): corners=0 ");
+    LH_CONTAINS(result.out, "Stray: corners=0 ");
+}
