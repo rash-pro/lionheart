@@ -586,7 +586,7 @@ int main(int argc, char **argv) {
     uint64_t polygons_3d = 0, polygons_moving = 0, corners_3d = 0, corners_moving = 0;
     uint64_t held_service = 0, held_projection = 0, held_neighbour = 0, held_reset = 0, held_jump = 0;
     uint64_t sized = 0, resized = 0, resized_renders = 0, corners_turning = 0, runs_turning = 0, runs_attached = 0;
-    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0, polygons_recoloured = 0, leftovers = 0;
+    uint64_t runs_flat = 0, runs_far = 0, corners_resolved = 0, polygons_recoloured = 0, leftovers = 0, following = 0;
     char resized_list[1024] = "";
     char wrong_list[1024] = "", stray_list[1024] = "", reset_list[2048] = "", jump_list[1024] = "";
     /* --causes: what drew each pixel of the last two renders, on the canvas. */
@@ -712,7 +712,7 @@ int main(int argc, char **argv) {
                 held_service += info->held_service; held_projection += info->held_projection;
                 held_neighbour += info->held_neighbour; held_reset += info->held_reset; held_jump += info->held_jump;
                 corners_turning += info->corners_turning; runs_turning += info->runs_turning; runs_attached += info->runs_attached;
-                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved; polygons_recoloured += info->polygons_recoloured; leftovers += info->leftovers;
+                runs_flat += info->runs_flat; runs_far += info->runs_far; corners_resolved += info->corners_resolved; polygons_recoloured += info->polygons_recoloured; leftovers += info->leftovers; following += info->corners_following;
             }
             continue; /* not journalled: it changes no GPU */
         } else if (in.tag == FRAME_RECORD_VBLK) {
@@ -919,10 +919,10 @@ int main(int argc, char **argv) {
            from, until == UINT64_MAX ? vblank : until, frames, renders, holds, skips);
     printf("Blended: corners3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%) polygons3d=%" PRIu64 " moving=%" PRIu64 " (%.2f%%)"
            " held-service=%" PRIu64 " held-projection=%" PRIu64 " held-neighbour=%" PRIu64 " held-reset=%" PRIu64
-           " held-jump=%" PRIu64 " resolved=%" PRIu64 " recoloured=%" PRIu64 " culled-at-edge=%" PRIu64 "\n",
+           " held-jump=%" PRIu64 " resolved=%" PRIu64 " recoloured=%" PRIu64 " culled-at-edge=%" PRIu64 " following=%" PRIu64 "\n",
            corners_3d, corners_moving, corners_3d ? 100.0 * corners_moving / corners_3d : 0.0, polygons_3d, polygons_moving,
            polygons_3d ? 100.0 * polygons_moving / polygons_3d : 0.0, held_service, held_projection, held_neighbour, held_reset,
-           held_jump, corners_resolved, polygons_recoloured, leftovers);
+           held_jump, corners_resolved, polygons_recoloured, leftovers, following);
     printf("Turning: corners=%" PRIu64 " (%.2f%% of moving) runs=%" PRIu64 " hanging=%" PRIu64 " flat-or-mirrored=%" PRIu64
            " too-far=%" PRIu64 "\n", corners_turning, corners_moving ? 100.0 * corners_turning / corners_moving : 0.0, runs_turning,
            runs_attached, runs_flat, runs_far);

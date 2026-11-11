@@ -87,6 +87,9 @@ typedef struct {
     /* Polygons of the frame before drawn between the two because the latest
      * culled them at the edge of the screen (frame_blend_leftover). */
     uint32_t leftovers;
+    /* Moving corners projected anew each frame that follow the polygons
+     * around them (a shadow's centre). */
+    uint32_t corners_following;
 } frame_blend_info_t;
 
 typedef struct frame_blend frame_blend_t;

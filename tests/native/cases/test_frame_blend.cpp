@@ -186,8 +186,31 @@ LH_TEST(test_what_leaves_the_screen_is_drawn_until_it_has_left) {
     auto drawn = redraw(t, record);
     LH_CONTAINS(drawn, "Alpha 1: game-frames=6 differ=0 pixels=0");
     LH_CONTAINS(drawn, "Alpha 0: game-frames-equal-to-previous=6");
-    LH_CONTAINS(drawn, " culled-at-edge=2\n");
+    LH_CONTAINS(drawn, " culled-at-edge=2 ");
     LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
+}
+
+LH_TEST(test_a_shadow_moves_as_a_unit) {
+    // A fan whose centre is projected anew each game frame, as a shadow's
+    // is: the centre has no pair, but its ring moves as one, so the centre
+    // follows the ring and the whole fan moves.
+    auto out = scenario(t, "shadow");
+    for (int f = 1; f <= 5; ++f) {
+        LH_CONTAINS(out, "F" + std::to_string(f) + " reason=kept moving=24/24 polygons=8/8 held=0/0/0/0");
+        LH_CONTAINS(out, "W" + std::to_string(f) + " following=8\n");
+    }
+    auto record = t.temp() / "shadow.rec";
+    scenario(t, "shadow", record);
+    auto drawn = redraw(t, record);
+    LH_CONTAINS(drawn, "Alpha 1: game-frames=4 differ=0 pixels=0");
+    LH_CONTAINS(drawn, "Alpha 0: game-frames-equal-to-previous=4");
+    LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
+    // A ring that spreads far as it moves is no unit to follow: held.
+    auto torn = scenario(t, "torn");
+    for (int f = 1; f <= 5; ++f) {
+        LH_CONTAINS(torn, "F" + std::to_string(f) + " reason=kept moving=0/24 polygons=0/8");
+        LH_CHECK_MSG(torn.find("W" + std::to_string(f) + " ") == std::string::npos, torn);
+    }
 }
 
 LH_TEST(test_a_part_that_turns_keeps_its_size) {

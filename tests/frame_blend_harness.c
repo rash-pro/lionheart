@@ -8,12 +8,14 @@
  *   S<number> resized=<polygons> stray=<corners> size=<smallest>-<largest edge, in percent of the ends'>
  *   R<number> resolved=<ambiguous corners resolved by the polygon drawn a game frame earlier>
  *   L<number> leftovers=<polygons of the frame before culled at the screen's edge, drawn between>
+ *   W<number> following=<corners projected anew that follow the polygons around them>
  *   C<number> <polygon>=<mask of the corners whose colour changes>[/<first corner's colour at alpha 0, 1/2 and 1>]...
  * Scenarios: move, held, touch, resets, late; a polygon the GPU skips:
  * hidden; sliding far, with C held or skipped: slide, slide-hidden; parts that turn: turn, chain,
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
  * on screen: cross; colours that change: fade; a strip panning off the screen,
- * its polygons culled once wholly off it: pan. With "straight" after the name, every corner moves on a
+ * its polygons culled once wholly off it: pan; a shadow-like fan whose centre
+ * is projected anew each game frame, sliding or torn apart: shadow, torn. With "straight" after the name, every corner moves on a
  * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
 #include "frame_blend.h"
@@ -92,6 +94,7 @@ static void sink(void *context, const frame_identity_frame_t *f) {
            info->runs_attached, info->runs_flat, info->runs_far);
     if (info->corners_resolved) printf("R%llu resolved=%u\n", (unsigned long long)f->number, info->corners_resolved);
     if (info->leftovers) printf("L%llu leftovers=%u\n", (unsigned long long)f->number, info->leftovers);
+    if (info->corners_following) printf("W%llu following=%u\n", (unsigned long long)f->number, info->corners_following);
     if (!f->polygon_count) return;
     sizes(f);
     {
@@ -433,6 +436,26 @@ static void scenario_pan(void) {
     }
 }
 
+/* A fan of eight triangles around a centre projected anew each game frame
+ * (its input changes, so it never pairs), the ring its own run, sliding 20
+ * pixels a game frame; torn, the ring also spreads far each game frame. */
+static void scenario_shadow(int torn) {
+    int f;
+    for (f = 0; f < 6; ++f) {
+        uint32_t ring[8], centre;
+        unsigned i;
+        double spread = torn ? 1 + 0.6 * f : 1;
+        cleared();
+        pose(0, spread, spread, 1, -200 + 80 * f, 100, 1200);
+        for (i = 0; i < 8; ++i) ring[i] = rtps((int)(200 * cosine(45.0 * i)), (int)(100 * sine(45.0 * i)), 0);
+        pose(0, 1, 1, 1, -200 + 80 * f, 100, 1200);
+        c->gte_ctrl[2] |= 1u << 16;
+        centre = rtps(0, 0, f);
+        for (i = 0; i < 8; ++i) triangle(0x606060u, centre, ring[i], ring[(i + 1) % 8]);
+        shown();
+    }
+}
+
 int main(int argc, char **argv) {
     const char *name = argc > 1 ? argv[1] : "", *record = argc > 2 && strcmp(argv[2], "straight") ? argv[2] : NULL;
     frame_identity_config_t config;
@@ -465,6 +488,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "cross")) scenario_cross();
     else if (!strcmp(name, "fade")) scenario_fade();
     else if (!strcmp(name, "pan")) scenario_pan();
+    else if (!strcmp(name, "shadow")) scenario_shadow(0);
+    else if (!strcmp(name, "torn")) scenario_shadow(1);
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     gpu_gp1(g, 0x05000000u | (back * 256u) << 10);
     if (record && !frame_record_stop()) { printf("FAIL recording\n"); ++failures; }

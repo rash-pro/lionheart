@@ -61,6 +61,13 @@ typedef struct {
     int32_t run;
     uint8_t age;
     int16_t input[3];
+    /* A vertex projected anew each frame (unpaired), in polygons whose other
+     * corners all move together, follows them: a shadow's centre in its ring.
+     * The polygons that use it, those that use it as their one unpaired
+     * corner, and the positions next to it. */
+    uint8_t floating, neighbour_count;
+    uint16_t uses, fans;
+    int32_t neighbours[12];
 } vertex_t;
 
 struct frame_blend {
@@ -78,6 +85,8 @@ struct frame_blend {
     int32_t *slots;
     size_t table_capacity;
     uint8_t *hidden;             /* per polygon: the GPU draws none of it */
+    uint8_t *fan;                /* per polygon: its one unpaired corner, or 4 */
+    size_t fan_capacity;
     size_t hidden_capacity;
     int32_t *surfaces;           /* per polygon: union-find over shared edges */
     size_t surface_capacity;
@@ -127,7 +136,7 @@ void frame_blend_destroy(frame_blend_t *b) {
         free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
     }
-    free(b->looks); free(b->before); free(b->hidden); free(b->continued); free(b->forward[0]); free(b->forward[1]);
+    free(b->looks); free(b->before); free(b->hidden); free(b->fan); free(b->continued); free(b->forward[0]); free(b->forward[1]);
     free(b->leftovers);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
@@ -1026,6 +1035,7 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
         l = &b->leftovers[b->leftover_count];
         for (c = 0; c < q.corners; ++c) {
             vertex_t *v = &b->vertices[b->vertex_count + c];
+            memset(v, 0, sizeof(*v));
             if (ends(b, &q, c, v) != ENDS_OK) break;
             l->vertex[c] = (int32_t)(b->vertex_count + c);
         }
@@ -1036,6 +1046,48 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
     }
     b->info.leftovers = (uint32_t)b->leftover_count;
     return 1;
+}
+
+/* Whether a vertex that follows its neighbours can: every polygon using it
+ * uses it as its one unpaired corner, it has three neighbours or more, none
+ * held, and they all move alike (their moves on screen within 2 pixels and a
+ * quarter of their mean of it): a unit that moves together, as a shadow's
+ * ring under a model. Its own start is then its end less that mean. A vertex
+ * that cannot is held, and with it every polygon that used it. */
+static void follow(frame_blend_t *b, const kept_t *cur) {
+    size_t i;
+    unsigned c, k;
+    for (i = 0; i < b->vertex_count; ++i) {
+        vertex_t *w = &b->vertices[i];
+        int32_t mx = 0, my = 0, spread = 0;
+        if (!w->fans) continue;
+        if (w->pinned > 0) { w->floating = 0; continue; }
+        if (w->fans == w->uses && w->neighbour_count >= 3) {
+            for (k = 0; k < w->neighbour_count; ++k) {
+                const vertex_t *n = &b->vertices[w->neighbours[k]];
+                if (n->pinned || n->floating) break;
+                mx += low(n->sxy[1]) - low(n->sxy[0]); my += high(n->sxy[1]) - high(n->sxy[0]);
+            }
+            if (k == w->neighbour_count) {
+                mx /= (int32_t)k; my /= (int32_t)k;
+                for (k = 0; k < w->neighbour_count; ++k) {
+                    const vertex_t *n = &b->vertices[w->neighbours[k]];
+                    int32_t dx = abs(low(n->sxy[1]) - low(n->sxy[0]) - mx), dy = abs(high(n->sxy[1]) - high(n->sxy[0]) - my);
+                    spread = dx > spread ? dx : spread; spread = dy > spread ? dy : spread;
+                }
+                if (spread * 4 <= 8 + (abs(mx) > abs(my) ? abs(mx) : abs(my))) {
+                    w->floating = 1; w->pinned = 0; w->run = -1;
+                    w->sxy[0] = (uint32_t)(uint16_t)(low(w->sxy[1]) - mx) | (uint32_t)(uint16_t)(high(w->sxy[1]) - my) << 16;
+                    continue;
+                }
+            }
+        }
+        w->floating = 0; w->pinned = 1;
+    }
+    for (i = 0; i < cur->polygon_count; ++i) {
+        if (b->fan[i] > 3 || b->hidden[i] || b->vertices[b->corners[i][b->fan[i]]].floating) continue;
+        for (c = 0; c < cur->polygons[i].corners; ++c) b->vertices[b->corners[i][c]].pinned = 1;
+    }
 }
 
 int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
@@ -1052,6 +1104,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
     if (!keep(cur, f) || !grow((void **)&b->corners, &b->corner_capacity, f->polygon_count, sizeof(*b->corners)) ||
         !grow((void **)&b->codes, &b->code_capacity, f->polygon_count, sizeof(*b->codes)) ||
         !grow((void **)&b->hidden, &b->hidden_capacity, f->polygon_count, sizeof(*b->hidden)) ||
+        !grow((void **)&b->fan, &b->fan_capacity, f->polygon_count, sizeof(*b->fan)) ||
         !surfaces(b, f)) {
         cur->valid = 0;
         return 0;
@@ -1090,30 +1143,51 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         const frame_identity_polygon_t *q = &cur->polygons[i];
         vertex_t v[4];
         unsigned good = 0, three_d = 0;
+        memset(v, 0, sizeof(v));
         for (c = 0; c < 4; ++c) b->corners[i][c] = -1;
         for (c = 0; c < q->corners; ++c) {
             if (q->state[c] != FRAME_IDENTITY_NO_PROJECTION) three_d = 1;
             b->codes[i][c] = (uint8_t)ends(b, q, c, &v[c]);
             if (b->codes[i][c] == ENDS_OK) ++good;
         }
-        b->hidden[i] = 0;
+        b->hidden[i] = 0; b->fan[i] = 4;
         if (!three_d) continue;
         /* What the GPU does not draw holds nothing: a polygon with a corner
          * clamped far off screen would otherwise hold its neighbours, and
          * through them, by the rule below, a whole floor. */
         b->hidden[i] = (uint8_t)!drawn(q);
+        if (good + 1 == q->corners)
+            for (c = 0; c < q->corners; ++c)
+                if (b->codes[i][c] != ENDS_OK && q->state[c] == FRAME_IDENTITY_UNPAIRED) b->fan[i] = (uint8_t)c;
         for (c = 0; c < q->corners; ++c) {
             int32_t at = vertex_at(b, q->xy[c], surface_of(b->surfaces, i));
             vertex_t *w;
             if (at < 0) { cur->valid = 0; return 0; }
             b->corners[i][c] = at;
             w = &b->vertices[at];
-            if (good != q->corners) { if (!b->hidden[i]) w->pinned = 1; }
-            else if (w->pinned < 0) *w = v[c];
-            else if (!w->pinned && (abs(low(w->sxy[0]) - low(v[c].sxy[0])) > 1 ||
-                                    abs(high(w->sxy[0]) - high(v[c].sxy[0])) > 1)) w->pinned = 1;
+            ++w->uses;
+            if (c == b->fan[i]) { ++w->fans; w->sxy[1] = q->xy[c]; }
+            else if (good + (b->fan[i] < 4) != q->corners) { if (!b->hidden[i]) w->pinned = 1; }
+            else if (w->pinned < 0) {
+                /* Its path; what polygons use it stays. */
+                vertex_t keep = *w;
+                *w = v[c];
+                w->uses = keep.uses; w->fans = keep.fans; w->neighbour_count = keep.neighbour_count;
+                memcpy(w->neighbours, keep.neighbours, sizeof(w->neighbours));
+            } else if (!w->pinned && (abs(low(w->sxy[0]) - low(v[c].sxy[0])) > 1 ||
+                                      abs(high(w->sxy[0]) - high(v[c].sxy[0])) > 1)) w->pinned = 1;
+        }
+        if (b->fan[i] < 4) {
+            vertex_t *w = &b->vertices[b->corners[i][b->fan[i]]];
+            for (c = 0; c < q->corners; ++c) {
+                unsigned k;
+                if (c == b->fan[i]) continue;
+                for (k = 0; k < w->neighbour_count && w->neighbours[k] != b->corners[i][c]; ++k) {}
+                if (k == w->neighbour_count && k < 12) w->neighbours[w->neighbour_count++] = b->corners[i][c];
+            }
         }
     }
+    follow(b, cur);
     /* A polygon with corners held and corners that move far would stretch:
      * hold it whole, and with it every position of its surface it shares, until
      * none is left. */
@@ -1133,6 +1207,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
             for (c = 0; c < q->corners; ++c) b->vertices[b->corners[i][c]].pinned = 1;
             changed = 1;
         }
+        if (changed) follow(b, cur);
     }
     for (i = 0; i < f->polygon_count; ++i) {
         const frame_identity_polygon_t *q = &cur->polygons[i];
@@ -1149,6 +1224,8 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
             default: ++info->held_reset; break;
             }
         }
+        for (c = 0; c < q->corners; ++c)
+            if (!b->vertices[b->corners[i][c]].pinned && b->vertices[b->corners[i][c]].floating && !b->hidden[i]) ++info->corners_following;
         info->corners_moving += moving;
         if (moving == q->corners) ++info->polygons_moving;
         for (c = 0; c < q->corners; ++c)
@@ -1186,6 +1263,20 @@ static int saturated(const vertex_t *v, uint32_t xy) {
 /* Where a vertex stands at alpha: its view-space position, projected again. */
 static uint32_t place(const frame_blend_t *b, const vertex_t *v, uint32_t num, uint32_t den, int32_t view[3]) {
     unsigned a;
+    if (v->floating) {
+        int32_t x = 0, y = 0, n = v->neighbour_count;
+        view[0] = view[1] = view[2] = 0;
+        if (num == den) return v->sxy[1];
+        for (a = 0; a < v->neighbour_count; ++a) {
+            const vertex_t *w = &b->vertices[v->neighbours[a]];
+            int32_t at[3];
+            uint32_t xy = w->pinned ? w->sxy[1] : place(b, w, num, den, at);
+            x += low(xy) - low(w->sxy[1]); y += high(xy) - high(w->sxy[1]);
+        }
+        x = low(v->sxy[1]) + (x >= 0 ? (x + n / 2) / n : -((-x + n / 2) / n));
+        y = high(v->sxy[1]) + (y >= 0 ? (y + n / 2) / n : -((-y + n / 2) / n));
+        return (uint32_t)(uint16_t)x | (uint32_t)(uint16_t)y << 16;
+    }
     if (v->run >= 0 && num && num < den) turned(kept_seen(b, v->age)->motions, v, num, den, view);
     else for (a = 0; a < 3; ++a) view[a] = between(v->view[0][a], v->view[1][a], num, den);
     return frame_blend_project(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
@@ -1228,7 +1319,7 @@ unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t n
         if (v->pinned) continue;
         mask |= 1u << c;
         xy[c] = place(b, v, num, den, view);
-        if (!check || saturated(v, xy[c])) continue;
+        if (!check || v->floating || saturated(v, xy[c])) continue;
         /* A straight line in view space is a straight line on screen, unless
          * the GTE saturates IR or SXY on the way: far off screen, where its
          * own frames are not on a line either. A corner that turns with its
@@ -1256,7 +1347,8 @@ unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t n
             if (off_line(x, y, x0, y0, x1, y1) > limit * limit) ++check->stray;
         }
     }
-    if (check && mask && mask == (1u << corners) - 1) {
+    for (c = 0; c < corners; ++c) if (vs[c]->floating) break;
+    if (check && mask && mask == (1u << corners) - 1 && c == corners) {
         /* A part neither shrinks nor grows between its two ends: each edge in
          * view space stays within a tenth of its lengths at the two ends. */
         static const unsigned triangle[3][2] = {{0, 1}, {1, 2}, {2, 0}}, quad[4][2] = {{0, 1}, {1, 3}, {3, 2}, {2, 0}};

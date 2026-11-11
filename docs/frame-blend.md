@@ -58,6 +58,11 @@ at a fraction alpha between that frame and the one before:
   textures, which ignore the colour, and a change of blending mode, which cannot be drawn in between, keep the
   recorded colours. Blending knows a polygon's look from `frame_blend_packet`, which the host calls with each
   polygon packet the GPU executes.
+- A vertex projected anew each game frame, so with no pair (a shadow's centre: the game computes it from where
+  the model stands), follows the polygons around it when it is the one unpaired corner of every polygon that
+  uses it, has three neighbours or more, none held, and they all move alike (their moves on screen within 2 pixels
+  and a quarter of their mean): it moves by their mean move, so the fan moves as a unit. Otherwise it is held,
+  and its polygons with it.
 - 3D polygons that share an edge (both its ends at the same packet positions) form one surface, and a position
   is one vertex within a surface. A gap can open only along a shared edge; two surfaces that meet at a single
   position, often by chance (an effect's corner on a vertex of the floor), do not hold each other.
@@ -131,7 +136,8 @@ Measures, over `--from` to `--until`:
   stay: held by the service, ends the GTE does not give again or at the camera plane, in or next to a held polygon,
   no history, a run that jumped by itself; the ambiguous corners resolved, and the polygons whose colours change
   from a game frame earlier, and the polygons of the frame before drawn between because the newer frame culled
-  them at the screen's edge (`culled-at-edge`).
+  them at the screen's edge (`culled-at-edge`), and the corners that follow the polygons around them
+  (`following`).
 - `Game rate`: for each game frame, the pixels where alpha 0 differs from the picture shown just before it change
   only at game frames; of the pixels that change across the game frame, their share, and their share of the
   screen. Without blending both shares would be those of every changing pixel.
