@@ -21,6 +21,8 @@ struct gpu {
     /* Host-side only: never saved, and a GPU restored from a state has none. */
     const gpu_observer_t *observer;
     void *observer_context;
+    const gpu_tap_t *tap;
+    void *tap_context;
 };
 
 static int signed11(unsigned n) { return (int)(n & 1023) - (int)(n & 1024); }
@@ -75,6 +77,10 @@ static void reset(gpu_t *g) {
 
 void gpu_observe(gpu_t *g, const gpu_observer_t *observer, void *context) {
     g->observer = observer; g->observer_context = context;
+}
+
+void gpu_tap(gpu_t *g, const gpu_tap_t *tap, void *context) {
+    g->tap = tap; g->tap_context = context;
 }
 
 gpu_t *gpu_create(void) {
@@ -182,6 +188,10 @@ static inline void upload_word(gpu_t *g, uint32_t word) {
 }
 
 void gpu_gp0(gpu_t *g, uint32_t word) {
+    if (g->tap) {
+        const uint8_t bytes[4] = {(uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16), (uint8_t)(word >> 24)};
+        g->tap->gp0(g->tap_context, bytes, 1);
+    }
     if (g->transfer == 1) { upload_word(g, word); return; }
     if (g->polyline) {
         int gouraud = !!(g->opcode & 16);
@@ -207,6 +217,7 @@ static uint32_t le_word(const uint8_t *p) {
 }
 
 void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
+    if (g->tap && words) g->tap->gp0(g->tap_context, data, words);
     while (words) {
         unsigned n, i;
         if (g->transfer == 1) {
@@ -240,6 +251,7 @@ void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
 
 void gpu_gp1(gpu_t *g, uint32_t word) {
     unsigned op = (word >> 24) & 63;
+    if (g->tap) g->tap->gp1(g->tap_context, word);
     switch (op) {
     case 0: reset(g); break;
     case 1: reset_fifo(g); break;
@@ -269,6 +281,7 @@ void gpu_gp1(gpu_t *g, uint32_t word) {
 }
 
 uint32_t gpu_read(gpu_t *g) {
+    if (g->tap) g->tap->read(g->tap_context);
     if (g->transfer == 2) {
         unsigned i;
         uint32_t result = 0;
@@ -310,6 +323,7 @@ uint32_t gpu_status_scanline(gpu_t *g, unsigned line) {
 }
 
 void gpu_vblank(gpu_t *g) {
+    if (g->tap) g->tap->vblank(g->tap_context);
     g->field ^= 1; g->raster.field = (int)g->field;
     if (g->observer) g->observer->vblank(g->observer_context);
 #if defined(FF8_PGXP)

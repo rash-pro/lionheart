@@ -30,4 +30,17 @@ typedef struct {
 } gpu_observer_t;
 void gpu_observe(gpu_t *, const gpu_observer_t *, void *context);
 
+/* Everything the guest sends the GPU, in order, for a recording that replays
+ * through another GPU: GP0 words (little-endian, as in RAM), GP1 words before
+ * they take effect, each VRAM read and each VBlank before the field changes.
+ * A tap may read the GPU (gpu_display, gpu_vram) but not drive it. Without
+ * one, the default and the state of a new GPU, each costs one test. */
+typedef struct {
+    void (*gp0)(void *context, const uint8_t *words, unsigned count);
+    void (*gp1)(void *context, uint32_t word);
+    void (*read)(void *context);
+    void (*vblank)(void *context);
+} gpu_tap_t;
+void gpu_tap(gpu_t *, const gpu_tap_t *, void *context);
+
 #endif

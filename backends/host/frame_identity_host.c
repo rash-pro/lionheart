@@ -1,5 +1,6 @@
 #include "frame_identity_host.h"
 #include "frame_identity.h"
+#include "frame_record.h"
 #include "ff8_ram_layout.h"
 #include "gte.h"
 #include "hw.h"
@@ -42,8 +43,8 @@ static struct {
     int running;
     FILE *dump;
     char *dump_path;
-    uint8_t *buffer;
-    size_t size, capacity;
+    frame_record_bytes_t stream; /* the frame being delivered, as LHFRAME1 holds it */
+    int recording;
     uint32_t *before;            /* the previous frame's SXY, for the jump measure */
     size_t before_count, before_capacity;
     uint64_t moves[2048];
@@ -69,61 +70,6 @@ static uint32_t classify(void *context, const cpu_t *c) {
     if (!c) return 0;
     mode = (uint32_t)c->ram[FF8_MODE] | (uint32_t)c->ram[FF8_MODE + 1] << 8;
     return mode == 2 ? mode | FRAME_IDENTITY_EXCLUDE : mode;
-}
-
-static void put(const void *bytes, size_t n) {
-    if (h.size + n > h.capacity) {
-        size_t c = h.capacity ? h.capacity : 1 << 16;
-        uint8_t *p;
-        while (c < h.size + n) c *= 2;
-        if (!(p = realloc(h.buffer, c))) { h.failed = 1; return; }
-        h.buffer = p; h.capacity = c;
-    }
-    memcpy(h.buffer + h.size, bytes, n);
-    h.size += n;
-}
-static void put32(uint32_t v) {
-    uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24)};
-    put(b, 4);
-}
-static void put64(uint64_t v) { put32((uint32_t)v); put32((uint32_t)(v >> 32)); }
-
-/* The stream: every field the service delivers, little-endian, in the order
- * docs/frame-identity.md gives. Its digest is what native and interpreted
- * runs of one route must agree on. */
-static void serialize(const frame_identity_frame_t *f) {
-    uint32_t i, k;
-    h.size = 0;
-    put32(0x4d415246u); /* "FRAM" */
-    put64(f->number); put64(f->vblank); put64(f->first_projection); put64(f->first_polygon);
-    put32(f->display_start); put32(f->tag); put32(f->flags);
-    put32(f->setup_count); put32(f->run_count); put32(f->projection_count); put32(f->polygon_count);
-    for (i = 0; i < f->setup_count; ++i) {
-        const frame_identity_setup_t *s = &f->setups[i];
-        for (k = 0; k < 5; ++k) put32(s->rotation[k]);
-        for (k = 0; k < 3; ++k) put32((uint32_t)s->translation[k]);
-        put32((uint32_t)s->ofx); put32((uint32_t)s->ofy); put32(s->h); put32(s->shift); put32(s->lm);
-    }
-    for (i = 0; i < f->run_count; ++i) {
-        const frame_identity_run_t *r = &f->runs[i];
-        put32(r->first); put32(r->count); put32(r->setup); put32((uint32_t)r->previous);
-        put32((uint32_t)r->match); put32(r->repeats); put64(r->key);
-    }
-    for (i = 0; i < f->projection_count; ++i) {
-        const frame_identity_projection_t *p = &f->projections[i];
-        put32((uint16_t)p->input[0] | (uint32_t)(uint16_t)p->input[1] << 16);
-        put32((uint16_t)p->input[2] | (uint32_t)p->sz << 16);
-        put32(p->sxy);
-        for (k = 0; k < 3; ++k) put32((uint32_t)p->view[k]);
-        put32(p->run); put32((uint32_t)p->previous); put32((uint32_t)p->match);
-    }
-    for (i = 0; i < f->polygon_count; ++i) {
-        const frame_identity_polygon_t *q = &f->polygons[i];
-        put32(q->opcode); put32(q->corners);
-        for (k = 0; k < 4; ++k) {
-            put32(q->xy[k]); put32((uint32_t)q->state[k] | (uint32_t)q->age[k] << 8); put32((uint32_t)q->projection[k]);
-        }
-    }
 }
 
 /* The median screen move of paired vertices, in pixels (the larger axis). */
@@ -179,9 +125,15 @@ static void count(tally_t *t, const frame_identity_frame_t *f, unsigned move, ui
 static void sink(void *context, const frame_identity_frame_t *f) {
     size_t i;
     (void)context;
-    serialize(f);
-    for (i = 0; i < h.size; ++i) h.digest = (h.digest ^ h.buffer[i]) * UINT64_C(0x100000001b3);
-    if (h.dump && !h.failed && fwrite(h.buffer, 1, h.size, h.dump) != h.size) h.failed = 1;
+    /* The stream: every field the service delivers, in the order
+     * docs/frame-identity.md gives. Its digest is what native and interpreted
+     * runs of one route must agree on. */
+    h.stream.size = 0;
+    frame_record_serialize(&h.stream, f);
+    if (h.stream.failed) h.failed = 1;
+    for (i = 0; i < h.stream.size; ++i) h.digest = (h.digest ^ h.stream.data[i]) * UINT64_C(0x100000001b3);
+    if (h.dump && !h.failed && fwrite(h.stream.data, 1, h.stream.size, h.dump) != h.stream.size) h.failed = 1;
+    if (h.recording) frame_record_frame(f);
     {
         uint64_t pairs;
         unsigned move = median_move(f, &pairs);
@@ -209,7 +161,8 @@ static void bind(int on) {
 #endif
 }
 
-int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, int linked) {
+int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, int linked,
+                              const char *record, uint64_t from, uint64_t until) {
     frame_identity_config_t config;
 #ifndef FF8_FRAME_IDENTITY_LINKED
     if (linked) {
@@ -241,6 +194,14 @@ int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, in
     memset(&config, 0, sizeof(config));
     config.sink = sink; config.classify = classify;
     if (!frame_identity_start(c->hw->gpu, &config)) { fprintf(stderr, "Cannot start frame identity\n"); return 0; }
+    if (record) {
+        if (!frame_record_start(c->hw->gpu, record, from, until)) {
+            fprintf(stderr, "Cannot record frames to %s (a build with save states is needed)\n", record);
+            frame_identity_stop();
+            return 0;
+        }
+        h.recording = 1;
+    }
     bind(1);
     h.running = 1;
     return 1;
@@ -249,6 +210,7 @@ int host_frame_identity_start(cpu_t *c, const char *dump, const char *oracle, in
 void host_frame_identity_restored(cpu_t *c) {
     if (!h.running) return;
     frame_identity_rebind(c->hw->gpu);
+    if (h.recording) frame_record_restored(c->hw->gpu);
 #ifdef FF8_FRAME_ORACLE
     frame_oracle_restored(c);
 #endif
@@ -275,6 +237,7 @@ int host_frame_identity_stop(void) {
     int ok = 1;
     if (!h.running) return 1;
     bind(0);
+    if (h.recording && !frame_record_stop()) { fprintf(stderr, "Cannot write the frame recording\n"); ok = 0; }
     frame_identity_stop();
     if (h.dump && fclose(h.dump)) h.failed = 1;
     if (h.failed) { fprintf(stderr, "Cannot write frame identity stream: %s\n", h.dump_path ? h.dump_path : ""); ok = 0; }
@@ -284,7 +247,7 @@ int host_frame_identity_stop(void) {
 #ifdef FF8_FRAME_ORACLE
     if (!frame_oracle_stop()) ok = 0;
 #endif
-    free(h.buffer); free(h.dump_path); free(h.before);
+    frame_record_bytes_free(&h.stream); free(h.dump_path); free(h.before);
     memset(&h, 0, sizeof(h));
     return ok;
 }

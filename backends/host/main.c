@@ -80,9 +80,11 @@ static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
 static int pgxp_mode;
-/* Developer switch: --frame-identity, --frame-identity-dump PATH, --frame-oracle PATH. */
+/* Developer switch: --frame-identity, --frame-identity-dump PATH, --frame-oracle PATH,
+ * --frame-record PATH [--frame-record-window FROM:UNTIL]. */
 static int frame_identity;
-static const char *frame_identity_dump, *frame_oracle;
+static const char *frame_identity_dump, *frame_oracle, *frame_record;
+static uint64_t frame_record_from = 1, frame_record_until;
 #ifdef FF8_PLAYER
 static int player_disc_insert(cpu_t *c, const char *path, int swap, char *error, size_t size) {
     host_disc_runtime_t prepared;
@@ -638,6 +640,15 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--frame-identity")) frame_identity = 1;
         else if (!strcmp(argv[i], "--frame-identity-dump") && i + 1 < argc) { frame_identity = 1; frame_identity_dump = argv[++i]; }
         else if (!strcmp(argv[i], "--frame-oracle") && i + 1 < argc) { frame_identity = 1; frame_oracle = argv[++i]; }
+        else if (!strcmp(argv[i], "--frame-record") && i + 1 < argc) { frame_identity = 1; frame_record = argv[++i]; }
+        else if (!strcmp(argv[i], "--frame-record-window") && i + 1 < argc) {
+            char *end;
+            frame_record_from = strtoull(argv[++i], &end, 10);
+            frame_record_until = *end == ':' ? strtoull(end + 1, &end, 10) : 0;
+            if (*end || !frame_record_from || (frame_record_until && frame_record_until < frame_record_from)) {
+                fprintf(stderr, "Invalid recording window: %s (FROM:UNTIL, VBlanks)\n", argv[i]); free(c); return 2;
+            }
+        }
         else if (!strcmp(argv[i], "--legacy-overlays")) legacy_overlays = 1;
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-state") && i + 1 < argc) state_path = argv[++i];
@@ -1055,7 +1066,8 @@ int main(int argc, char **argv) {
 #endif
     /* Before any module is opened, so every one binds the recording entries. */
     if (frame_identity && !host_frame_identity_start(c, frame_identity_dump, frame_oracle,
-                                                     generated_count && !c->interpreter_only)) {
+                                                     generated_count && !c->interpreter_only,
+                                                     frame_record, frame_record_from, frame_record_until)) {
         host_state_bridge_close(state_bridge); host_achievements_close(achievements);
         host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
         sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
