@@ -5,6 +5,9 @@ The fourth stage of presenting frames between the game's own: drawing them while
 where 3D stands between them and frame layers (`docs/frame-layer.md`) where a field's background stands; until
 now only a developer tool drew the result, offline, from recordings. With the setting on, the player draws it.
 
+The world map is enabled by the fifth stage; its independent check and remaining visual defects are
+documented in `docs/frame-world.md`.
+
 ## The setting
 
 | Where | What |
@@ -156,7 +159,7 @@ The display the window is on is checked once a second, and pacing starts over wh
 another rate (seen on two checks in a row: a window can be said to be on another display for a moment) or the
 device learns more of it.
 
-Shown as the game shows it: fast-forward, the world map (excluded by frame identity), a frame more than eight
+Shown as the game shows it: fast-forward, a frame more than eight
 VBlanks after the one before (loads, a disc change, a field change), a camera cut or a change of scene, and a
 state just loaded until two frames have ended. The menu overlay and pause present their retained picture as
 before. Movies are drawn like any other frame: with nothing that moves between frames, every picture is the game's.

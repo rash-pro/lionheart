@@ -7,6 +7,9 @@ the software rasterizer, and draws the frames in between. The player draws them 
 (`docs/frame-present.md`); otherwise nothing here runs in it unless a developer switch asks for a recording, and
 nothing changes what the game computes.
 
+World-map terrain pairing, incoming and outgoing blocks, and the remaining visual defects are documented
+in `docs/frame-world.md`.
+
 ## Recording
 
 ```sh
@@ -86,7 +89,7 @@ at a fraction alpha between that frame and the one before:
   ghost of it would show. The host tells blending the screen's size (`frame_blend_screen`).
 
 A frame gives nothing to blend from after the service's own resets (the first frame, more than 8 VBlanks since the
-previous one, an overflow, a restored state), in excluded scenes (the world map), when the host's classification
+previous one, an overflow, a restored state), in excluded scenes, when the host's classification
 (FF8's mode word) changes, and at a cut:
 
 - For each transform run paired with the frame before, its move is how far the centre of its vertices moved in
