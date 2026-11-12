@@ -169,9 +169,26 @@ is handled or that it resets safely.
 
 ## Limits
 
+The crack at car VBlank 6802 has been traced to an omitted terrain triangle. All corners
+of the two bordering polygons are paired and moving; their duplicate shared point gets
+the same intermediate position. The intervening triangle from the previous game frame
+collapses to zero projected area in the newer frame, so the game omits it. Between those
+frames it still covers pixels. Blending reconstructs its corners by the step but rejects
+the triangle because it is inside the screen, leaving 69 clear-colour pixels.
+
+A diagnostic continuation of collapsed triangles removes that occurrence but leaves 591
+hole pixels in 47 car pictures. Including triangles whose projected orientation changes
+reduces this to 253 pixels in 26 pictures, with 94.19% of corners moving and zero stray
+corners or resized polygons. Neither experiment is an accepted runtime change. Bypassing
+neighbour holds as well increases motion to 99.56% but introduces new defects: 360 car
+hole pixels in 31 pictures and a new five-pixel walking occurrence at 1935. A common
+terrain placement rule alone therefore does not resolve the visibility problem. These
+experiments cover the existing clip windows, not new locations or final acceptance.
+
 - A crack one pixel high opens for a single picture, now and then, along a row where terrain polygons meet across
   the screen while the car drives (52 of 1,001 pictures have hole pixels; 20 meet the default reporting threshold). The polygons on its two sides are not
-  yet understood: they meet at both game frames, not always between.
+  a complete mesh between the game frames when an intervening triangle is culled; other
+  occurrences still need individual classification.
 - Far terrain that blending holds (a neighbour of it did not pair) and far terrain whose shading changes with
   distance still change at the game's rate: a band across the far distance on the car route.
 - The minimap (the globe on the first disc, the flat map later) and all 2D change at the game's rate; so does the
