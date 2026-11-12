@@ -14,7 +14,9 @@
  * hidden; sliding far, with C held or skipped: slide, slide-hidden; parts that turn: turn, chain,
  * far, flat, mirror, mirrored, stretched; two vertices of a part that meet
  * on screen: cross; colours that change: fade; a strip panning off the screen,
- * its polygons culled once wholly off it: pan; a shadow-like fan whose centre
+ * its polygons culled once wholly off it: pan, and textured on pages that add
+ * while the frame first draws a still untextured shadow that subtracts:
+ * pan-shaded; a shadow-like fan whose centre
  * is projected anew each game frame, sliding or torn apart: shadow, torn. With "straight" after the name, every corner moves on a
  * straight line.
  * Usage: frame_blend_harness SCENARIO [RECORDING] */
@@ -457,19 +459,28 @@ static void scenario_fade(void) {
 
 /* A strip of ten quads, one run, sliding left 20 pixels a game frame; as a
  * game does, quads wholly off the screen are not drawn. */
-static void scenario_pan(void) {
+static void scenario_pan(int shaded) {
     int f;
     for (f = 0; f < 8; ++f) {
         uint32_t top[11], bottom[11];
         unsigned i;
         cleared();
+        if (shaded) {
+            /* The game's page subtracts, and its first polygon, a shadow
+             * that stays put, takes that from it; the strip's own pages add. */
+            gpu_gp0(g, 0xe1000040u);
+            { uint32_t w[4] = {0x22202020u, (200u << 16) | 20u, (200u << 16) | 60u, (230u << 16) | 40u}; polygon(w, 4); }
+        }
         pose(0, 1, 1, 1, -80 * f, 0, 1200);
         for (i = 0; i <= 10; ++i) { top[i] = rtps(-600 + 240 * (int)i, 0, 0); bottom[i] = rtps(-600 + 240 * (int)i, 240, 0); }
         for (i = 0; i < 10; ++i) {
             uint32_t xy[4] = {top[i], top[i + 1], bottom[i], bottom[i + 1]};
             int16_t right = (int16_t)(top[i + 1] & 0xffffu), left = (int16_t)(top[i] & 0xffffu);
             if (right < 0 || left >= 320) continue;
-            quad(i & 1 ? 0x0000c0u : 0x00c000u, xy);
+            if (shaded) {
+                uint32_t w[9] = {0x2c808080u, xy[0], 0, xy[1], (0x20u << 16) | 16u, xy[2], 16u << 8, xy[3], (16u << 8) | 16u};
+                polygon(w, 9);
+            } else quad(i & 1 ? 0x0000c0u : 0x00c000u, xy);
         }
         shown();
     }
@@ -527,7 +538,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "still")) scenario_chain(1);
     else if (!strcmp(name, "cross")) scenario_cross();
     else if (!strcmp(name, "fade")) scenario_fade();
-    else if (!strcmp(name, "pan")) scenario_pan();
+    else if (!strcmp(name, "pan")) scenario_pan(0);
+    else if (!strcmp(name, "pan-shaded")) scenario_pan(1);
     else if (!strcmp(name, "shadow")) scenario_shadow(0);
     else if (!strcmp(name, "torn")) scenario_shadow(1);
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }

@@ -84,7 +84,7 @@ LH_TEST(test_waiting_for_the_first_frame_draws_only_what_is_new) {
 
 LH_TEST(test_live_and_offline_draw_the_same_pictures) {
     // Two parts moving and turning, a cut, a change of scene and a gap.
-    for (auto scene : {"move", "resets", "turn", "chain", "shadow", "pan"}) {
+    for (auto scene : {"move", "resets", "turn", "chain", "shadow", "pan", "pan-shaded"}) {
         auto out = both(t, "scene", scene);
         if (std::string(scene) == "move") LH_CHECK_MSG(lh::capture(out, R"(blended=(\d+))") != "0", out);
     }

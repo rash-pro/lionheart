@@ -194,6 +194,26 @@ LH_TEST(test_what_leaves_the_screen_is_drawn_until_it_has_left) {
     LH_CONTAINS(drawn, "Holes (the clear colour where both game frames have 3D): pixels=0 ");
 }
 
+LH_TEST(test_what_leaves_the_screen_leaves_the_texture_page_as_it_was) {
+    // The strip is textured on pages that add; the frame first draws an
+    // untextured shadow that stays put and subtracts, as the game's page
+    // says. The strip drawn beneath it between frames must not hand it the
+    // strip's page: the shadow looks the same in every picture as in the
+    // game's.
+    LH_CONTAINS(scenario(t, "pan-shaded"), "L4 leftovers=1\n");
+    auto record = t.temp() / "pan-shaded.rec", out = t.temp() / "pan-shaded";
+    fs::create_directories(out);
+    scenario(t, "pan-shaded", record);
+    t.ok(t.harness("inbetween").arg(record).arg("--out").arg(out).timeout(120));
+    auto on = lh::read_file(out / "on.rgb"), off = lh::read_file(out / "off.rgb");
+    const size_t frame = 320 * 240 * 3, pixel = (210 * 320 + 40) * 3;
+    LH_EQ(on.size(), off.size());
+    LH_CHECK_MSG(on.size() >= 8 * frame, "pictures: " + std::to_string(on.size() / frame));
+    for (size_t f = 0; f * frame < on.size(); ++f)
+        LH_CHECK_MSG(on.compare(f * frame + pixel, 3, off, f * frame + pixel, 3) == 0,
+                     "the shadow differs at VBlank picture " + std::to_string(f));
+}
+
 LH_TEST(test_a_shadow_moves_as_a_unit) {
     // A fan whose centre is projected anew each game frame, as a shadow's
     // is: the centre has no pair, but its ring moves as one, so the centre

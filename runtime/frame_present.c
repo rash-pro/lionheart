@@ -119,7 +119,8 @@ static void save(frame_present_t *p) {
         /* What is drawn from here on starts at the checkpoint's serial. */
         size_t k = 0;
         while (k < p->corner_count && p->corners[k].serial < p->serial) ++k;
-        memmove(p->corners, p->corners + k, (p->corner_count - k) * sizeof(*p->corners));
+        if (k < p->corner_count)
+            memmove(p->corners, p->corners + k, (p->corner_count - k) * sizeof(*p->corners));
         p->corner_count -= k;
     }
     if (p->renderer.save) p->renderer.save(p->renderer.context);
@@ -215,6 +216,8 @@ static int16_t high(uint32_t w) { return (int16_t)(uint16_t)(w >> 16); }
 static void beneath(frame_present_t *p, at_t *at) {
     uint64_t serial = p->serial;
     unsigned i, n, k;
+    uint32_t page = gpu_raster_state(p->gpu)->mode;
+    int drawn = 0;
     at->beneath = 1;
     for (i = 0; i < frame_blend_leftovers(p->blend); ++i) {
         uint32_t words[12];
@@ -224,6 +227,16 @@ static void beneath(frame_present_t *p, at_t *at) {
         gpu_gp0_words(p->gpu, packet, n);
         p->serial = serial;
         at->blended = 1;
+        drawn = 1;
+    }
+    /* A textured polygon sets the texture page, its semi-transparency
+     * included, for what is drawn after it: the frame's first polygon must
+     * find the game's (an untextured shadow would otherwise blend in the
+     * page's mode of something culled at the edge). */
+    if (drawn) {
+        uint8_t e1[4];
+        put_le32(e1, 0xe1000000u | (page & 0x3fffu));
+        gpu_gp0_words(p->gpu, e1, 1);
     }
 }
 

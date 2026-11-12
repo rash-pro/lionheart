@@ -83,7 +83,9 @@ at a fraction alpha between that frame and the one before:
   polygon found for it as for ambiguous corners), every corner linked, whose vertices a game frame later all lie
   beyond one edge of the screen, is drawn between the two frames first, beneath everything, where its vertices'
   own motion puts them (the game projects a model's vertices before it culls its polygons), with its own packet;
-  `frame_blend_leftover` gives it, and never at alpha 1. A polygon still on the screen that the newer frame no
+  `frame_blend_leftover` gives it, and never at alpha 1. A textured one sets the texture page, so the page the
+  newer frame had is put back after them: its first polygon (often an untextured, semi-transparent shadow) blends
+  as the game set it. A polygon still on the screen that the newer frame no
   longer draws went for another reason (it turned away, or a polygon held in its place), and is not drawn: a
   ghost of it would show. The host tells blending the screen's size (`frame_blend_screen`).
 

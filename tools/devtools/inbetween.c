@@ -385,6 +385,8 @@ static unsigned cause_of(unsigned op) {
 static void beneath(counted_t *c, blend_at_t *at) {
     uint64_t serial = c->serial;
     unsigned i, n, k;
+    uint32_t page = c->gpu->raster.mode;
+    int drawn = 0;
     at->beneath = 1;
     for (i = 0; i < frame_blend_leftovers(at->blend); ++i) {
         uint32_t words[12];
@@ -393,6 +395,15 @@ static void beneath(counted_t *c, blend_at_t *at) {
         for (k = 0; k < n; ++k) put_le32(packet + k * 4, words[k]);
         draw(c, at, packet, n, CAUSE_MOVED, 0);
         c->serial = serial;
+        drawn = 1;
+    }
+    /* A textured polygon sets the texture page, its semi-transparency
+     * included, for what is drawn after it: the frame's first polygon finds
+     * the game's, as live (runtime/frame_present.c). */
+    if (drawn) {
+        uint8_t e1[4];
+        put_le32(e1, 0xe1000000u | (page & 0x3fffu));
+        draw(c, at, e1, 1, CAUSE_NONE, 0);
     }
 }
 
