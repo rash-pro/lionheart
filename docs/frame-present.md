@@ -32,8 +32,8 @@ service (`frame_identity_config_t`'s `command`). `runtime/frame_present.h` keeps
 - To show the game at some moment, it puts the checkpoint back and draws the journal again: the newest frame's
   polygons, drawing offsets and sprites where blending and its layers put them at that moment's fraction of the
   interval, the colours between, what the newer frame culled at the screen's edge beneath it, and everything
-  after the frame's display-start change (the HUD, menus, the cursor) as it was, so those stay current. At the end
-  of the interval the picture is the guest's, pixel for pixel. The rules are those of the offline renderer; a
+  after the frame's display-start change (the HUD, menus, the cursor) as it was, so those stay current. At native
+  resolution, the end of the interval is the guest's picture, pixel for pixel. The rules are those of the offline renderer; a
   test draws the synthetic scenes of both stages offline and live and finds the same picture at every VBlank.
 - After the display-start change the guest draws the next frame into the other buffer. None of that reaches the
   picture and none of it is kept, so drawing commands whose drawing area misses the shown picture are left out;
@@ -193,7 +193,7 @@ virtual output at 60 Hz), with native code, at 4x unless said otherwise.
 
 **Live against offline.** Over a battle window of 801 VBlanks (the magic route, 2860 to 3660), the player's
 presented pictures with the software renderer, and with Vulkan at 1x, are those of `inbetween` from a recording of
-the same run, every one; so are 601 VBlanks of the Garden's corridor (2940 to 3540). At 4x every whole picture is
+the same run, every one; so are 601 VBlanks of the Garden's corridor (2940 to 3540). With PGXP off, at 4x every whole picture is
 the picture with the setting off; the pictures between differ, as they should. A synthetic test draws the scenes
 of `test_frame_blend` and `test_frame_layer` both ways and compares every VBlank.
 
@@ -215,6 +215,20 @@ the 95th percentile (heavy effects), and a copy for a refresh between about 1.2 
 With the setting off the guest's work is the same, VBlank for VBlank, and frame times are those of the build before
 (`frame-bench`, five alternating runs: p50 3.87 against 3.87 ms with the software renderer, 3.28 against 3.27 ms
 with Vulkan).
+
+With PGXP enabled, precision comes from linked view-space positions and from the guest's PGXP records.
+A corner without either source stays at its whole pixel; a polygon without depth at every corner
+keeps affine texturing. Shared edges need consistent corner positions, so mixed precision can retain
+the same small gaps as PGXP without smooth motion.
+
+In 600 pictures of Squall standing in the Garden's bed room, the mean displacement of matched textured
+triangle corners was 0.3926 PlayStation pixels per picture before the turning correction, and zero after it,
+even with PGXP off. Multiplying the mean by 59.94 pictures per second gives 23.533 pixels per second;
+ambiguous triangle keys are excluded from both the sum and its divisor. The same final run with PGXP in
+vertex or perspective mode, and with smooth motion off and PGXP in perspective mode, gives zero too.
+The standing vibration was therefore caused by rounding the reconstructed turning parts to the nearest
+view unit instead of down as the GTE does. Retaining PGXP separately restores fractional positions and
+perspective texturing; it does not account for any additional motion in this stationary sample.
 
 **Pacing,** in a window, from the presentation engine's reports; the intervals are between the refreshes pictures
 were shown on (a report off the grid is taken as on time: a few percent of reports here are another output's
