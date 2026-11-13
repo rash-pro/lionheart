@@ -1,13 +1,28 @@
 /* A triangular patch loses its middle triangle when that triangle becomes
  * edge-on. The outer boundary stays closed at every presentation fraction. */
 #include "frame_blend.h"
+#include "gpu.h"
+#include <string.h>
 static int disable_net;
+static float fractions[4][2], depths[4];
+static unsigned precision_errors, precision_packets;
+static void observe_fraction(gpu_t *g, float f[4][2]) {
+    memcpy(fractions, f, sizeof(fractions)); gpu_subpixel(g, f);
+}
+static void observe_depth(gpu_t *g, const float d[4]) {
+    memcpy(depths, d, sizeof(depths)); gpu_subpixel_depth(g, d);
+}
+#define gpu_subpixel observe_fraction
+#define gpu_subpixel_depth observe_depth
+
 static unsigned fixture_ground(const frame_blend_t *b, unsigned i, uint32_t num, uint32_t den, uint32_t words[14]) {
     return disable_net ? 0 : frame_blend_ground(b, i, num, den, words);
 }
 #define frame_blend_ground fixture_ground
 #include "../runtime/frame_present.c"
 #undef frame_blend_ground
+#undef gpu_subpixel
+#undef gpu_subpixel_depth
 #include "gpu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +41,18 @@ static void clear(gpu_t *g) {
     gpu_gp0(g, 320u | 240u << 16);
 }
 
+static void check_complete(void *context, const uint32_t *words, unsigned count) {
+    complete(context, words, count);
+    if (words[0] >> 24 < 0x20 || words[0] >> 24 >= 0x40) return;
+    for (unsigned i = 0; i < 4; ++i)
+        precision_errors += fractions[i][0] != 0 || fractions[i][1] != 0 || depths[i] != 0;
+    ++precision_packets;
+    memset(fractions, 0, sizeof(fractions)); memset(depths, 0, sizeof(depths));
+}
+static const gpu_observer_t precision_counter = {ignore_start, ignore_vblank, count_polygon, check_complete};
+
 int main(int argc, char **argv) {
+
     static const int16_t points[4][3] = {{-160, 0, 1024}, {0, -160, 1024}, {160, 0, 1024}, {0, 0, 2048}};
     static const unsigned corners[3][3] = {{0, 1, 3}, {1, 2, 3}, {0, 3, 2}};
     frame_blend_t *b = frame_blend_create();
@@ -40,7 +66,7 @@ int main(int argc, char **argv) {
     int reversed = argc > 1 && !strcmp(argv[1], "reversed");
     int arriving = argc > 1 && !strcmp(argv[1], "arriving");
     int turn = argc > 1 && !strcmp(argv[1], "turn");
-    int incoming = argc > 1 && !strcmp(argv[1], "incoming");
+    int incoming = argc > 1 && (!strcmp(argv[1], "incoming") || !strcmp(argv[1], "precision-hidden"));
     int texture = argc > 1 && !strcmp(argv[1], "texture");
     int palette = argc > 1 && !strcmp(argv[1], "palette");
     int window = argc > 1 && !strcmp(argv[1], "window");
@@ -119,6 +145,28 @@ int main(int argc, char **argv) {
         }
         if (!frame_blend_add(b, &f)) return 2;
     }
+    if (argc > 1 && !strcmp(argv[1], "precision-hidden")) {
+        frame_present_t presenter = {0};
+        at_t at = {0};
+        presenter.gpu = g; presenter.blend = b; presenter.precision = 2; presenter.fractions = 1;
+        gpu_observe(g, &precision_counter, &presenter);
+        for (unsigned num = 1; num < 256; ++num) {
+            if (frame_blend_visible(b, f.first_polygon + 2, num, 256)) continue;
+            uint8_t packet[16];
+            float corners[4][3] = {{160.25f, 120.125f, 1000}, {170.5f, 130.25f, 1100}, {150.75f, 140.5f, 1200}};
+            presenter.serial = f.first_polygon + 2;
+            frame_present_corners(&presenter, presenter.serial, 7, corners);
+            put_le32(packet, 0x20008080u);
+            for (unsigned c = 0; c < 3; ++c) put_le32(packet + 4 + c * 4, polygons[2].xy[c]);
+            at.num = num; at.den = 256; at.beneath = 1;
+            feed(&presenter, packet, 4, &at);
+        }
+        unsigned pixels = 0;
+        for (unsigned i = 0; i < 1024 * 512; ++i) pixels += gpu_vram(g)[i] != 0;
+        printf("precision-packets=%u errors=%u pixels=%u\n", precision_packets, precision_errors, pixels);
+        free(presenter.corners); free(g); free(reference); frame_blend_destroy(b);
+        return !precision_packets || precision_errors || pixels;
+    }
     if (net) {
         unsigned errors = 0, covered = 0;
         int excluded = !strcmp(argv[1], "net-model") || !strcmp(argv[1], "net-translucent");
@@ -130,10 +178,36 @@ int main(int argc, char **argv) {
         at_t at = {0};
         presenter.gpu = g; presenter.blend = b; presenter.serial = f.first_polygon + 1;
         at.num = 1; at.den = 2;
-        gpu_observe(g, &counter, &presenter);
+        int precise_net = !strcmp(argv[1], "net-precision");
+        if (precise_net) {
+            float corners[4][3] = {{160.25f, 120.125f, 1000}, {170.5f, 130.25f, 1100}, {150.75f, 140.5f, 1200}};
+            presenter.precision = 2; presenter.fractions = 1;
+            frame_present_corners(&presenter, presenter.serial, 7, corners);
+        }
+        gpu_observe(g, precise_net ? &precision_counter : &counter, &presenter);
+
         disable_net = !strcmp(argv[1], "net-disabled");
         beneath(&presenter, &at);
         errors += presenter.serial != f.first_polygon + 1;
+        if (precise_net) {
+            errors += precision_errors || !precision_packets;
+            float after_fraction[4][2], after_depth[4];
+            uint8_t packet[16];
+            put_le32(packet, 0x20008080u);
+            for (unsigned c = 0; c < 3; ++c) put_le32(packet + 4 + c * 4, polygons[1].xy[c]);
+            gpu_observe(g, &counter, &presenter);
+            feed(&presenter, packet, 4, &at);
+            memcpy(after_fraction, fractions, sizeof(fractions)); memcpy(after_depth, depths, sizeof(depths));
+            presenter.serial = f.first_polygon + 1;
+            memset(fractions, 0, sizeof(fractions)); memset(depths, 0, sizeof(depths));
+            feed(&presenter, packet, 4, &at);
+            errors += memcmp(after_fraction, fractions, sizeof(fractions)) != 0;
+            errors += memcmp(after_depth, depths, sizeof(depths)) != 0;
+            errors += depths[0] <= 0 || fractions[0][0] == 0;
+            presenter.serial = f.first_polygon + 1;
+            free(presenter.corners);
+        }
+
         for (unsigned i = 0; i < f.polygon_count; ++i) {
             unsigned n = frame_blend_ground(b, i, 1, 2, words);
             errors += excluded ? n != 0 : n == 0;

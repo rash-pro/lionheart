@@ -41,3 +41,9 @@ LH_TEST_P(test_ground_net_excludes_models_and_translucent_faces,
     auto result = t.ok(t.harness("main").arg(p).timeout(60));
     LH_CONTAINS(result.out, "net-covered=0 errors=0");
 }
+
+LH_TEST_P(test_world_ground_takes_no_stream_precision,
+          (std::vector<std::string>{"precision-hidden", "net-precision"})) {
+    auto result = t.ok(t.harness("main").arg(p).timeout(60));
+    LH_CONTAINS(result.out, "errors=0");
+}
