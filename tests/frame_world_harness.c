@@ -1,6 +1,13 @@
 /* A triangular patch loses its middle triangle when that triangle becomes
  * edge-on. The outer boundary stays closed at every presentation fraction. */
 #include "frame_blend.h"
+static int disable_net;
+static unsigned fixture_ground(const frame_blend_t *b, unsigned i, uint32_t num, uint32_t den, uint32_t words[14]) {
+    return disable_net ? 0 : frame_blend_ground(b, i, num, den, words);
+}
+#define frame_blend_ground fixture_ground
+#include "../runtime/frame_present.c"
+#undef frame_blend_ground
 #include "gpu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,11 +45,13 @@ int main(int argc, char **argv) {
     int palette = argc > 1 && !strcmp(argv[1], "palette");
     int window = argc > 1 && !strcmp(argv[1], "window");
     int target = argc > 1 && !strcmp(argv[1], "target");
+    int net = argc > 1 && !strncmp(argv[1], "net", 3);
     if (!b || !g || !reference) return 2;
     memset(&f, 0, sizeof(f));
     f.tag = FRAME_IDENTITY_POINTS;
     f.setup_count = f.run_count = 1; f.projection_count = 4;
     f.setups = &setup; f.runs = &run; f.projections = projections; f.polygons = polygons;
+    if (net && !strcmp(argv[1], "net-model")) setup.translation[0] = 32;
     for (unsigned frame = 0; frame < 2; ++frame) {
         int offset = frame ? (reversed ? -32 : 0) : 32;
         if (incoming) offset = frame ? 32 : -32;
@@ -70,6 +79,7 @@ int main(int argc, char **argv) {
         }
         f.number = frame; f.vblank = frame * 2; f.first_polygon = frame * 3; f.flags = frame ? 0 : FRAME_IDENTITY_RESET;
         f.polygon_count = incoming ? (frame ? 3 : 2) : (frame ? 2 : 3);
+        if (net) f.polygon_count = 2; /* No outgoing pass can mask a consumed serial. */
         if (frame && (texture || palette || target)) {
             uint32_t upload[4] = {0xa0000000u, 512u | (palette ? 255u << 16 : 0), 1u | 1u << 16, 0};
             if (target) {
@@ -90,6 +100,7 @@ int main(int argc, char **argv) {
             uint32_t packet[7] = {0x20008080u, 0, 0, 0, 0, 0, 0};
             int textured = texture || palette || window || target;
             if (textured) packet[0] |= 0x04000000u;
+            if (net && !strcmp(argv[1], "net-translucent")) packet[0] |= 0x02000000u;
             polygons[i].opcode = packet[0] >> 24; polygons[i].corners = 3;
             for (unsigned c = 0; c < 3; ++c) {
                 polygons[i].projection[c] = (int32_t)corners[i][c];
@@ -107,6 +118,55 @@ int main(int argc, char **argv) {
             polygons[2].projection[0] = -1;
         }
         if (!frame_blend_add(b, &f)) return 2;
+    }
+    if (net) {
+        unsigned errors = 0, covered = 0;
+        int excluded = !strcmp(argv[1], "net-model") || !strcmp(argv[1], "net-translucent");
+        uint32_t words[14], before[4], after[4];
+        memcpy(before, polygons[1].xy, sizeof(before));
+        frame_blend_polygon(b, f.first_polygon + 1, 1, 2, before, NULL);
+        clear(g);
+        frame_present_t presenter = {0};
+        at_t at = {0};
+        presenter.gpu = g; presenter.blend = b; presenter.serial = f.first_polygon + 1;
+        at.num = 1; at.den = 2;
+        gpu_observe(g, &counter, &presenter);
+        disable_net = !strcmp(argv[1], "net-disabled");
+        beneath(&presenter, &at);
+        errors += presenter.serial != f.first_polygon + 1;
+        for (unsigned i = 0; i < f.polygon_count; ++i) {
+            unsigned n = frame_blend_ground(b, i, 1, 2, words);
+            errors += excluded ? n != 0 : n == 0;
+            errors += frame_blend_ground(b, i, 0, 2, words) != 0;
+            errors += frame_blend_ground(b, i, 2, 2, words) != 0;
+        }
+        memcpy(after, polygons[1].xy, sizeof(after));
+        frame_blend_polygon(b, presenter.serial, 1, 2, after, NULL);
+        errors += memcmp(before, after, sizeof(before)) != 0;
+        for (unsigned y = 0; y < 240; ++y)
+            for (unsigned x = 0; x < 320; ++x) covered += gpu_vram(g)[y * 1024 + x] != 0;
+        if (!strcmp(argv[1], "net-model") || !strcmp(argv[1], "net-translucent")) {
+            clear(reference);
+            triangle(g, 0x8080u, after);
+            triangle(reference, 0x8080u, before);
+            errors += memcmp(gpu_vram(g), gpu_vram(reference), 1024 * 512 * sizeof(uint16_t)) != 0;
+        }
+        if (!strcmp(argv[1], "net") || disable_net) {
+            clear(reference);
+            /* This omitted face is degenerate at both game frames:
+             * (160,100),(170,110),(150,90) and
+             * (160,100),(150,110),(150,110). Its midpoint has area 100,
+             * despite neither endpoint submitting a packet for it. */
+            const uint32_t missing[4] = {160u | 100u << 16, 160u | 110u << 16, 150u | 100u << 16, 0};
+            triangle(reference, 0x8080u, missing);
+            for (unsigned y = 0; y < 240; ++y)
+                for (unsigned x = 0; x < 320; ++x)
+                    errors += gpu_vram(reference)[y * 1024 + x] &&
+                              gpu_vram(g)[y * 1024 + x] != gpu_vram(reference)[y * 1024 + x];
+        }
+        printf("net-covered=%u errors=%u\n", covered, errors);
+        free(g); free(reference); frame_blend_destroy(b);
+        return errors || (excluded ? covered != 0 : !covered);
     }
     if (texture || palette || window || target) {
         unsigned count = frame_blend_leftovers(b);

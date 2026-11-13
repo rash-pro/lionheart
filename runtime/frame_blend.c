@@ -1771,3 +1771,28 @@ unsigned frame_blend_colours(const frame_blend_t *b, uint64_t serial, uint32_t n
     }
     return mask;
 }
+
+/* Endpoint ground covers faces that neither endpoint submitted. Keep the
+ * packet's material state; presentation restores its state after this pass. */
+unsigned frame_blend_ground(const frame_blend_t *b, unsigned i, uint32_t num, uint32_t den, uint32_t words[14]) {
+    const kept_t *k = kept_seen(b, 0);
+    unsigned n;
+    if (!num || !den || num >= den || b->info.reason != FRAME_BLEND_KEPT ||
+        i >= k->polygon_count || !k->coloured[i] || !(k->tag & FRAME_IDENTITY_POINTS) ||
+        (k->polygons[i].opcode & 2)) return 0;
+    /* Triangles and quads, flat or Gouraud, textured or untextured use the
+     * same net. Model translations and translucent faces cannot be ground. */
+    const frame_identity_polygon_t *q = &k->polygons[i];
+    if (q->corners != 3 && q->corners != 4) return 0;
+    for (unsigned c = 0; c < q->corners; ++c) {
+        if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] > 2 || q->projection[c] < 0) return 0;
+        const kept_t *at = kept_seen(b, q->age[c]);
+        if ((size_t)q->projection[c] >= at->projection_count ||
+            !zero_translation(at, at->projections[q->projection[c]].run)) return 0;
+    }
+    words[0] = 0xe1000000u | k->draw_modes[i];
+    words[1] = 0xe2000000u | k->texture_windows[i];
+    n = 1 + q->corners * (1 + !!(q->opcode & 4)) + (q->corners - 1) * !!(q->opcode & 16);
+    memcpy(words + 2, k->packets[i], n * sizeof(*words));
+    return n + 2;
+}

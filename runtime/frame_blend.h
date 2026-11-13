@@ -153,6 +153,9 @@ void frame_blend_command(frame_blend_t *, const uint32_t *packet, unsigned count
  * colours stay as recorded. */
 unsigned frame_blend_colours(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, uint32_t colours[4]);
 
+/* Current opaque terrain at its recorded positions, with material state. */
+unsigned frame_blend_ground(const frame_blend_t *, unsigned index, uint32_t num, uint32_t den, uint32_t words[14]);
+
 /* What the frame before drew at the edge of the screen and the latest frame
  * no longer draws, having moved it off the screen: a fast camera move would
  * otherwise uncover the background there between the two. Between them

@@ -190,6 +190,26 @@ static void beneath(frame_present_t *p, at_t *at) {
     uint64_t serial = p->serial;
     unsigned i, n, k;
     at->beneath = 1;
+    if (at->num && at->num < at->den) {
+        const gpu_raster_t *state = gpu_raster_state(p->gpu);
+        uint32_t mode = 0xe1000000u | state->mode;
+        uint32_t window = 0xe2000000u | state->window;
+        for (i = 0; i < frame_blend_info(p->blend)->polygon_count; ++i) {
+            uint32_t ground[14];
+            uint8_t packet[56];
+            n = frame_blend_ground(p->blend, i, at->num, at->den, ground);
+            if (!n) continue;
+            gpu_gp0(p->gpu, ground[0]);
+            gpu_gp0(p->gpu, ground[1]);
+            for (k = 2; k < n; ++k) put_le32(packet + (k - 2) * 4, ground[k]);
+            gpu_gp0_words(p->gpu, packet, n - 2);
+            /* Injected ground must not consume recorded polygon identities. */
+            p->serial = serial;
+        }
+        gpu_gp0(p->gpu, mode);
+        gpu_gp0(p->gpu, window);
+    }
+
     for (i = 0; i < frame_blend_leftovers(p->blend); ++i) {
         uint32_t words[12];
         uint8_t packet[12 * 4];

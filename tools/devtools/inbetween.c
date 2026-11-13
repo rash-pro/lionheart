@@ -151,16 +151,17 @@ enum {
     CAUSE_TRANSFER,       /* uploads and copies into the picture */
     CAUSE_AFTER,          /* drawn after the display start changed: what the shown VBlank adds */
     CAUSE_FRAME,          /* the whole frame is not blended (a reset or a cut) */
+    CAUSE_NET,            /* opaque endpoint ground beneath the blended picture */
     CAUSES
 };
 static const char *const cause_names[CAUSES] = {
     "nothing-drawn", "3d-moved-look-changed", "3d-moved-texture-rewritten", "3d-no-history", "3d-corner-without-projection",
     "3d-unpaired", "3d-ambiguous-or-split", "3d-held-by-blending", "polygon-without-projection", "sprite", "sprite-moved-look-changed", "line",
-    "fill", "transfer", "after-display-change", "frame-not-blended"};
+    "fill", "transfer", "after-display-change", "frame-not-blended", "net"};
 static const uint8_t cause_colours[CAUSES][3] = {
     {128, 128, 128}, {255, 230, 0}, {255, 140, 0}, {255, 255, 255}, {255, 0, 0}, {0, 200, 255}, {60, 60, 255},
     {255, 0, 255}, {0, 210, 0}, {170, 255, 170}, {120, 255, 255}, {170, 90, 40}, {90, 90, 90}, {255, 160, 210}, {0, 140, 140},
-    {200, 200, 200}};
+    {200, 200, 200}, {80, 120, 40}};
 
 /* A packet that drew into the picture, for --packets. */
 typedef struct {
@@ -173,6 +174,8 @@ typedef struct {
 typedef struct {
     int x, y, w, h;           /* the display area in VRAM */
     uint16_t *shadow;         /* its pixels as they stood before the packet now drawn */
+    unsigned drawing_cause;
+    uint8_t net[WIDTH * HEIGHT]; /* last opaque contribution, preserved under translucency */
     uint8_t *cause;           /* per pixel of it: what drew it last */
     uint32_t *drawer;         /* per pixel: that packet, 1 + its index in drawers, or 0 */
     drawer_t *drawers;
@@ -216,6 +219,7 @@ static void trace_begin(trace_t *t, gpu_t *g) {
         int i;
         for (i = 0; i < t->w; ++i) t->shadow[j * t->w + i] = gpu_vram(g)[((t->y + j) & 511) * 1024 + ((t->x + i) & 1023)];
     }
+    memset(t->net, 0, (size_t)t->w * t->h);
     memset(t->cause, CAUSE_NONE, (size_t)t->w * t->h);
     memset(t->drawer, 0, (size_t)t->w * t->h * sizeof(*t->drawer));
     t->drawer_count = 0; t->rect_count = 0; t->tw = 0;
@@ -315,6 +319,12 @@ static int grow_drawers(trace_t *t) {
 
 /* Words to the GPU; with a trace, what they change in the picture is
  * credited to them. */
+static void fragment(void *context, int x, int y, int semi) {
+    trace_t *t = context;
+    int i = (x - t->x) & 1023, j = (y - t->y) & 511;
+    if (!semi && i < t->w && j < t->h)
+        t->net[j * t->w + i] = t->drawing_cause == CAUSE_NET;
+}
 static void draw(counted_t *c, blend_at_t *at, const uint8_t *p, unsigned n, unsigned cause, unsigned mask) {
     gpu_t *g = c->gpu;
     trace_t *t = at ? at->trace : NULL;
@@ -343,7 +353,10 @@ static void draw(counted_t *c, blend_at_t *at, const uint8_t *p, unsigned n, uns
         d->x0 = d->y0 = INT32_MAX; d->x1 = d->y1 = -1;
         index = ++t->drawer_count;
     }
+    t->drawing_cause = cause;
+    g->raster.fragment = fragment; g->raster.fragment_context = t;
     gpu_gp0_words(g, p, n);
+    g->raster.fragment = NULL; g->raster.fragment_context = NULL;
     if (was) note_change(t, g, was, fx, fy, fw, fh);
     if (op >= 0xa0 && op < 0xc0 && g->transfer == 1) {
         t->tx = (int)g->tx; t->ty = (int)g->ty; t->tw = (int)g->tw; t->th = (int)g->th;
@@ -362,6 +375,8 @@ static void draw(counted_t *c, blend_at_t *at, const uint8_t *p, unsigned n, uns
             uint16_t v = row[(t->x + i) & 1023];
             if (v == s[i]) continue;
             s[i] = v;
+            if (!(op >= 0x20 && op < 0x80))
+                t->net[j * t->w + i] = cause == CAUSE_NET;
             t->cause[j * t->w + i] = (uint8_t)cause;
             t->drawer[j * t->w + i] = (uint32_t)index;
             if (index) {
@@ -392,6 +407,26 @@ static void beneath(counted_t *c, blend_at_t *at) {
     uint64_t serial = c->serial;
     unsigned i, n, k;
     at->beneath = 1;
+    if (at->num && at->num < at->den) {
+        const gpu_raster_t *state = &c->gpu->raster;
+        uint32_t mode = 0xe1000000u | state->mode;
+        uint32_t window = 0xe2000000u | state->window;
+        for (i = 0; i < frame_blend_info(at->blend)->polygon_count; ++i) {
+            uint32_t ground[14];
+            uint8_t packet[56];
+            n = frame_blend_ground(at->blend, i, at->num, at->den, ground);
+            if (!n) continue;
+            gpu_gp0(c->gpu, ground[0]);
+            gpu_gp0(c->gpu, ground[1]);
+            for (k = 2; k < n; ++k) put_le32(packet + (k - 2) * 4, ground[k]);
+            draw(c, at, packet, n - 2, CAUSE_NET, 0);
+            /* Injected ground must not consume recorded polygon identities. */
+            c->serial = serial;
+        }
+        gpu_gp0(c->gpu, mode);
+        gpu_gp0(c->gpu, window);
+    }
+
     for (i = 0; i < frame_blend_leftovers(at->blend); ++i) {
         uint32_t words[12];
         uint8_t packet[12 * 4];
@@ -652,7 +687,7 @@ int main(int argc, char **argv) {
     trace_t trace;
     uint8_t *cause_zero = NULL, *cause_one = NULL, *cause_before = NULL;
     uint32_t *drawer_zero = NULL, *cause_count = NULL;
-    uint64_t hole_pixels = 0, hole_renders = 0;
+    uint64_t hole_pixels = 0, hole_renders = 0, net_pixels = 0, net_renders = 0;
     char hole_list[2048] = "";
 
     for (i = 1; i < argc; ++i) {
@@ -904,11 +939,15 @@ int main(int argc, char **argv) {
                         /* A hole: the clear colour, or nothing drawn, where both
                          * game frames had 3D. Geometry the newer frame no longer
                          * draws, or a crack between a held polygon and a moving one. */
-                        size_t k, n = 0;
+                        size_t k, n = 0, net = 0;
                         to_canvas(&trace, cause_zero, NULL, cw, ch);
                         for (k = 0; k < (size_t)cw * ch; ++k)
                             n += (cause_zero[k] == CAUSE_FILL || cause_zero[k] == CAUSE_NONE) && three_d(cause_before[k]) &&
                                  three_d(cause_one[k]);
+                        for (int y = 0; y < trace.h; ++y)
+                            for (int x = 0; x < trace.w; ++x) net += trace.net[y * trace.w + x];
+                        net_pixels += net;
+                        net_renders += net != 0;
                         hole_pixels += n;
                         if (n >= HOLE) {
                             ++hole_renders;
@@ -1033,6 +1072,7 @@ int main(int argc, char **argv) {
     if (causes)
         printf("Holes (the clear colour where both game frames have 3D): pixels=%" PRIu64 " renders=%" PRIu64 " at:%s\n",
                hole_pixels, hole_renders, hole_list);
+    printf("Net shown: pixels=%" PRIu64 " renders=%" PRIu64 "\n", net_pixels, net_renders);
     printf("Split packets: %" PRIu64 "\n", split);
     printf("Wrong:%s\n", wrong_list);
     frame_record_close(&in);

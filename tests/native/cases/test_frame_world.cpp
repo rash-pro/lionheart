@@ -30,3 +30,14 @@ LH_TEST_P(test_continuation_rejects_a_changed_texture_or_drawing_state,
     auto result = t.ok(t.harness("main").arg(p).timeout(60));
     LH_CONTAINS(result.out, "unsafe-continuations=0");
 }
+
+LH_TEST(test_ground_net_draws_between_endpoints_without_changing_later_corners) {
+    auto result = t.ok(t.harness("main").arg("net").timeout(60));
+    LH_CONTAINS(result.out, "errors=0");
+}
+
+LH_TEST_P(test_ground_net_excludes_models_and_translucent_faces,
+          (std::vector<std::string>{"net-model", "net-translucent"})) {
+    auto result = t.ok(t.harness("main").arg(p).timeout(60));
+    LH_CONTAINS(result.out, "net-covered=0 errors=0");
+}
