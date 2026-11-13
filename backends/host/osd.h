@@ -35,6 +35,9 @@ const char *host_osd_showing(void);
 /* The visible picture: the scanout clipped to the TV aperture (frame when empty). */
 host_rect_t host_osd_area(host_viewport_t view);
 const host_osd_panel_t *host_osd_panel(int width, int height, host_rect_t area);
+/* Holds the OSD still (on) or lets it go: for a renderer on another thread
+ * while it uses the panel host_osd_panel gave it. */
+void host_osd_hold(int on);
 void host_osd_shutdown(void);
 #ifdef __cplusplus
 }

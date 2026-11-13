@@ -102,6 +102,7 @@ static const gui_string_t gui_strings[] = {
     {"video.fullscreen", "Fullscreen"},
     {"video.movies", "HD movies folder"},
     {"video.osd", "Notifications"},
+    {"video.smooth", "Smooth motion"},
     {"video.scale.sub", "%u× is %u×%u for a 320×240 picture"},
     {"video.none", "None"},
     {"val.soft", "Soft"},

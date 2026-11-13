@@ -1,9 +1,14 @@
 #include "gpu.h"
 #include "gpu_raster.h"
+#include "frame_oracle.h"
 #if defined(FF8_PGXP)
 #include "pgxp.h"
 #endif
 #include <stdlib.h>
+
+#ifdef FF8_FRAME_ORACLE
+const frame_oracle_gpu_t *frame_oracle_gpu;
+#endif
 
 struct gpu {
     gpu_raster_t raster;
@@ -17,6 +22,15 @@ struct gpu {
     gpu_vertex_t poly_last;
     gpu_paint_t poly_paint;
     unsigned display_start, horizontal, vertical, display_mode, disabled, dma, irq, field;
+    /* Host-side only: never saved, and a GPU restored from a state has none. */
+    const gpu_observer_t *observer;
+    void *observer_context;
+    const gpu_tap_t *tap;
+    void *tap_context;
+    /* Host-side only as well: fractions and depths for the next polygon
+     * (gpu_subpixel, gpu_subpixel_depth). */
+    float fraction[4][2], depth[4];
+    int fractioned, depthed;
 };
 
 static int signed11(unsigned n) { return (int)(n & 1023) - (int)(n & 1024); }
@@ -69,6 +83,56 @@ static void reset(gpu_t *g) {
     display_state(g);
 }
 
+void gpu_observe(gpu_t *g, const gpu_observer_t *observer, void *context) {
+    g->observer = observer; g->observer_context = context;
+}
+
+void gpu_tap(gpu_t *g, const gpu_tap_t *tap, void *context) {
+    g->tap = tap; g->tap_context = context;
+}
+
+void gpu_copy(gpu_t *to, const gpu_t *from) {
+    const gpu_observer_t *observer = to->observer;
+    void *observer_context = to->observer_context;
+    const gpu_tap_t *tap = to->tap;
+    void *tap_context = to->tap_context;
+    *to = *from;
+    to->observer = observer; to->observer_context = observer_context;
+    to->tap = tap; to->tap_context = tap_context;
+}
+
+unsigned gpu_data_words(const gpu_t *g) {
+    if (g->transfer == 1) { unsigned left = g->tw * g->th - g->cursor; return left ? (left + 1) / 2 : 1; }
+    if (g->polyline) return 1;
+    return g->count ? g->needed - g->count : 0;
+}
+
+void gpu_subpixel(gpu_t *g, float fraction[4][2]) {
+    unsigned i;
+    for (i = 0; i < 4; ++i) { g->fraction[i][0] = fraction[i][0]; g->fraction[i][1] = fraction[i][1]; }
+    g->fractioned = 1;
+}
+
+void gpu_subpixel_offset(gpu_t *g, float x, float y) { g->raster.shift_x = x; g->raster.shift_y = y; }
+
+void gpu_subpixel_depth(gpu_t *g, const float depth[4]) {
+    unsigned i;
+    for (i = 0; i < 4; ++i) g->depth[i] = depth[i];
+    g->depthed = 1;
+}
+
+/* The corners of one triangle of a polygon: 0, 1, 2 for the first, 1, 2, 3
+ * for the second of a quad, as execute draws them. */
+static void corners(gpu_t *g, unsigned first) {
+    gpu_raster_t *s = &g->raster;
+    unsigned i;
+    for (i = 0; i < 3; ++i) {
+        s->corner[i][0] = g->fraction[first + i][0]; s->corner[i][1] = g->fraction[first + i][1];
+        s->corner_w[i] = g->depthed ? g->depth[first + i] : 0;
+    }
+    s->cornered = 1;
+}
+
 gpu_t *gpu_create(void) {
     gpu_t *g = calloc(1, sizeof(*g));
     if (g) reset(g);
@@ -87,11 +151,14 @@ static unsigned packet_size(unsigned op) {
     return op == 2 ? 3 : 1;
 }
 
+unsigned gpu_packet_words(unsigned opcode) { return packet_size(opcode); }
+
 static void execute(gpu_t *g) {
     uint32_t *w = g->packet;
     unsigned op = g->opcode, group = op >> 5;
     gpu_raster_t *s = &g->raster;
     gpu_paint_t p = paint(op);
+    if (g->observer && g->observer->command) g->observer->command(g->observer_context, w, g->needed);
     if (group == 1) {
         gpu_vertex_t v[4];
         unsigned i, at = 1, n = (op & 8) ? 4 : 3;
@@ -108,16 +175,21 @@ static void execute(gpu_t *g) {
             v[i] = vertex(g, xy, color, uv);
         }
         p.dither = !!(op & 16) || (p.textured && !p.raw);
+        FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->polygon(op));
+        if (g->observer) g->observer->polygon(g->observer_context, op, w);
 #if defined(FF8_PGXP)
         pgxp_polygon(g, v, n, g->offset_x, g->offset_y);
 #endif
+        if (g->fractioned) corners(g, 0);
         gpu_raster_triangle(s, v[0], v[1], v[2], p);
         if (n == 4) {
 #if defined(FF8_PGXP)
             pgxp_select(g, 1);
 #endif
+            if (g->fractioned) corners(g, 1);
             gpu_raster_triangle(s, v[1], v[2], v[3], p);
         }
+        s->cornered = g->fractioned = g->depthed = 0;
     } else if (group == 2) {
         gpu_vertex_t a = vertex(g, w[1], w[0], 0);
         gpu_vertex_t b = vertex(g, w[(op & 16) ? 3 : 2], (op & 16) ? w[2] : w[0], 0);
@@ -134,7 +206,9 @@ static void execute(gpu_t *g) {
         p.clut = uv >> 16;
         if (!size) { uint32_t wh = w[p.textured ? 3 : 2]; rw = wh & 1023; rh = (wh >> 16) & 511; }
         else { rw = rh = size == 1 ? 1 : size == 2 ? 8 : 16; }
+        if (g->fractioned) corners(g, 0);
         gpu_raster_rectangle(s, v, rw, rh, p);
+        s->cornered = g->fractioned = g->depthed = 0;
     } else if (group == 4) {
         gpu_raster_copy(s, w[1] & 1023, (w[1] >> 16) & 511,
                         w[2] & 1023, (w[2] >> 16) & 511, (int)width(w[3]), (int)height(w[3]));
@@ -172,6 +246,10 @@ static inline void upload_word(gpu_t *g, uint32_t word) {
 }
 
 void gpu_gp0(gpu_t *g, uint32_t word) {
+    if (g->tap) {
+        const uint8_t bytes[4] = {(uint8_t)word, (uint8_t)(word >> 8), (uint8_t)(word >> 16), (uint8_t)(word >> 24)};
+        g->tap->gp0(g->tap_context, bytes, 1);
+    }
     if (g->transfer == 1) { upload_word(g, word); return; }
     if (g->polyline) {
         int gouraud = !!(g->opcode & 16);
@@ -187,6 +265,7 @@ void gpu_gp0(gpu_t *g, uint32_t word) {
         return;
     }
     if (!g->count) { g->opcode = word >> 24; g->needed = packet_size(g->opcode); }
+    FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->packet_word(g->count, NULL));
     g->packet[g->count++] = word;
     if (g->count == g->needed) { execute(g); g->count = 0; }
 }
@@ -196,6 +275,7 @@ static uint32_t le_word(const uint8_t *p) {
 }
 
 void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
+    if (g->tap && words) g->tap->gp0(g->tap_context, data, words);
     while (words) {
         unsigned n, i;
         if (g->transfer == 1) {
@@ -218,7 +298,10 @@ void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
         if (!g->count) { g->opcode = data[3]; g->needed = packet_size(g->opcode); }
         n = g->needed - g->count;
         if (n > words) n = words;
-        for (i = 0; i < n; ++i) g->packet[g->count++] = le_word(data + i * 4);
+        for (i = 0; i < n; ++i) {
+            FRAME_ORACLE(if (frame_oracle_gpu) frame_oracle_gpu->packet_word(g->count, data + i * 4));
+            g->packet[g->count++] = le_word(data + i * 4);
+        }
         data += n * 4; words -= n;
         if (g->count == g->needed) { execute(g); g->count = 0; }
     }
@@ -226,13 +309,17 @@ void gpu_gp0_words(gpu_t *g, const uint8_t *data, unsigned words) {
 
 void gpu_gp1(gpu_t *g, uint32_t word) {
     unsigned op = (word >> 24) & 63;
+    if (g->tap) g->tap->gp1(g->tap_context, word);
     switch (op) {
     case 0: reset(g); break;
     case 1: reset_fifo(g); break;
     case 2: g->irq = 0; break;
     case 3: g->disabled = word & 1; break;
     case 4: g->dma = word & 3; break;
-    case 5: g->display_start = word & 0x7ffff; break;
+    case 5:
+        g->display_start = word & 0x7ffff;
+        if (g->observer) g->observer->display_start(g->observer_context, g->display_start);
+        break;
     case 6: g->horizontal = word & 0xffffff; break;
     case 7: g->vertical = word & 0xfffff; break;
     case 8: g->display_mode = word & 0x7f; break;
@@ -252,6 +339,7 @@ void gpu_gp1(gpu_t *g, uint32_t word) {
 }
 
 uint32_t gpu_read(gpu_t *g) {
+    if (g->tap) g->tap->read(g->tap_context);
     if (g->transfer == 2) {
         unsigned i;
         uint32_t result = 0;
@@ -293,7 +381,9 @@ uint32_t gpu_status_scanline(gpu_t *g, unsigned line) {
 }
 
 void gpu_vblank(gpu_t *g) {
+    if (g->tap) g->tap->vblank(g->tap_context);
     g->field ^= 1; g->raster.field = (int)g->field;
+    if (g->observer) g->observer->vblank(g->observer_context);
 #if defined(FF8_PGXP)
     pgxp_vblank(g);
 #endif

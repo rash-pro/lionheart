@@ -90,3 +90,20 @@ The atlas retains both accesses of a queued VRAM copy and both writes of a
 partial host upload after any intervening barrier. Global stage barriers also
 make retired writes visible to color attachment loads for either VRAM plane.
 These are original project changes under MIT.
+
+## Smooth motion
+
+The renderer can keep a copy of its VRAM, both planes and the atlas' block status, and put it back, tile by tile
+(`Renderer::copy_vram`, `FBAtlas::get_status`, `FBAtlas::set_status`), for a host that draws the same commands
+again from one point. Device creation enables `VK_KHR_present_id`, `VK_KHR_present_wait` and
+`VK_EXT_present_mode_fifo_latest_ready` where the device has them, for a host that paces its own presents; a
+feature chain started by swapchain-maintenance1 now continues after it. It also enables `VK_EXT_present_timing` and
+`VK_KHR_present_id2`, with a calibrated-timestamps extension they need, where the device has them, so that the
+host can learn when each picture was shown and hold a present until a time. These are original project changes
+under MIT.
+
+The atlas can skip the checks of a textured draw that reads the same texture and palette as the one before with
+no block's status and no render pass changed since, which would do nothing (`FBAtlas::set_texture_memo`,
+`Renderer::set_texture_memo`, the atlas' `generation` counting those changes). It is off unless a host turns it
+on; Lionheart turns it on with smooth motion, which draws the same commands many times. Original project changes
+under MIT.

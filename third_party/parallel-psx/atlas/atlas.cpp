@@ -17,6 +17,7 @@ void FBAtlas::load_image(const Rect &rect)
 {
 	if (rect.width == 0 || rect.height == 0)
 		return;
+	++generation;
 
 	write_compute(Domain::Unscaled, rect);
 
@@ -34,6 +35,7 @@ void FBAtlas::load_image(const Rect &rect)
 void FBAtlas::load_image_both(const Rect &rect, bool rendered)
 {
 	if (!rect.width || !rect.height) return;
+	++generation;
 	sync_domain(Domain::Scaled,rect);
 	sync_domain(Domain::Unscaled,rect);
 	write_domain(Domain::Unscaled,Stage::Compute,rect);
@@ -65,6 +67,7 @@ bool FBAtlas::texture_rendered(const Rect &rect)
 
 Domain FBAtlas::blit_vram(const Rect &dst, const Rect &src)
 {
+	++generation;
 	Domain domain = find_suitable_domain(src);
 
 	sync_domain(domain, src);
@@ -154,11 +157,16 @@ void FBAtlas::read_texture(Domain domain)
 	shifted.x += renderpass.texture_offset_x;
 	shifted.y += renderpass.texture_offset_y;
 
-	//Domain domain = palette ? Domain::Unscaled : find_suitable_domain(shifted);
-	sync_domain(domain, shifted);
-
 	Rect palette_rect = { renderpass.palette_offset_x, renderpass.palette_offset_y,
 		                  renderpass.texture_mode == TextureMode::Palette8bpp ? 256u : 16u, 1 };
+
+	// Host: read again with nothing changed since, the checks below would do nothing.
+	if (memo.on && memo.valid && memo.generation == generation && memo.domain == domain && memo.texture == shifted &&
+	    memo.palette == palette && (!palette || memo.palette_rect == palette_rect))
+		return;
+
+	//Domain domain = palette ? Domain::Unscaled : find_suitable_domain(shifted);
+	sync_domain(domain, shifted);
 
 	if (palette)
 		sync_domain(domain, palette_rect);
@@ -166,10 +174,20 @@ void FBAtlas::read_texture(Domain domain)
 	read_domain(domain, Stage::FragmentTexture, shifted);
 	if (palette)
 		read_domain(domain, Stage::FragmentTexture, palette_rect);
+	if (memo.on)
+	{
+		memo.valid = true;
+		memo.domain = domain;
+		memo.texture = shifted;
+		memo.palette = palette;
+		memo.palette_rect = palette_rect;
+		memo.generation = generation;
+	}
 }
 
 bool FBAtlas::write_domain(Domain domain, Stage stage, const Rect &rect)
 {
+	++generation;
 	if (inside_render_pass(rect))
 		flush_render_pass();
 
@@ -237,6 +255,7 @@ bool FBAtlas::write_domain(Domain domain, Stage stage, const Rect &rect)
 
 void FBAtlas::read_domain(Domain domain, Stage stage, const Rect &rect)
 {
+	++generation;
 	if (inside_render_pass(rect))
 		flush_render_pass();
 
@@ -323,6 +342,7 @@ void FBAtlas::sync_domain(Domain domain, const Rect &rect)
 	// not, so we have to resolve it.
 	if ((bits & dirty_bits) == 0)
 		return;
+	++generation;
 
 	// For scaled domain,
 	// we need to blit from unscaled domain to scaled.
@@ -424,6 +444,7 @@ void FBAtlas::flush_render_pass()
 {
 	if (!renderpass.inside)
 		return;
+	++generation;
 
 	// Clear out the "shadow" stage.
 	for (StatusFlags &f : fb_info)
@@ -459,6 +480,8 @@ void FBAtlas::extend_render_pass(const Rect &rect, bool scissor)
 
 	if (!scissored_rect.width || !scissored_rect.height)
 		return;
+	if (!renderpass.inside || !renderpass.rect.contains(scissored_rect))
+		++generation;
 
 	if (!renderpass.inside)
 	{
@@ -535,6 +558,7 @@ void FBAtlas::clear_rect(const Rect &rect, FBColor color)
 {
 	if (rect.width == 0 || rect.height == 0)
 		return;
+	++generation;
 
 	// If we're clearing completely outside the renderpass, we're probably doing another render pass
 	// somewhere else, so end the current one and start a new one instead.
@@ -563,12 +587,14 @@ void FBAtlas::set_draw_rect(const Rect &rect)
 
 void FBAtlas::discard_render_pass()
 {
+	++generation;
 	renderpass.inside = false;
 	listener->discard_render_pass();
 }
 
 void FBAtlas::notify_external_barrier(StatusFlags domains)
 {
+	++generation;
 	static const StatusFlags compute_read_stages = STATUS_COMPUTE_FB_READ | STATUS_COMPUTE_SFB_READ;
 	static const StatusFlags compute_write_stages = STATUS_COMPUTE_FB_WRITE | STATUS_COMPUTE_SFB_WRITE;
 	static const StatusFlags transfer_read_stages = STATUS_TRANSFER_FB_READ | STATUS_TRANSFER_SFB_READ;

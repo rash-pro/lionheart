@@ -3,6 +3,8 @@
 #include <SDL.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <string.h>
 
 static gpu_t *g;
@@ -20,6 +22,25 @@ static void button(SDL_JoystickID id, unsigned which, int down) {
 int main(void) {
     SDL_Event e;
     g = gpu_create(); assert(g); assert(host_display_init(0, NULL, NULL));
+    {
+        FILE *stats = tmpfile();
+        int saved;
+        char line[128];
+        assert(stats);
+        fflush(stderr); saved = dup(STDERR_FILENO); assert(saved >= 0);
+        assert(dup2(fileno(stats), STDERR_FILENO) >= 0);
+        memset(&e, 0, sizeof(e)); e.type = SDL_KEYDOWN; e.key.keysym.scancode = SDL_SCANCODE_X;
+        assert(SDL_PushEvent(&e) == 1);
+        host_display_events(); host_display_input_delivered();
+        assert(host_input_buttons(0) == PAD_CROSS);
+        host_display_input_delivered();
+        assert(host_display_shutdown(g));
+        fflush(stderr); assert(dup2(saved, STDERR_FILENO) >= 0); close(saved);
+        rewind(stats); assert(fgets(line, sizeof(line), stats));
+        assert(strncmp(line, "Input: presses=1 wait mean=", 26) == 0);
+        assert(!fgets(line, sizeof(line), stats)); fclose(stats);
+        assert(host_display_init(0, NULL, NULL));
+    }
     key(SDL_SCANCODE_UP, 1); key(SDL_SCANCODE_W, 1); key(SDL_SCANCODE_UP, 0);
     assert(host_input_buttons(0) == PAD_UP);
     key(SDL_SCANCODE_X, 1); key(SDL_SCANCODE_RETURN, 1);

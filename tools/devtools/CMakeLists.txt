@@ -35,3 +35,10 @@ add_executable(ff8files ff8files.cpp)
 target_compile_features(ff8files PRIVATE cxx_std_17)
 target_compile_definitions(ff8files PRIVATE LH_TOOLS_ROOT="${LH_TOOLS_ROOT}")
 target_link_libraries(ff8files PRIVATE metadata-io)
+add_executable(inbetween inbetween.c ../../runtime/gpu_raster_soft.c ../../runtime/savestate_io.c
+  ../../runtime/frame_record.c ../../runtime/frame_blend.c ../../runtime/frame_layer.c ../../runtime/frame_identity.c
+  ../../runtime/gte.c)
+target_include_directories(inbetween PRIVATE ../../runtime)
+target_compile_definitions(inbetween PRIVATE FF8_SAVESTATES)
+set_target_properties(inbetween PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+target_compile_options(inbetween PRIVATE -Wall -Wextra)

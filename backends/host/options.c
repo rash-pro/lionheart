@@ -48,6 +48,7 @@ const host_option_t host_options[] = {
     OPTION("true-color", "0|1", true_color, HOST_OPTION_PRESENTATION),
     PRESENT("msaa", "1|2|4|8", msaa, HOST_VALUE_NUMBER),
     OPTION("pgxp", "off|vertex|perspective", pgxp, HOST_OPTION_PRESENTATION),
+    OPTION("smooth-motion", "0|1", smooth_motion, HOST_OPTION_PRESENTATION),
     PRESENT("movies", "PATH", movies, HOST_VALUE_PATH),
     PRESENT("movie-stats", "PATH", movie_stats, HOST_VALUE_PATH),
     PRESENT("dump-scaled-frames", "PATH", scaled_frames, HOST_VALUE_PATH),
@@ -301,7 +302,7 @@ int host_options_cli(host_options_t *o, int argc, char **argv, int *i) {
     }
     if (!strcmp(arg, "--config")) { if (*i + 1 >= argc) return -1; ++*i; return 1; }
     if (!strcmp(arg, "--windowed")) { o->fullscreen = 0; return 1; }
-    if (!strcmp(arg, "--fullscreen") || !strcmp(arg, "--true-color")) {
+    if (!strcmp(arg, "--fullscreen") || !strcmp(arg, "--true-color") || !strcmp(arg, "--smooth-motion")) {
         if (*i + 1 < argc && strncmp(argv[*i + 1], "--", 2))
             return set(o, option(arg+2), argv[++*i]) ? 1 : -1;
         return set(o, option(arg+2), "1") ? 1 : -1;

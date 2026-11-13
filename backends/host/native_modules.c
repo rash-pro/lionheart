@@ -32,7 +32,9 @@ typedef struct {
     recompiled_fn fn;
 } twin_t;
 
-static const lh_module_api host_api = {
+/* Written only by native_modules_bind_projection, on the emulation thread
+ * before the build service starts or at a dispatch boundary. */
+static lh_module_api host_api = {
 #define LHM_VOID_ENTRY(name, params, args) .name = name,
 #define LHM_VALUE_ENTRY(type, name, params, args) .name = name,
     LH_MODULE_VOID_CALLS(LHM_VOID_ENTRY)
@@ -437,6 +439,8 @@ static void register_module(cpu_t *c, native_module_t *module) {
     const code_region_t *const *regions;
     int already = 0;
     size_t i;
+    /* Opened on another thread perhaps before a binding changed. */
+    *d->api = host_api;
     if (d->set_index == LH_MODULE_MAIN_SET) {
         if (state.main_module) { native_module_close(module); return; }
         module->registered = 1;
@@ -485,6 +489,14 @@ void native_modules_commit(cpu_t *c) {
 }
 
 size_t native_modules_registered(void) { return state.count + (state.main_module != NULL); }
+
+void native_modules_bind_projection(void (*rtps)(cpu_t *, unsigned, int), void (*rtpt)(cpu_t *, unsigned, int)) {
+    size_t i;
+    host_api.gte_rtps = rtps ? rtps : gte_rtps;
+    host_api.gte_rtpt = rtpt ? rtpt : gte_rtpt;
+    if (state.main_module) *state.main_module->descriptor->api = host_api;
+    for (i = 0; i < state.count; ++i) *state.modules[i]->descriptor->api = host_api;
+}
 
 void native_modules_shutdown(cpu_t *c) {
     size_t i;

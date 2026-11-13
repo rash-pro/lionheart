@@ -840,6 +840,7 @@ static void draw_video(void) {
     if (gui_ui_button("video.movies.browse",S("btn.browse"),R(x+width-254,516,160,38),vulkan ? 0 : GUI_DISABLED)) pick(GUI_PICK_MOVIES,0);
     if (gui_ui_button("video.movies.clear",S("btn.clear"),R(x+width-84,516,76,38),vulkan && *gui.options->movies ? 0 : GUI_DISABLED)) changed("movies","");
     value=toggle("video.osd","video.osd",gui.options->osd,590,1,0); if (value!=gui.options->osd) changed_number("osd",(unsigned)value);
+    value=toggle("video.smooth","video.smooth",gui.options->smooth_motion,646,1,0); if (value!=gui.options->smooth_motion) changed_number("smooth-motion",(unsigned)value);
 }
 static const char *pad_name(unsigned bit) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_UNKNOWN;

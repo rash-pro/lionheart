@@ -56,6 +56,8 @@ struct Options {
     unsigned scale=1, msaa=1;
     const char *frames=nullptr, *timings=nullptr;
 } options;
+// Smooth motion paces presents itself (host_gpu_paced).
+bool paced_wanted=false;
 struct Backend {
     gpu_raster_t *raster=nullptr;
     VkInstance instance=VK_NULL_HANDLE;
@@ -64,8 +66,11 @@ struct Backend {
     std::unique_ptr<HostGPU::Swapchain> wsi;
     std::vector<VkSurfaceKHR> old_surfaces;
     bool failed=false;
-    bool acquired=false;
+    // The window's image is acquired (its wait semaphore not yet given to a
+    // submission) and, once drawn into, filled: only then is it presented.
+    bool acquired=false, filled=false;
     uint32_t present_index=0;
+    Semaphore acquire_wait;
     std::unique_ptr<Context> context;
     std::unique_ptr<Device> device;
     std::unique_ptr<Renderer> renderer;
@@ -74,11 +79,61 @@ struct Backend {
     unsigned output_width=1, output_height=1;
     std::array<uint64_t,16> dirty_rows[512] = {};
     bool dirty=false;
+    // Smooth motion draws the same commands again from a kept point: VRAM as
+    // it stood there, and the tiles written since (Renderer::copy_vram).
+    bool checkpoints=false;
+    Renderer::VramCopy kept;
+    uint64_t written[2]={0,0};
+    // A picture between game frames is being drawn (host_gpu_between): above
+    // 1x the software rasterizer draws only into the parts of VRAM the picture
+    // before read software pixels from (read: what copies the renderer draws
+    // natively and the textures of primitives drawn in software read), which
+    // the pictures of a game frame share. What it left out is stale until
+    // taken back from the GPU (fresh()).
+    bool between=false;
+    // VRAM in blocks of 16x16 pixels: a palette next to the picture must not
+    // share a block with it.
+    struct Blocks {
+        uint64_t bits[32]={};
+        void clear() noexcept { std::fill(std::begin(bits),std::end(bits),uint64_t(0)); }
+        template<class F> static void each(unsigned x,unsigned y,unsigned w,unsigned h,F f) noexcept {
+            if (!w || !h) return;
+            if (w>=1024) { x=0; w=1024; }
+            if (h>=512) { y=0; h=512; }
+            for (unsigned by=(y&511)/16, rows=0; rows<(h+(y&511)%16+15)/16; ++rows, by=(by+1)%32)
+                for (unsigned bx=(x&1023)/16, cols=0; cols<(w+(x&1023)%16+15)/16; ++cols, bx=(bx+1)%64)
+                    f(by*64+bx);
+        }
+        void add(unsigned x,unsigned y,unsigned w,unsigned h) noexcept {
+            each(x,y,w,h,[&](unsigned bit) { bits[bit/64]|=uint64_t(1)<<(bit%64); });
+        }
+        bool meets(unsigned x,unsigned y,unsigned w,unsigned h) const noexcept {
+            bool found=false;
+            each(x,y,w,h,[&](unsigned bit) { found=found || (bits[bit/64]>>(bit%64)&1); });
+            return found;
+        }
+    } read, reading, stale;
+    // When the next present is to be shown, in seconds of SDL's counter (host_gpu_present_at).
+    double present_target=0;
+    void touch(unsigned x,unsigned y,unsigned w,unsigned h) noexcept {
+        if (!checkpoints || !w || !h) return;
+        if (w>=1024) { x=0; w=1024; }
+        if (h>=512) { y=0; h=512; }
+        unsigned tile=Renderer::VRAM_TILE;
+        for (unsigned ty=(y&511)/tile, rows=0; rows<(h+(y&511)%tile+tile-1)/tile; ++rows, ty=(ty+1)%Renderer::VRAM_TILES_Y)
+            for (unsigned tx=(x&1023)/tile, cols=0; cols<(w+(x&1023)%tile+tile-1)/tile; ++cols, tx=(tx+1)%Renderer::VRAM_TILES_X) {
+                unsigned bit=ty*Renderer::VRAM_TILES_X+tx;
+                written[bit/64]|=uint64_t(1)<<(bit%64);
+            }
+    }
     // Framebuffer captures used as 15-bit feedback textures need the oracle's
     // per-primitive truncation. Track their provenance through copies and draws.
     std::array<uint64_t,16> effect_pixels[512] = {};
     unsigned effect_counts[32] = {};
     uint32_t effect_pages=0;
+    std::array<uint64_t,16> kept_effect_pixels[512] = {};
+    unsigned kept_effect_counts[32] = {};
+    uint32_t kept_effect_pages=0;
     void effect(unsigned x,unsigned y,unsigned w,unsigned h,bool value) {
         if (!value && !effect_pages) return;
         for (unsigned row=0;row<h;++row) {
@@ -195,6 +250,7 @@ struct Backend {
         if (renderer && failed) renderer->abandon();
         if (renderer) renderer->flush();
         if (device) device->wait_idle();
+        kept=Renderer::VramCopy();
 #ifdef FF8_GUI
         host_gui_vulkan_shutdown();
 #endif
@@ -237,6 +293,7 @@ struct Backend {
         if (timings && !first) first=renderer->command_buffer_hack_fixme()->write_timestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
     }
     void mark(unsigned x, unsigned y, unsigned n) noexcept {
+        touch(x,y,n,1);
         dirty=true; y&=511;
         while (n) {
             x&=1023;
@@ -282,6 +339,7 @@ struct Backend {
                 movie_buffer=device->create_buffer(info,patch.frame->rgba.data());
                 movie_frame=patch.frame;
             }
+            touch(patch.x,patch.y,patch.words,patch.rows);
             renderer->host_movie_upload({patch.x,patch.y,patch.words,patch.rows},patch.origin_x,patch.origin_y,
                                         patch.rgb24,*movie_buffer,patch.frame->width,patch.frame->height);
         }
@@ -373,7 +431,7 @@ template<class Draw> void clipped(gpu_raster_t *s, Draw draw) {
     auto &r=*backend->renderer;
     if (s->right<s->left || s->bottom<s->top) return;
     Rect rect(unsigned(s->left),unsigned(s->top),unsigned(s->right-s->left+1),unsigned(s->bottom-s->top+1));
-    auto emit=[&](Rect clip) { auto c=rect.scissor(clip); if (c.width && c.height) { r.set_draw_rect(c); draw(); } };
+    auto emit=[&](Rect clip) { auto c=rect.scissor(clip); if (c.width && c.height) { backend->touch(c.x,c.y,c.width,c.height); r.set_draw_rect(c); draw(); } };
     if ((s->mode&1024) || !s->display_enabled) { emit(rect); return; }
     if (s->interlaced) {
         emit(rect);
@@ -494,6 +552,24 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
             b->wsi.reset(new HostGPU::Swapchain(b->context->get_gpu(),b->context->get_device(),
                 b->context->get_graphics_queue(),b->context->get_enabled_device_features().supports_swapchain_maintenance1));
             b->wsi->surface=b->surface;
+            b->wsi->latest_ready=b->context->get_enabled_device_features().supports_fifo_latest_ready;
+            b->wsi->pace(paced_wanted);
+            if (b->context->get_enabled_device_features().supports_present_wait)
+                b->wsi->wait_present=reinterpret_cast<PFN_vkWaitForPresentKHR>(vkGetDeviceProcAddr(b->context->get_device(),"vkWaitForPresentKHR"));
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+            if (b->context->get_enabled_device_features().supports_present_timing) {
+                VkDevice d=b->context->get_device();
+                auto &api=b->wsi->timing_api;
+                api.queue_size=reinterpret_cast<PFN_vkSetSwapchainPresentTimingQueueSizeEXT>(vkGetDeviceProcAddr(d,"vkSetSwapchainPresentTimingQueueSizeEXT"));
+                api.properties=reinterpret_cast<PFN_vkGetSwapchainTimingPropertiesEXT>(vkGetDeviceProcAddr(d,"vkGetSwapchainTimingPropertiesEXT"));
+                api.domains=reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(vkGetDeviceProcAddr(d,"vkGetSwapchainTimeDomainPropertiesEXT"));
+                api.past=reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(vkGetDeviceProcAddr(d,"vkGetPastPresentationTimingEXT"));
+                api.calibrated=reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(vkGetDeviceProcAddr(d,"vkGetCalibratedTimestampsKHR"));
+                if (!api.calibrated) api.calibrated=reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(vkGetDeviceProcAddr(d,"vkGetCalibratedTimestampsEXT"));
+                api.absolute=b->context->get_enabled_device_features().supports_present_at_absolute_time;
+                if (!api.queue_size || !api.properties || !api.domains) api.past=nullptr;
+            }
+#endif
         }
         if (options.timings) { b->timings=std::fopen(options.timings,"w"); if (!b->timings) throw std::runtime_error("Cannot open GPU timings");
             std::fprintf(b->timings,"frame,cpu_ms,gpu_ms,wall_ms,draw_calls,vertices,render_passes,soft_ms,encode_ms,submit_ms,capture_ms,upload_bytes,submissions,backpressure,submit_wall_ms,present_ms,osd_ms,pipeline_ms,pipelines\n"); }
@@ -521,6 +597,7 @@ extern "C" void host_gpu_stop(void) {
     options={};
 }
 static int presentation_mode, presentation_linear;
+static bool checkpoints_wanted;
 extern "C" void host_gpu_presentation(int mode, int linear) {
     presentation_mode=mode; presentation_linear=linear;
 }
@@ -532,12 +609,58 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     for (auto &row:backend->dirty_rows) row.fill(0);
     backend->raster=gpu_raster_state(g);
     backend->effect_pages=0;
+    backend->stale.clear();
     std::memset(backend->effect_counts,0,sizeof(backend->effect_counts));
     for (auto &row:backend->effect_pixels) row.fill(0);
+    backend->checkpoints=checkpoints_wanted;
+    if (backend->renderer) backend->renderer->set_texture_memo(checkpoints_wanted);
     backend->upload({0,0,1024,512});
+    // The GPU it now mirrors is where smooth motion keeps its point: all of
+    // VRAM is kept again from here.
+    if (backend->checkpoints) {
+        backend->kept=Renderer::VramCopy();
+        backend->written[0]=backend->written[1]=0;
+        backend->renderer->copy_vram(backend->kept,backend->written,false);
+        std::copy(std::begin(backend->effect_pixels),std::end(backend->effect_pixels),std::begin(backend->kept_effect_pixels));
+        std::copy(std::begin(backend->effect_counts),std::end(backend->effect_counts),std::begin(backend->kept_effect_counts));
+        backend->kept_effect_pages=backend->effect_pages;
+    }
     return 1;
 } catch (const std::exception &e) { degrade("host_gpu_resume",e.what()); return 0; }
 catch (...) { degrade("host_gpu_resume","unknown backend exception"); return 0; }
+extern "C" void host_gpu_checkpoints(int on) {
+    checkpoints_wanted=on!=0;
+    if (!backend) return;
+    backend->checkpoints=on!=0;
+    if (backend->renderer) backend->renderer->set_texture_memo(on!=0);
+    if (!on) { backend->kept=Renderer::VramCopy(); backend->written[0]=backend->written[1]=0; }
+}
+extern "C" void host_gpu_checkpoint(gpu_t *g,int restore) try {
+    if (!backend || backend->failed || !backend->checkpoints || backend->raster!=gpu_raster_state(g)) return;
+    auto &b=*backend;
+    CpuTimer timer;
+    b.begin();
+    if (!restore) {
+        // Soft writes not yet on the GPU reach it before it is kept.
+        b.uploads();
+        b.renderer->copy_vram(b.kept,b.written,false);
+        std::copy(std::begin(b.effect_pixels),std::end(b.effect_pixels),std::begin(b.kept_effect_pixels));
+        std::copy(std::begin(b.effect_counts),std::end(b.effect_counts),std::begin(b.kept_effect_counts));
+        b.kept_effect_pages=b.effect_pages;
+    } else {
+        b.stale.clear();
+        // What the drawing since left for upload lies in tiles put back now.
+        b.dirty=false;
+        for (auto &row:b.dirty_rows) row.fill(0);
+        b.movie_patches.clear();
+        b.renderer->copy_vram(b.kept,b.written,true);
+        std::copy(std::begin(b.kept_effect_pixels),std::end(b.kept_effect_pixels),std::begin(b.effect_pixels));
+        std::copy(std::begin(b.kept_effect_counts),std::end(b.kept_effect_counts),std::begin(b.effect_counts));
+        b.effect_pages=b.kept_effect_pages;
+    }
+    b.written[0]=b.written[1]=0;
+} catch (const std::exception &e) { degrade("host_gpu_checkpoint",e.what()); }
+catch (...) { degrade("host_gpu_checkpoint","unknown backend exception"); }
 extern "C" int host_gpu_download(gpu_t *g,uint16_t *out,int raw) try {
     if (!backend || backend->failed || backend->raster!=gpu_raster_state(g)) return 0;
     CpuTimer timer;
@@ -569,6 +692,40 @@ void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
 }
 
 }
+namespace {
+// Smooth motion's pictures between game frames leave the software rasterizer
+// out above 1x: nothing of them is kept, and the GPU draws them; except where
+// the renderer itself needs software pixels (feedback effects, copies it draws
+// natively), where the picture before needed them. A primitive drawn there
+// is drawn in software too; elsewhere what it covers turns stale.
+bool soft_left_out(gpu_raster_t *s,int x0,int y0,int x1,int y1) {
+    if (!backend->checkpoints || !backend->between || native_pixels() || backend->raster!=s) return false;
+    x0=std::max(x0,s->left); y0=std::max(y0,s->top); x1=std::min(x1,s->right); y1=std::min(y1,s->bottom);
+    if (x1<x0 || y1<y0) return true;
+    unsigned x=unsigned(x0), y=unsigned(y0), w=unsigned(x1-x0+1), h=unsigned(y1-y0+1);
+    if (backend->read.meets(x,y,w,h)) return false;
+    backend->stale.add(x,y,w,h);
+    return true;
+}
+// The renderer reads software pixels from a rectangle: where drawing was left
+// out there, VRAM is first taken back from the GPU.
+void fresh(gpu_raster_t *s,int x,int y,int w,int h) {
+    if (w<=0 || h<=0) return;
+    backend->reading.add(unsigned(x),unsigned(y),unsigned(w),unsigned(h));
+    if (!backend->stale.meets(unsigned(x),unsigned(y),unsigned(w),unsigned(h))) return;
+    backend->begin(); backend->uploads();
+    backend->renderer->copy_vram_to_cpu_synchronous({0,0,1024,512},s->vram);
+    backend->stale.clear();
+}
+// A primitive drawn in software between game frames reads its texture page
+// and palette.
+void fresh_texture(gpu_raster_t *s,gpu_paint_t p) {
+    unsigned depth=(s->mode>>7)&3;
+    if (!p.textured || !backend->checkpoints || !backend->between || native_pixels()) return;
+    fresh(s,int(s->mode&15)*64,int((s->mode>>4)&1)*256,depth>=2 ? 256 : 256>>(2-depth),256);
+    if (depth<2) fresh(s,int(p.clut&63)*16,int((p.clut>>6)&511),depth ? 256 : 16,1);
+}
+}
 extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex_t b,gpu_vertex_t c,gpu_paint_t p) {
     if (!active(s)) { __real_gpu_raster_triangle(s,a,b,c,p); return; }
 #ifdef FF8_PGXP
@@ -576,6 +733,7 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
 #endif
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
+        fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
         dirty_bounds(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),
             std::max({a.x,b.x,c.x})-std::min({a.x,b.x,c.x})+1,
@@ -594,6 +752,14 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
             }
         }
 #endif
+        // Smooth motion's fractions of a pixel (gpu_subpixel), and with PGXP
+        // the depths that map textures in perspective (gpu_subpixel_depth).
+        bool depths=s->cornered && s->corner_w[0]>0 && s->corner_w[1]>0 && s->corner_w[2]>0;
+        for (unsigned i=0;i<3;++i) {
+            v[i].x+=s->shift_x+(s->cornered ? s->corner[i][0] : 0.0f);
+            v[i].y+=s->shift_y+(s->cornered ? s->corner[i][1] : 0.0f);
+            if (depths) v[i].w=s->corner_w[i];
+        }
         // Native output is replaced by the exact software pixels below. Keep
         // those writes pending until a draw that needs GPU pixels or scanout,
         // instead of drawing and uploading the same primitive twice.
@@ -606,6 +772,8 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
         clipped(s,[&] { backend->renderer->draw_triangle(v); });
     }
     });
+    if (soft_left_out(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),std::max({a.x,b.x,c.x}),std::max({a.y,b.y,c.y}))) return;
+    fresh_texture(s,p);
     { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
     if (!backend->failed && native_pixels()
 #ifdef FF8_PGXP
@@ -620,6 +788,7 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
     if (!active(s)) { __real_gpu_raster_rectangle(s,a,w,h,p); return; }
     CpuTimer timer;
     if (backend->effect_texture(s,p)) {
+        fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
         dirty_bounds(s,a.x,a.y,w,h,true);
         return;
@@ -630,6 +799,10 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         state(s,p,PrimitiveType::Sprite);
         Vertex v[4]={vertex(a),vertex(a),vertex(a),vertex(a)};
         v[1].x+=w; v[2].y+=h; v[3].x+=w; v[3].y+=h;
+        for (auto &vert:v) {
+            vert.x+=s->shift_x+(s->cornered ? s->corner[0][0] : 0.0f);
+            vert.y+=s->shift_y+(s->cornered ? s->corner[0][1] : 0.0f);
+        }
         bool flip_x=(s->mode&0x1000)!=0, flip_y=(s->mode&0x2000)!=0;
         int du=flip_x?-w:w, dv=flip_y?-h:h;
         // Upscaled sample centers descend from the next texel boundary when
@@ -648,6 +821,8 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         clipped(s,[&] { backend->renderer->draw_quad(v); });
     }
     });
+    if (soft_left_out(s,a.x,a.y,a.x+w-1,a.y+h-1)) return;
+    fresh_texture(s,p);
     { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
     if (!backend->failed && native_pixels()) dirty_bounds(s,a.x,a.y,w,h);
 }
@@ -660,12 +835,14 @@ extern "C" void __wrap_gpu_raster_line(gpu_raster_t *s,gpu_vertex_t a,gpu_vertex
     if ((!skip || n) && std::abs(b.x-a.x)<1024 && std::abs(b.y-a.y)<512) {
         state(s,p,PrimitiveType::Polygon);
         Vertex v[]={vertex(a),vertex(b)};
+        for (auto &vert:v) { vert.x+=s->shift_x; vert.y+=s->shift_y; }
         if (skip && n) {
             v[0].x+=float(b.x-a.x)/float(n); v[0].y+=float(b.y-a.y)/float(n);
         }
         clipped(s,[&] { backend->renderer->draw_line(v); });
     }
     });
+    if (soft_left_out(s,std::min(a.x,b.x)-1,std::min(a.y,b.y)-1,std::max(a.x,b.x)+1,std::max(a.y,b.y)+1)) return;
     { SoftTimer soft; __real_gpu_raster_line(s,a,b,p,skip); }
     if (!backend->failed && native_pixels())
         dirty_bounds(s,std::min(a.x,b.x)-1,std::min(a.y,b.y)-1,std::abs(b.x-a.x)+3,std::abs(b.y-a.y)+3);
@@ -703,6 +880,7 @@ extern "C" void __wrap_gpu_raster_fill(gpu_raster_t *s,int x,int y,int w,int h,u
         unsigned yy=unsigned(y+row)&511, rows=std::min(unsigned(h-row),512-yy);
         for (int col=0;col<w;) {
             unsigned xx=unsigned(x+col)&1023, cols=std::min(unsigned(w-col),1024-xx);
+            backend->touch(xx,yy,cols,rows);
             backend->renderer->clear_rect({xx,yy,cols,rows},color & 0xffffff);
             col+=int(cols);
         }
@@ -724,10 +902,16 @@ extern "C" void __wrap_gpu_raster_copy(gpu_raster_t *s,int sx,int sy,int dx,int 
     if (!native) {
         backend->begin(); backend->uploads();
         backend->renderer->set_mask_test(s->mask&2); backend->renderer->set_force_mask_bit(s->mask&1);
+        backend->touch(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h));
         backend->renderer->blit_vram({unsigned(dx),unsigned(dy),unsigned(w),unsigned(h)},
                                      {unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)});
     }
     });
+    // A copy the renderer draws natively reads software pixels; one it draws
+    // itself leaves the software copy of stale pixels stale.
+    if (native) fresh(s,sx,sy,w,h);
+    else if (backend->stale.meets(unsigned(sx),unsigned(sy),unsigned(w),unsigned(h)))
+        backend->stale.add(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h));
     { SoftTimer soft; __real_gpu_raster_copy(s,sx,sy,dx,dy,w,h); }
     if (effect || !(s->mask&2)) backend->effect(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h),effect);
     if (!backend->failed && native) for (int row=0;row<h;++row) backend->mark(unsigned(dx),unsigned(dy+row),unsigned(w));
@@ -777,7 +961,30 @@ extern "C" int host_gpu_rgb(gpu_t *g,const uint8_t **out,int *w,int *h) try {
 catch (...) { degrade("host_gpu_rgb","unknown backend exception"); return 0; }
 // Presentation is appended to this frame's renderer command buffer. Submit once
 // with its fence and presentation semaphore, then recycle a context two frames later.
-namespace { int queue_present(); }
+namespace {
+int queue_present();
+double counter_seconds() { return double(SDL_GetPerformanceCounter())/double(SDL_GetPerformanceFrequency()); }
+// Present timing reports and takes times on a host clock; the host keeps time
+// in SDL's counter. The two are a fixed offset apart (sampled when needed:
+// the clocks may be slewed against each other).
+double domain_now(VkTimeDomainKHR domain) {
+#ifndef _WIN32
+    timespec now={};
+    if (clock_gettime(domain==VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR ? CLOCK_MONOTONIC_RAW : CLOCK_MONOTONIC,&now)) return -1;
+    return double(now.tv_sec)+double(now.tv_nsec)*1e-9;
+#else
+    (void)domain; return -1;
+#endif
+}
+double to_domain(VkTimeDomainKHR domain,double seconds) {
+    double now=domain_now(domain);
+    return now<0 ? -1 : seconds-counter_seconds()+now;
+}
+double from_domain(VkTimeDomainKHR domain,double time) {
+    double now=domain_now(domain);
+    return now<0 ? 0 : time-now+counter_seconds();
+}
+}
 extern "C" int host_gpu_frame(gpu_t *g) try {
     if (!backend || backend->failed || backend->raster!=gpu_raster_state(g)) return 1;
     auto &b=*backend;
@@ -1165,6 +1372,38 @@ void present_timestamp(Backend &b,QueryPoolHandle &slot,VkPipelineStageFlagBits 
         ) slot=b.renderer->command_buffer_hack_fixme()->write_timestamp(stage);
 }
 }
+namespace {
+// Acquires the window's next image, unless one is held: 1 when one is held,
+// 0 when the swapchain has none free yet (FIFO frees one each refresh), -1
+// when the window cannot be presented to now.
+int acquire_window(Backend &b) {
+    if (b.acquired) return 1;
+    if (!b.window || !b.wsi) return -1;
+    int width,height; SDL_Vulkan_GetDrawableSize(b.window,&width,&height);
+    if (width<=0 || height<=0 || (SDL_GetWindowFlags(b.window)&SDL_WINDOW_MINIMIZED)) return -1;
+    if (b.wsi->surface_lost) {
+        if (b.surface) { b.old_surfaces.push_back(b.surface); b.surface=VK_NULL_HANDLE; }
+        if (!SDL_Vulkan_CreateSurface(b.window,b.instance,&b.surface)) {
+            std::fprintf(stderr,"Vulkan surface unavailable; presentation will retry: %s\n",SDL_GetError());
+            return -1;
+        }
+        b.wsi->surface=b.surface; b.wsi->surface_lost=false;
+    }
+    if (!b.wsi->prepare({unsigned(width),unsigned(height)},b.wsi_frame(),wall_milliseconds())) return -1;
+    auto acquire=b.device->request_semaphore();
+    uint32_t index=0;
+    if (!b.wsi->acquire(acquire->get_semaphore(),index,b.wsi_frame(),wall_milliseconds())) return 0;
+    acquire->signal_external();
+    b.acquire_wait=acquire;
+    b.acquired=true; b.filled=false; b.present_index=index;
+    return 1;
+}
+}
+extern "C" int host_gpu_ready(void) try {
+    if (!backend || backend->failed) return -1;
+    return acquire_window(*backend);
+} catch (const std::exception &e) { degrade("host_gpu_ready",e.what()); return -1; }
+catch (...) { degrade("host_gpu_ready","unknown backend exception"); return -1; }
 extern "C" int host_gpu_present(void) {
     if (!backend || backend->failed) return 1;
     try {
@@ -1190,24 +1429,14 @@ extern "C" int host_gpu_present(void) {
             offscreen_present(b,capture.width,capture.height,preset);
             present_timestamp(b,b.present_last,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         }
-        if (!b.window) return 1;
-        int width,height; SDL_Vulkan_GetDrawableSize(b.window,&width,&height);
-        if (width<=0 || height<=0 || (SDL_GetWindowFlags(b.window)&SDL_WINDOW_MINIMIZED)) return 1;
-        if (b.wsi->surface_lost) {
-            if (b.surface) { b.old_surfaces.push_back(b.surface); b.surface=VK_NULL_HANDLE; }
-            if (!SDL_Vulkan_CreateSurface(b.window,b.instance,&b.surface)) {
-                std::fprintf(stderr,"Vulkan surface unavailable; presentation will retry: %s\n",SDL_GetError());
-                return 1;
-            }
-            b.wsi->surface=b.surface; b.wsi->surface_lost=false;
+        if (!b.window || acquire_window(b)<=0) return 1;
+        uint32_t index=b.present_index;
+        // The image's wait goes with the submission that draws into it.
+        if (b.acquire_wait) {
+            b.device->add_wait_semaphore(CommandBuffer::Type::Generic,b.acquire_wait,VK_PIPELINE_STAGE_TRANSFER_BIT,false);
+            b.acquire_wait.reset();
         }
-        if (!b.wsi->prepare({unsigned(width),unsigned(height)},b.wsi_frame(),wall_milliseconds())) return 1;
-        auto acquire=b.device->request_semaphore();
-        uint32_t index=0;
-        if (!b.wsi->acquire(acquire->get_semaphore(),index,b.wsi_frame(),wall_milliseconds())) return 1;
-        acquire->signal_external();
-        b.device->add_wait_semaphore(CommandBuffer::Type::Generic,acquire,VK_PIPELINE_STAGE_TRANSFER_BIT,false);
-        b.acquired=true; b.present_index=index;
+        b.filled=true;
         if (!preset && !osd_panel(b,b.wsi->extent) && !host_screenshot_pending()
 #ifdef FF8_GUI
             && !host_gui_visible() && !host_gui_toast_visible()
@@ -1312,9 +1541,16 @@ catch (...) { degrade("host_gpu_present_image","unknown backend exception"); ret
 namespace {
 int queue_present() {
     auto &b=*backend;
-    if (!b.acquired) return 1;
-    b.acquired=false;
-    b.wsi->present(b.present_index,b.wsi_frame(),wall_milliseconds());
+    // An image acquired ahead and not drawn into yet waits for the next present.
+    if (!b.acquired || !b.filled) return 1;
+    b.acquired=b.filled=false;
+    uint64_t target=0;
+    if (b.present_target>0 && b.wsi->targets()) {
+        double at=to_domain(b.wsi->time_domain(),b.present_target);
+        if (at>0) target=uint64_t(at*1e9);
+    }
+    b.present_target=0;
+    b.wsi->present(b.present_index,b.wsi_frame(),wall_milliseconds(),target);
     return 1;
 }
 }
@@ -1327,3 +1563,39 @@ extern "C" void host_gpu_test_fault(unsigned phase) {
 }
 extern "C" unsigned host_gpu_test_maps(void) { return test_maps; }
 #endif
+extern "C" uint64_t host_gpu_present_id(void) {
+    return backend && !backend->failed && backend->wsi ? backend->wsi->last_id : 0;
+}
+extern "C" int host_gpu_present_seen(uint64_t *id,double *seconds) {
+    if (!backend || backend->failed || !backend->wsi) return 0;
+    if (backend->wsi->timed()) {
+        uint64_t time=0;
+        if (!backend->wsi->shown(*id,time)) return 0;
+        *seconds=from_domain(backend->wsi->time_domain(),double(time)*1e-9);
+        return 1;
+    }
+    if (!backend->wsi->wait_present) return 0;
+    backend->wsi->watch(counter_seconds);
+    return backend->wsi->seen(*id,*seconds) ? 1 : 0;
+}
+extern "C" int host_gpu_present_timing(void) {
+    if (!backend || backend->failed || !backend->wsi || !backend->wsi->timed()) return 0;
+    return backend->wsi->targets() ? 2 : 1;
+}
+extern "C" double host_gpu_refresh(void) {
+    if (!backend || backend->failed || !backend->wsi || !backend->wsi->timed()) return 0;
+    return double(backend->wsi->refresh())*1e-9;
+}
+extern "C" void host_gpu_present_at(double seconds) { if (backend) backend->present_target=seconds; }
+extern "C" void host_gpu_paced(int on) {
+    paced_wanted=on!=0;
+    if (backend && backend->wsi) backend->wsi->pace(paced_wanted);
+}
+extern "C" void host_gpu_between(int on) {
+    if (!backend) return;
+    // What the picture just drawn read from the software rasterizer is what the
+    // next will.
+    backend->read=backend->reading;
+    backend->reading.clear();
+    backend->between=on!=0;
+}

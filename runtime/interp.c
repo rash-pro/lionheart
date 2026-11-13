@@ -1,4 +1,8 @@
 #include "cpu.h"
+#include "interp.h"
+#include "frame_oracle.h"
+
+void (*interp_gte_command)(cpu_t *c, uint32_t opcode) = gte_cmd;
 
 void interp_step(cpu_t *c) {
     uint32_t pc = c->pc, word, a, b, value = 0, loaded = 0, address, next;
@@ -115,7 +119,7 @@ void interp_step(cpu_t *c) {
             else gte_write(c, rd, b, rs == 6);
         } else if (rs == 8) {
             branch = 1; take = !(rt & 1); target = pc + 4 + (uint32_t)imm * 4;
-        } else if (rs >= 16 && op == 18) gte_cmd(c, word);
+        } else if (rs >= 16 && op == 18) interp_gte_command(c, word);
         else if (rs >= 16 && fn == 16) c_set_sr(c, (c->cop0[12] & ~15u) | ((c->cop0[12] >> 2) & 15));
         else cpu_exception(c, 10, 0);
         break;
@@ -151,6 +155,7 @@ void interp_step(cpu_t *c) {
     default: cpu_exception(c, 10, 0); break;
     }
     if (branch && delayed) cpu_stop(c, "branch in branch delay slot (undefined R3000 behavior)");
+    FRAME_ORACLE(frame_oracle_step(c, word, a, b, address, dst, value, load, loaded));
     c_retire(c, dst, value, load, loaded);
 retired:
     if (c->halted) return;
