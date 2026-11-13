@@ -165,6 +165,7 @@ void frame_present_command(frame_present_t *p, const uint32_t *packet, unsigned 
     unsigned op = packet[0] >> 24;
     if (p->failed) return;
     if (op >= 0x20 && op < 0x40) frame_blend_packet(p->blend, polygon, packet);
+    frame_blend_command(p->blend, packet, count);
     if (!frame_layer_command(p->layer, packet, count)) { p->failed = 1; ++p->totals.failures; }
 }
 
@@ -245,7 +246,14 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
         } else if (op >= 0x20 && op < 0x40) {
             uint32_t xy[4], colours[4];
             unsigned corners = (op & 8) ? 4 : 3, k = 1, mask, shades;
+            int visible = frame_blend_visible(p->blend, p->serial, at->num, at->den);
             mask = frame_blend_polygon(p->blend, p->serial, at->num, at->den, xy, NULL);
+            if (!visible) {
+                /* Consume the packet and its state, without rasterizing it. */
+                xy[0] = le32(packet + 4);
+                for (i = 1; i < corners; ++i) xy[i] = xy[0];
+                mask = (1u << corners) - 1;
+            }
             shades = frame_blend_colours(p->blend, p->serial, at->num, at->den, colours);
             for (i = 0; i < corners; ++i) {
                 if (i && (op & 16)) {
@@ -258,7 +266,7 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
             }
             if (shades & 1u) put_le32(packet, (le32(packet) & 0xff000000u) | colours[0]);
             if (mask || shades) at->blended = 1;
-            if (mask && p->fractions) {
+            if (mask && p->fractions && visible) {
                 float exact[4][2], fraction[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
                 unsigned moving = frame_blend_fractions(p->blend, p->serial, at->num, at->den, exact);
                 for (i = 0; i < corners; ++i)

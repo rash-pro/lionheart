@@ -32,6 +32,9 @@ typedef struct {
     uint32_t (*colours)[4];
     uint32_t (*packets)[12];
     uint32_t *pages;
+    uint64_t *textures;
+    uint32_t *texture_windows, *draw_modes;
+    size_t texture_capacity, window_capacity, mode_capacity;
     uint8_t *coloured;
     uint64_t *corner_keys;
     int32_t *corner_heads, *corner_next;
@@ -47,13 +50,16 @@ typedef struct {
     uint32_t opcode, page;
     uint32_t colours[4];
     uint32_t words[12];
+    uint64_t texture;
+    uint32_t window, mode;
 } look_t;
 
-/* A polygon of the frame before that the latest no longer draws, having left
- * the screen: its packet and its corners' vertices. */
+/* A polygon of the frame before that the latest no longer draws: its packet
+ * and its corners' vertices. Terrain is culled by facing as well as bounds. */
 typedef struct {
     uint32_t words[12];
     int32_t vertex[4];
+    int facing;                 /* terrain keeps the winding it was drawn with */
 } leftover_t;
 
 /* Both ends of a vertex: where it stood in the frame before (a) and now (b). */
@@ -118,6 +124,8 @@ struct frame_blend {
     int32_t *ahead[2];
     leftover_t *leftovers;
     size_t continued_capacity, forward_capacity[2], ahead_capacity[2], leftover_count, leftover_capacity;
+    uint64_t writes[32][64], revision;
+    uint32_t window, mode, area[2];
     int32_t screen[2];           /* the picture's size in packet coordinates */
 };
 
@@ -133,7 +141,7 @@ static int grow(void **items, size_t *capacity, size_t needed, size_t size) {
 
 frame_blend_t *frame_blend_create(void) {
     frame_blend_t *b = calloc(1, sizeof(frame_blend_t));
-    if (b) { b->screen[0] = 320; b->screen[1] = 240; }
+    if (b) { frame_blend_reset(b); b->screen[0] = 320; b->screen[1] = 240; }
     return b;
 }
 
@@ -146,6 +154,7 @@ void frame_blend_destroy(frame_blend_t *b) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
         free(b->kept[i].motions); free(b->kept[i].placed); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
+        free(b->kept[i].textures); free(b->kept[i].texture_windows); free(b->kept[i].draw_modes);
     }
     free(b->looks); free(b->before); free(b->hidden); free(b->fan); free(b->continued); free(b->forward[0]); free(b->forward[1]);
     free(b->ahead[0]); free(b->ahead[1]); free(b->leftovers);
@@ -158,11 +167,94 @@ void frame_blend_reset(frame_blend_t *b) {
     for (i = 0; i < 3; ++i) b->kept[i].valid = 0;
     memset(&b->info, 0, sizeof(b->info));
     b->look_count = 0; b->leftover_count = 0;
+    memset(b->writes, 0, sizeof(b->writes));
+    b->revision = 0; b->window = b->mode = 0;
+    b->area[0] = 0; b->area[1] = 1023u | 511u << 10;
 }
 
 const frame_blend_info_t *frame_blend_info(const frame_blend_t *b) { return &b->info; }
 
 void frame_blend_straight(frame_blend_t *b, int on) { b->straight = on != 0; }
+
+/* A continued packet must not sample a different texture or palette. Track
+ * writes by VRAM tile, including render targets used as textures. A tile
+ * touched outside the sampled area may reject a continuation conservatively. */
+static void written(frame_blend_t *b, unsigned x, unsigned y, unsigned w, unsigned h) {
+    unsigned i, j;
+    ++b->revision;
+    for (j = 0; j < h; j += 16 - ((y + j) & 15))
+        for (i = 0; i < w; i += 16 - ((x + i) & 15))
+            b->writes[((y + j) & 511) / 16][((x + i) & 1023) / 16] = b->revision;
+}
+
+void frame_blend_command(frame_blend_t *b, const uint32_t *words, unsigned count) {
+    unsigned op, x, y, w, h;
+    if (!count) return;
+    op = words[0] >> 24;
+    if (op == 0xe1) b->mode = words[0] & 0x3fffu;
+    else if (op == 0xe2) b->window = words[0] & 0xfffffu;
+    else if (op == 0xe3 || op == 0xe4) b->area[op - 0xe3] = words[0] & 0xfffffu;
+    else if ((op >= 0x80 && op < 0xc0) || op == 2) {
+        unsigned at = op < 0xa0 && op >= 0x80 ? 2 : 1;
+        if (count <= at + 1) return;
+        x = words[at] & 1023u; y = (words[at] >> 16) & 511u;
+        w = ((words[at + 1] - 1) & 1023u) + 1;
+        h = (((words[at + 1] >> 16) - 1) & 511u) + 1;
+        if (op == 2) { x &= ~15u; w = ((words[at + 1] & 1023u) + 15) & ~15u; h = (words[at + 1] >> 16) & 511u; }
+        written(b, x, y, w, h);
+    } else if (op >= 0x20 && op < 0x80) {
+        x = b->area[0] & 1023u; y = (b->area[0] >> 10) & 511u;
+        w = b->area[1] & 1023u; h = (b->area[1] >> 10) & 511u;
+        if (w >= x && h >= y) written(b, x, y, w - x + 1, h - y + 1);
+    }
+}
+
+static uint64_t texture_revision(const frame_blend_t *b, const uint32_t *words) {
+    unsigned op = words[0] >> 24, page, clut, x, y, w, i, j;
+    unsigned u0 = 255, u1 = 0, v0 = 255, v1 = 0, at = 1;
+    unsigned left = 255, right = 0, top = 255, bottom = 0, shift;
+    uint64_t revision = 0;
+    if (!(op & 4)) return 0;
+    clut = words[2] >> 16;
+    page = words[(op & 16) ? 5 : 4] >> 16;
+    x = (page & 15) * 64; y = (page & 16) ? 256 : 0;
+    w = (page & 0x100) ? 256 : (page & 0x80) ? 128 : 64;
+    shift = w == 256 ? 0 : w == 128 ? 1 : 2;
+    for (i = 0; i < ((op & 8) ? 4u : 3u); ++i) {
+        unsigned u, v;
+        if (i && (op & 16)) ++at;
+        ++at;
+        u = words[at] & 255u; v = (words[at++] >> 8) & 255u;
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+        if (v < v0) v0 = v;
+        if (v > v1) v1 = v;
+    }
+    for (i = u0; i <= u1; ++i) {
+        unsigned u = (i & ~((b->window & 31u) * 8)) | (((b->window >> 10) & b->window & 31u) * 8);
+        if (u < left) left = u;
+        if (u > right) right = u;
+    }
+    for (i = v0; i <= v1; ++i) {
+        unsigned v = (i & ~(((b->window >> 5) & 31u) * 8)) | (((b->window >> 15) & (b->window >> 5) & 31u) * 8);
+        if (v < top) top = v;
+        if (v > bottom) bottom = v;
+    }
+    for (j = (y + top) / 16; j <= (y + bottom) / 16; ++j)
+        for (i = (x + (left >> shift)) / 16; i <= (x + (right >> shift)) / 16; ++i) {
+            uint64_t r = b->writes[j & 31][i & 63];
+            if (r > revision) revision = r;
+        }
+    if (!(page & 0x100)) {
+        x = (clut & 63) * 16; y = (clut >> 6) & 511;
+        w = (page & 0x80) ? 256 : 16;
+        for (i = 0; i < w; i += 16) {
+            uint64_t r = b->writes[y / 16][((x + i) & 1023) / 16];
+            if (r > revision) revision = r;
+        }
+    }
+    return revision;
+}
 
 void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packet) {
     unsigned op = packet[0] >> 24, corners = (op & 8) ? 4 : 3, i, k = 1;
@@ -173,6 +265,7 @@ void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packe
     l = &b->looks[b->look_count++];
     memset(l, 0, sizeof(*l));
     l->serial = serial; l->opcode = op;
+    l->texture = texture_revision(b, packet); l->window = b->window; l->mode = b->mode & 0xe00u;
     for (i = 0; i < 12 && i < 1 + corners * (1u + ((op & 4) ? 1u : 0u)) + ((op & 16) ? corners - 1 : 0); ++i) l->words[i] = packet[i];
     l->colours[0] = packet[0] & 0xffffffu;
     for (i = 0; i < corners; ++i) {
@@ -189,6 +282,11 @@ void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packe
 static int16_t low(uint32_t w) { return (int16_t)(uint16_t)(w & 0xffffu); }
 static int16_t high(uint32_t w) { return (int16_t)(uint16_t)(w >> 16); }
 
+static int facing(const uint32_t xy[4]) {
+    int64_t area = (int64_t)(low(xy[1]) - low(xy[0])) * (high(xy[2]) - high(xy[0])) -
+                   (int64_t)(high(xy[1]) - high(xy[0])) * (low(xy[2]) - low(xy[0]));
+    return (area > 0) - (area < 0);
+}
 /* The GTE's arithmetic shift and saturation, as gte.c has them. */
 static int64_t asr(int64_t n, unsigned bits) {
     return n >= 0 ? (int64_t)((uint64_t)n >> bits) : -1 - (int64_t)((uint64_t)(-1 - n) >> bits);
@@ -233,6 +331,9 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
         !grow((void **)&k->pages, &k->page_capacity, f->polygon_count, sizeof(*k->pages)) ||
         !grow((void **)&k->coloured, &k->coloured_capacity, f->polygon_count, sizeof(*k->coloured)) ||
         !grow((void **)&k->packets, &k->packet_capacity, f->polygon_count, sizeof(*k->packets))) return 0;
+    if (!grow((void **)&k->textures, &k->texture_capacity, f->polygon_count, sizeof(*k->textures)) ||
+        !grow((void **)&k->texture_windows, &k->window_capacity, f->polygon_count, sizeof(*k->texture_windows)) ||
+        !grow((void **)&k->draw_modes, &k->mode_capacity, f->polygon_count, sizeof(*k->draw_modes))) return 0;
     if (f->polygon_count) {
         memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
         memset(k->coloured, 0, f->polygon_count);
@@ -252,6 +353,21 @@ static int zero_translation(const kept_t *k, uint32_t run) {
     if (run >= k->run_count) return 0;
     t = k->setups[k->runs[run].setup].translation;
     return !t[0] && !t[1] && !t[2];
+}
+
+/* Terrain is identified in world space; a screen position can stand for
+ * several distant points, and one point may occur in several blocks. */
+static int terrain(const frame_blend_t *b, const frame_identity_polygon_t *q, unsigned age) {
+    unsigned c;
+    if (q->corners != 3 || !(kept_seen(b, age)->tag & FRAME_IDENTITY_POINTS)) return 0;
+    for (c = 0; c < q->corners; ++c) {
+        const kept_t *at;
+        if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] + age > 2 || q->projection[c] < 0) return 0;
+        at = kept_seen(b, q->age[c] + age);
+        if ((size_t)q->projection[c] >= at->projection_count || !zero_translation(at, at->projections[q->projection[c]].run))
+            return 0;
+    }
+    return 1;
 }
 
 /* The step a frame's points moved by and, per run, the setup its paired
@@ -1036,6 +1152,7 @@ static void attach_looks(frame_blend_t *b, kept_t *k, const frame_identity_frame
             memcpy(k->colours[at], l->colours, sizeof(l->colours));
             memcpy(k->packets[at], l->words, sizeof(l->words));
             k->pages[at] = l->page; k->coloured[at] = 1;
+            k->textures[at] = l->texture; k->texture_windows[at] = l->window; k->draw_modes[at] = l->mode;
         } else if (l->serial >= f->first_polygon + f->polygon_count) b->looks[kept++] = *l;
     }
     b->look_count = kept;
@@ -1084,6 +1201,48 @@ static int stepped_ahead(const kept_t *at, const kept_t *from, const int32_t *ah
     return 1;
 }
 
+/* An outgoing corner needs its projection in the older frame, not a pair
+ * with the frame before that. A newly arrived point may have been held then
+ * and still be an unambiguous endpoint for the interval being presented. */
+static void outgoing_corners(const frame_blend_t *b, frame_identity_polygon_t *q) {
+    unsigned c, d, age = 2;
+    const kept_t *from;
+    if (!(kept_seen(b, 1)->tag & FRAME_IDENTITY_POINTS)) return;
+    for (c = 0; c < q->corners; ++c)
+        if (q->state[c] == FRAME_IDENTITY_LINKED && q->age[c] < age) age = q->age[c];
+    if (age > 1) return;
+    from = kept_seen(b, age + 1);
+    for (c = 0; c < q->corners; ++c) {
+        int32_t chosen = -1;
+        int64_t best = INT64_MAX, second = INT64_MAX;
+        size_t i;
+        if (q->state[c] != FRAME_IDENTITY_UNPAIRED && q->state[c] != FRAME_IDENTITY_AMBIGUOUS) continue;
+        for (i = 0; i < from->projection_count; ++i) {
+            const frame_identity_projection_t *p = &from->projections[i];
+            int64_t near = INT64_MAX;
+            if (p->sxy != q->xy[c] || !zero_translation(from, p->run)) continue;
+            if (chosen >= 0 && !memcmp(p->input, from->projections[chosen].input, sizeof(p->input)) &&
+                !memcmp(p->view, from->projections[chosen].view, sizeof(p->view))) continue;
+            for (d = 0; d < q->corners; ++d) {
+                const frame_identity_projection_t *r;
+                int64_t distance = 0;
+                unsigned a;
+                if (d == c || q->state[d] != FRAME_IDENTITY_LINKED || q->age[d] != age || q->projection[d] < 0) continue;
+                r = &from->projections[q->projection[d]];
+                for (a = 0; a < 3; ++a) {
+                    int64_t delta = (int64_t)p->input[a] - r->input[a];
+                    distance += delta * delta;
+                }
+                if (distance < near) near = distance;
+            }
+            if (near < best) { second = best; best = near; chosen = (int32_t)i; }
+            else if (near < second) second = near;
+        }
+        if (chosen < 0 || (second != INT64_MAX && best * 4 >= second)) continue;
+        q->projection[c] = chosen; q->age[c] = (uint8_t)age; q->state[c] = FRAME_IDENTITY_LINKED;
+    }
+}
+
 /* Polygons of the frame before that the latest frame no longer draws because
  * they left the screen: on a fast camera move, what the older picture had at
  * the edge, which the newer one culls. Between the two they are drawn first,
@@ -1096,7 +1255,11 @@ static int stepped_ahead(const kept_t *at, const kept_t *from, const int32_t *ah
  * CPU no longer projects what it stops drawing at the screen's edge, so its
  * points stand where the step puts them, and a polygon of it with a corner off
  * the screen a game frame later is drawn beneath too: there is nothing beneath
- * the terrain but the clear colour. */
+ * the terrain but the clear colour. Interior terrain is the union of the two
+ * frames' triangles, each visible only while it keeps its drawn winding.
+ * The older packet keeps its texture coordinates and shading: it has no
+ * newer sample to blend with. A rewritten texture or changed drawing state
+ * cannot supply that look, so only the existing edge rule applies then. */
 static int leftovers(frame_blend_t *b, kept_t *cur) {
     kept_t *prev = kept_at(b, 1);
     size_t i, k;
@@ -1135,8 +1298,14 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
         int32_t x0 = INT32_MAX, x1 = INT32_MIN, y0 = INT32_MAX, y1 = INT32_MIN;
         vertex_t ahead[4];
         unsigned stepped = 0;
+        int world;
         leftover_t *l;
         if (b->continued[i] || !prev->coloured[i] || !drawn(&q)) continue;
+        outgoing_corners(b, &q);
+        world = terrain(b, &q, 1);
+        if (world && ((q.opcode & 2) || prev->texture_windows[i] != b->window ||
+            prev->draw_modes[i] != (b->mode & 0xe00u) ||
+            prev->textures[i] != texture_revision(b, prev->packets[i]))) world = 0;
         for (c = 0; c < q.corners; ++c) {
             int32_t p;
             const kept_t *at;
@@ -1153,7 +1322,7 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
             y0 = high(q.xy[c]) < y0 ? high(q.xy[c]) : y0; y1 = high(q.xy[c]) > y1 ? high(q.xy[c]) : y1;
         }
         if (c < q.corners) continue;
-        if (!(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1]) &&
+        if (!world && !(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1]) &&
             !(stepped && (x0 < 0 || y0 < 0 || x1 >= b->screen[0] || y1 >= b->screen[1]))) continue;
         if (!grow((void **)&b->leftovers, &b->leftover_capacity, b->leftover_count + 1, sizeof(*b->leftovers)) ||
             !grow((void **)&b->vertices, &b->vertex_capacity, b->vertex_count + q.corners, sizeof(*b->vertices))) return 0;
@@ -1167,6 +1336,7 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
         }
         if (c < q.corners) continue;
         memcpy(l->words, prev->packets[i], sizeof(l->words));
+        l->facing = world ? facing(prev->polygons[i].xy) : 0;
         b->vertex_count += q.corners;
         ++b->leftover_count;
     }
@@ -1479,6 +1649,7 @@ unsigned frame_blend_leftovers(const frame_blend_t *b) { return (unsigned)b->lef
 unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]) {
     const leftover_t *l;
     unsigned op, corners, c, k = 1, n;
+    uint32_t xy[4];
     if (index >= b->leftover_count || !den || num >= den) return 0;
     l = &b->leftovers[index];
     op = l->words[0] >> 24; corners = (op & 8) ? 4 : 3;
@@ -1487,10 +1658,25 @@ unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t n
     for (c = 0; c < corners; ++c) {
         int32_t view[3];
         if (c && (op & 16)) ++k;
-        words[k++] = place(b, &b->vertices[l->vertex[c]], num, den, view);
+        words[k++] = xy[c] = place(b, &b->vertices[l->vertex[c]], num, den, view);
         if (op & 4) ++k;
     }
+    if (l->facing && facing(xy) != l->facing) return 0;
     return n;
+}
+
+/* Incoming terrain is the other half of the same mesh: its newest packet
+ * does not make its back face visible earlier in the interval. */
+int frame_blend_visible(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den) {
+    uint64_t i = serial - b->info.first_polygon;
+    const frame_identity_polygon_t *q;
+    uint32_t xy[4];
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num >= den) return 1;
+    q = &kept_seen(b, 0)->polygons[i];
+    if (!terrain(b, q, 0)) return 1;
+    memcpy(xy, q->xy, sizeof(xy));
+    frame_blend_polygon(b, serial, num, den, xy, NULL);
+    return facing(xy) == facing(q->xy);
 }
 
 unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den,

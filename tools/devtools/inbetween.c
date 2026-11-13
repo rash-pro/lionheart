@@ -62,13 +62,19 @@ typedef struct {
 } counted_t;
 static void count_polygon(void *context, unsigned opcode, const uint32_t *packet) {
     counted_t *c = context;
-    (void)opcode;
-    if (c->blend) frame_blend_packet(c->blend, c->serial, packet);
+    (void)opcode; (void)packet;
     ++c->serial;
 }
 static void ignore_start(void *context, uint32_t start) { (void)context; (void)start; }
 static void ignore_vblank(void *context) { (void)context; }
-static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon, NULL};
+static void count_command(void *context, const uint32_t *packet, unsigned count) {
+    counted_t *c = context;
+    if (c->blend) {
+        frame_blend_packet(c->blend, c->serial, packet);
+        frame_blend_command(c->blend, packet, count);
+    }
+}
+static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon, count_command};
 
 /* A GPU state with the serial of its next polygon. */
 typedef struct {
@@ -448,6 +454,11 @@ static void feed_gp0(counted_t *c, const uint8_t *p, unsigned words, blend_at_t 
                     unsigned corners = (op & 8) ? 4 : 3, i, k = 1, mask, shades;
                     memcpy(packet, p, n * 4);
                     mask = frame_blend_polygon(at->blend, c->serial, at->num, at->den, xy, &at->check);
+                    if (!frame_blend_visible(at->blend, c->serial, at->num, at->den)) {
+                        xy[0] = le32(packet + 4);
+                        for (i = 1; i < corners; ++i) xy[i] = xy[0];
+                        mask = (1u << corners) - 1;
+                    }
                     shades = frame_blend_colours(at->blend, c->serial, at->num, at->den, colours);
                     if (at->layer && !at->after && mask && frame_layer_info(at->layer)->reason == FRAME_LAYER_MOVED &&
                         !frame_layer_moves(at->layer, at->offsets))
