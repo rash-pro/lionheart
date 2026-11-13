@@ -1,7 +1,7 @@
 # Frames on the world map
 
-Status: enabled on this branch after its identity check, but visual acceptance fails because
-of terrain cracks. Map-edge wrapping, flight and sea animation remain unverified.
+Status: enabled on this branch after its identity check. Two-frame terrain continuation fixes
+the main crack, but visual acceptance still fails: faces absent from both endpoints remain missing. Map-edge wrapping, flight and sea animation remain unverified.
 
 The fifth stage of presenting frames between the game's own: FF8's world map. Frame identity
 (`docs/frame-identity.md`) pairs a projected vertex with the vertex of the same transform run a game frame earlier,
@@ -108,13 +108,39 @@ whose pair remains undecided is separate from that zero-wrong count.
 
 ## Blending
 
-Blending (`docs/frame-blend.md`) draws paired and placed terrain points on a straight line in view space between
-their two places, and the models as in fields and battle. Terrain that leaves the screen has no projection a game
-frame later, since the CPU stops projecting it; a polygon of the frame before that the newer frame no longer draws,
-every corner linked, is drawn beneath everything between the two (`culled-at-edge`) when a corner of it stands off
-the screen a game frame later, its points where the step puts them: their input plus the step under the setup the
-newer frame projected the rest of their run under. Without it the edge the camera moves away from showed the clear
-colour, up to 200 pixels a picture along the top on the car route.
+For terrain with reliable endpoints and an unchanged material, the intermediate mesh is the union of
+both game frames' triangles. A triangle is drawn only while its intermediate signed screen area has
+the winding of the packet that supplied it. A triangle omitted in the newer frame because it collapses
+or turns away can therefore survive until its neighbours close over it. A newly arriving triangle is
+the other half of this rule: its presence in the newest packet list does not make its back face visible
+earlier in the interval. At alpha 1, only the newest recorded commands are drawn, unchanged.
+
+Existing terrain points follow their view-space endpoints. A point the newer frame no longer projects
+is reconstructed from its older input plus the agreed step, under the setup used for the rest of its
+run in the newer frame. This includes changes in camera rotation and projection distance H. The older
+endpoint needs a reliable projection, not a match to a third, still older frame. Ambiguous outgoing
+corners use the same nearest-world-point margin as terrain identification. Missing setup mappings,
+incompatible projection modes, near-plane clipping and missing history reject continuation. A synthetic
+rotation and H-change case checks closure through 257 presentation fractions; route captures cover
+turns, height changes and new blocks.
+
+An outgoing triangle is inserted before the first current polygon, after the clear, in its older draw
+order. Current terrain and objects cover it; it cannot paint over a nearer opaque current polygon.
+Continuations keep their relative older order. A private depth check of the three recordings found no
+visible farther continuation over a nearer continuation, across 8,431,793 overlapping pixel comparisons.
+This is evidence for these routes, not a proof for every terrain arrangement.
+
+The continued packet keeps its older UVs, texture page, palette, colour and Gouraud shading: it has no
+newer material sample to blend with. Interior continuation is rejected after a write to a sampled
+texture or palette tile, a texture-window or relevant drawing-mode change, or for a semitransparent
+packet. Revision tracking includes uploads, copies, fills and render-target writes. Its 16-pixel tiles
+can conservatively reject a usable material. The existing screen-edge fallback remains when the
+interior rule is rejected. Neither rule can supply a triangle omitted from both endpoint packet lists.
+
+Held terrain remains held. Independently releasing corners can separate copies of the same physical
+point: one follows a rigid turn, another a straight view-space path. Even with a common straight path,
+releasing holds exposes further faces absent from both endpoint lists. Those experiments were not
+applied; the interpolation placement functions and identity pairing are unchanged.
 
 ## Resets
 
@@ -139,27 +165,26 @@ same with the service off, on, recording, and in the oracle host.
 
 | Window | 3D corners moving | Changed screen still at the game's rate | Resets |
 |---|---:|---:|---|
-| walk, 1848–2600 (to the encounter's first frames) | 81.8% | 25.2% (14.2% of the screen a game frame) | 1848: initial history; 2384: the encounter |
+| walk, 1848–2600 (to the encounter's first frames) | 81.75% | 25.20% (14.2% of the screen a game frame) | 1848: initial history; 2384: the encounter |
 | walk, world map only, 1848–2380 | 85.2% | 7.8% (4.9%) | 1848: initial history |
-| town, 1900–3100 | 92.0% | 34.5% (13.3%) | 2114, 3023: a frame more than 8 VBlanks late; 2254, 2336: into the Garden; 2896: the menu closed |
-| car, 6560–7560 | 94.2% | 13.0% (7.7%) | none |
+| town, 1900–3100 | 92.00% | 34.46% (13.3%) | 2114, 3023: a frame more than 8 VBlanks late; 2254, 2336: into the Garden; 2896: the menu closed |
+| car, 6560–7560 | 94.19% | 12.96% (7.7%) | none |
 
 What still changes only at game frames: on foot, almost all of it (94%) is the minimap's globe and the other 2D;
 after the encounter starts, its opening effect. On the town route, the globe and the Garden's own backgrounds. On the
 car route, the minimap and 2D (53%), far terrain that blending holds where its neighbours did not pair (28%) and far
 terrain whose shading changes with distance (16%).
 
-The tool's automatic checks: no stray corners and no polygon that grows or shrinks on the world map (the 27 resized
-on the town route are in the Garden). Pixels left to the clear colour: 5 on foot and 110 on the town route, below the tool's
-per-picture reporting threshold; these counts are not zero. The car route has 821 pixels in 52 of
-1,001 pictures; 20 pictures meet the default 16-pixel reporting threshold. The visible crack is one
-pixel high across a row of terrain (below).
-
+The automatic checks on the complete recordings report zero stray corners and zero resized world
+polygons. The 27 resized polygons on the town route remain in the Garden at VBlank 2426. At a one-pixel
+reporting threshold, walking improves from 5 hole pixels to 0; town from 110 to 83 (7 world, 76 Garden);
+car from 821 to 205. All remaining occurrences are classified below. A zero stray/resized count does
+not imply a closed mesh.
 
 ## Verification status
 
 The identity check and visual acceptance are separate gates. The world map is enabled on this branch,
-but the visible car crack fails the no-new-wrong-pictures gate. It must not be reported as release-ready.
+but the remaining missing faces fail the closed-world-mesh gate. It must not be reported as release-ready.
 The camera check proves terrain displacement on the recorded routes; it does not prove visibility,
 texture continuity, or geometry at unvisited locations.
 
@@ -169,75 +194,88 @@ is handled or that it resets safely.
 
 ## Limits
 
-The crack at car VBlank 6802 has been traced to an omitted terrain triangle. All corners
-of the two bordering polygons are paired and moving; their duplicate shared point gets
-the same intermediate position. The intervening triangle from the previous game frame
-collapses to zero projected area in the newer frame, so the game omits it. Between those
-frames it still covers pixels. Blending reconstructs its corners by the step but rejects
-the triangle because it is inside the screen, leaving 69 clear-colour pixels.
+The car crack at VBlank 6802 is fixed: the older triangle remains in the intermediate mesh before
+collapsing to zero area, closing all 69 pixels. The final rule reduces the complete car recording from
+821 pixels in 52 pictures to 205 in 23, and removes all five walking pixels. Moving-corner percentages
+are unchanged. It also fixes 27 world pixels on the town route.
 
-A diagnostic continuation of collapsed triangles removes that occurrence but leaves 591
-hole pixels in 47 car pictures. Including triangles whose projected orientation changes
-reduces this to 253 pixels in 26 pictures, with 94.19% of corners moving and zero stray
-corners or resized polygons. Neither experiment is an accepted runtime change. Bypassing
-neighbour holds as well increases motion to 99.56% but introduces new defects: 360 car
-hole pixels in 31 pictures and a new five-pixel walking occurrence at 1935. A common
-terrain placement rule alone therefore does not resolve the visibility problem. These
-experiments cover the existing clip windows, not new locations or final acceptance.
+Every remaining world detection was classified with endpoint and intermediate corners, and checked
+against actual triangle packets elsewhere in the recording. Of 212 detected world pixels:
 
-- A crack one pixel high opens for a single picture, now and then, along a row where terrain polygons meet across
-  the screen while the car drives (52 of 1,001 pictures have hole pixels; 20 meet the default reporting threshold). The polygons on its two sides are not
-  a complete mesh between the game frames when an intervening triangle is culled; other
-  occurrences still need individual classification.
-- Far terrain that blending holds (a neighbour of it did not pair) and far terrain whose shading changes with
-  distance still change at the game's rate: a band across the far distance on the car route.
-- The minimap (the globe on the first disc, the flat map later) and all 2D change at the game's rate; so does the
-  encounter's opening effect.
-- Not covered by a route: the sea, flying, and the map's edges. Neither the local vote nor the camera
-  check has been exercised across a map edge; correct wrapping or a safe reset is not established.
+- 197 belong to faces absent from both endpoint lists: 190 car pixels and 7 town pixels. Their integer
+  signed areas are nonpositive at both endpoints and positive between. Some are front-facing below
+  the game's integer culling precision, while others acquire the intermediate positive area through
+  rounding. At car 6890, the actual face's first submitted packet is at 6892: a two-frame union cannot
+  recover its material from the adjacent endpoint packets.
+- Five, at car 6848, belong to a face degenerate in the older frame and wholly beyond the right screen
+  edge in the newer frame. Neither packet list contains it. Its intermediate triangle covers five pixels.
+- Nine are transparent texture samples inside a current triangle, and one is an opaque near-black texel
+  shaded to black. These are at car 6696–6708. Independent packet/VRAM replay identifies the samples;
+  they are not gaps in connectivity. The hole checker still counts all ten; no exception hides them.
 
+Thus 202 geometric hole pixels remain in 17 world pictures. Observed connectivity, rather than a
+hypothetical quad split or T junction, accounts for every one. The 76 Garden detections and 27 resized
+Garden polygons also occur on a fresh redraw built from trunk b2076a6; they are field defects.
+
+Removing holds independently separates shared points at car 7138: identical endpoints at (40,189)
+produce (40,189) along one path and (40,190) along the other. Two diverging shared edges explain its
+66 new hole pixels. A common straight path removes that fault, but releasing holds still opens 30 new
+pixels at 7202: two faces omitted at both endpoints, each signed area -2 there and +29/+30 between.
+That variant has 236 car detections instead of 205. Boundary holds introduce different holes, while
+historical face retention lacks a proven topology/material lifetime and cannot recover a packet before
+it was first submitted. These variants stay outside production.
+
+Far held terrain, distance-dependent shading, the minimap and other 2D still change at the game's rate.
+Sea animation, flight, vehicle exit and map-edge wrapping/reset remain unverified. The optional routes
+were not added while the prerequisite visual gate fails.
 
 ## Headless live evidence
 
-At native resolution, the live software output equals the offline output on all 531 compared walking
-pictures and all 999 car pictures: zero differing pixels. The comparison crops the offline 320 by 240
-canvas to the live 320 by 224 display (rows 8 through 231) and aligns the same presentation interval.
-These captures were made after the integration merge. This establishes picture equality, not display pacing.
+At native resolution, fresh live software captures equal the final offline output on all 532 walking
+pictures and all 1,000 car pictures: zero differing pixels, including the last picture of each window.
+The comparison crops the offline 320 by 240 canvas to live 320 by 224 (rows 8 through 231) and aligns
+the same presentation interval. The earlier comparison covered only 531/999 pictures because its
+shorter offline window omitted the last one. This establishes picture equality, not display pacing.
 
-The headless timing capture reports software presentation mean/p99 of 0.989/1.813 ms over 532 walking
-VBlanks and 0.929/1.696 ms over 1,000 car VBlanks with Smooth motion on. Total game-thread CPU time,
-including emulation and presentation, was 11.67/36.70 ms and 8.99/23.60 ms respectively. These are one
-capture under shared-machine load, not an isolated performance comparison or a frame-rate guarantee.
+No timing or display-pacing claim is made for this continuation change.
 
 ## Visual defects observed
 
-The car's clear-colour cracks reported at or above the tool's 16-pixel threshold occur at VBlanks
-6776, 6802, 6820, 6852, 6880, 6888, 6890, 6892, 6894, 7160, 7162, 7170, 7174, 7178, 7202,
-7222, 7226, 7244, 7246 and 7254. The aggregate is 821 pixels, including smaller occurrences below
-that threshold. Inspection of 6801–6803 confirms a black horizontal crack in the middle picture
-that is absent from the adjacent game pictures. Zero stray corners and zero resized world polygons
-therefore do not establish that the pictures are correct.
+All original one-pixel hole occurrences were inspected with their two adjacent game pictures, together
+with turn, height-change and block-entry samples. No additional wrong picture was found beyond the
+remaining world geometry below and the unchanged Garden defects. The original 6802 crack is closed.
 
-Repeating the diagnostics with a one-pixel reporting threshold also finds walk 2346 (5 pixels), and town
-1958 (6), 1964 (7), 1966 (7), 1970 (7), 1974 (7), 2428 (2), 2430 (2), 2432 (3), 2434 (1),
-2436 (4), 2438 (10), 2440 (2), 2442 (14), 2444 (5), 2446 (2), 2448 (8), 2450 (9), 2452 (14).
-The town occurrences from 2428 onward are inside the Garden. These are automated hole detections;
-they are not all individually confirmed visible defects. The car crack is visually confirmed.
+Remaining geometric world defects, as VBlank (pixels):
 
-Below the 16-pixel threshold, the car also has holes at 6610 (5), 6618 (5), 6628 (14), 6696 (4),
-6698 (2), 6700 (3), 6702 (1), 6704 (1), 6706 (1), 6708 (1), 6774 (5), 6788 (14), 6848 (5),
-6858 (10), 6882 (10), 7106 (3), 7148 (15), 7154 (3), 7166 (12), 7168 (9), 7180 (3), 7186 (12),
-7188 (9), 7192 (7), 7214 (12), 7230 (2), 7252 (1), 7256 (7), 7260 (10), 7262 (10), 7272 (9)
-and 7282 (8): 52 affected pictures total, still 821 pixels. The default report lists only 20 of those pictures.
+- Town: 1966 (7).
+- Car: 6610 (5), 6618 (5), 6788 (2), 6848 (5), 6882 (10), 6888 (25), 6890 (33),
+  7166 (10), 7170 (18), 7188 (9), 7192 (4), 7244 (27), 7246 (28), 7252 (1),
+  7260 (10), 7262 (3).
+
+Material detections, still counted: car 6696 (1), 6698 (2), 6700 (3), 6702 (1), 6704 (1),
+6706 (1), 6708 (1). Nine sample transparent texels; at 6700 one opaque texel shades to black.
+
+Unchanged Garden detections: 2428 (2), 2430 (2), 2432 (3), 2434 (1), 2436 (4), 2438 (10),
+2440 (2), 2442 (14), 2444 (5), 2446 (2), 2448 (8), 2450 (9), 2452 (14). A fresh trunk
+comparison reproduces all 76 pixels at these VBlanks, with 32 alpha-1 game frames exact.
+
+The checker was not weakened. One-pixel enumeration uses a private threshold-only build; the production
+tool retains its default reporting threshold. Aggregate counts include every detected pixel.
 
 ## Suite receipts
 
-The integrated tree's standard Linux suite selected 4,145 tests: 4,143 passed and two were skipped.
-A fresh run with `-Wl,--as-needed` and an external `TMPDIR` containing `..` gives the same counts,
-with no failures (492.91 seconds). Both runs use the default player and dummy SDL video/audio drivers.
+The terrain-continuation tree's standard Linux suite selected 4,154 tests: 4,152 passed and two were
+skipped, using the default player and dummy SDL video/audio drivers. A fresh run on 2026-11-13
+reproduced these counts with `ctest -LE "game|realtime" -j4`. The game tier was not rerun.
+Nine new tests
+cover collapse, reversed/incoming facing, an older endpoint without earlier history, rotation plus H
+changes, and texture, palette, window and render-target invalidation. The synthetic collapsing patch
+has 12,000 clear pixels without the change and zero with it across all 257 fractions. The old incoming
+visibility path also fails with 142 visibility errors.
 The omitted cases report an empty GTE public-vector parameter set and an unavailable
 `VK_LAYER_KHRONOS_validation`, respectively.
-The complete owned-game tier passed all 25 tests with no skips (2,120.90 seconds), including native/
+Before this continuation change, the complete owned-game tier passed all 25 tests with no skips
+(2,120.90 seconds), including native/
 interpreter picture and state equality and the separately built oracle and module hosts.
 Windows and realtime pacing are outside this verification.
 
