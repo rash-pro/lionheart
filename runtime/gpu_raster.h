@@ -26,6 +26,9 @@ typedef struct {
     float corner[3][2];
     float corner_w[3];
     int cornered;
+    /* Optional presentation diagnostic: every accepted fragment, even unchanged. */
+    void (*fragment)(void *, int x, int y, int semi);
+    void *fragment_context;
 } gpu_raster_t;
 
 void gpu_raster_triangle(gpu_raster_t *, gpu_vertex_t a, gpu_vertex_t b,

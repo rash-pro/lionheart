@@ -127,6 +127,10 @@ typedef struct {
 unsigned frame_blend_polygon(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den,
                              uint32_t xy[4], frame_blend_check_t *check);
 
+/* Whether terrain faces the viewer at this fraction. Other geometry and
+ * alpha 1 keep the recorded visibility. */
+int frame_blend_visible(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den);
+
 /* The corners frame_blend_polygon moves, to a fraction of a pixel, for a
  * renderer that draws finer than the PlayStation's pixels: the same mask, and
  * positions that differ from its whole pixels by less than one. Both ends of
@@ -144,6 +148,8 @@ unsigned frame_blend_precise(const frame_blend_t *, uint64_t serial, uint32_t nu
  * (docs/frame-identity.md), before the identity frame that holds it: what
  * blending knows of a polygon's look. */
 void frame_blend_packet(frame_blend_t *, uint64_t serial, const uint32_t *packet);
+/* Commands in guest order, for texture and palette write tracking. */
+void frame_blend_command(frame_blend_t *, const uint32_t *packet, unsigned count);
 
 /* The corner colours of a polygon of the latest frame at alpha = num / den,
  * between those of the same polygon a game frame earlier and its own: a
@@ -153,6 +159,9 @@ void frame_blend_packet(frame_blend_t *, uint64_t serial, const uint32_t *packet
  * returns a mask of those that differ from the latest frame's; 0 when its
  * colours stay as recorded. */
 unsigned frame_blend_colours(const frame_blend_t *, uint64_t serial, uint32_t num, uint32_t den, uint32_t colours[4]);
+
+/* Current opaque terrain at its recorded positions, with material state. */
+unsigned frame_blend_ground(const frame_blend_t *, unsigned index, uint32_t num, uint32_t den, uint32_t words[14]);
 
 /* What the frame before drew at the edge of the screen and the latest frame
  * no longer draws, having moved it off the screen: a fast camera move would

@@ -180,6 +180,7 @@ void frame_present_command(frame_present_t *p, const uint32_t *packet, unsigned 
     unsigned op = packet[0] >> 24;
     if (p->failed) return;
     if (op >= 0x20 && op < 0x40) frame_blend_packet(p->blend, polygon, packet);
+    frame_blend_command(p->blend, packet, count);
     if (!frame_layer_command(p->layer, packet, count)) { p->failed = 1; ++p->totals.failures; }
 }
 
@@ -220,6 +221,29 @@ static void beneath(frame_present_t *p, at_t *at) {
     uint32_t page = gpu_raster_state(p->gpu)->mode;
     int drawn = 0;
     at->beneath = 1;
+    if (at->num && at->num < at->den) {
+        const gpu_raster_t *state = gpu_raster_state(p->gpu);
+        uint32_t mode = 0xe1000000u | state->mode;
+        uint32_t window = 0xe2000000u | state->window;
+        for (i = 0; i < frame_blend_info(p->blend)->polygon_count; ++i) {
+            uint32_t ground[14];
+            uint8_t packet[56];
+            n = frame_blend_ground(p->blend, i, at->num, at->den, ground);
+            if (!n) continue;
+            gpu_gp0(p->gpu, ground[0]);
+            gpu_gp0(p->gpu, ground[1]);
+            for (k = 2; k < n; ++k) put_le32(packet + (k - 2) * 4, ground[k]);
+            /* Ground under the picture stays at whole pixels: it is no polygon of
+             * the stream, and must not take the next one's precision. */
+            if (p->precision && p->fractions) p->precise_applied = 1;
+            gpu_gp0_words(p->gpu, packet, n - 2);
+            /* Injected ground must not consume recorded polygon identities. */
+            p->serial = serial;
+        }
+        gpu_gp0(p->gpu, mode);
+        gpu_gp0(p->gpu, window);
+    }
+
     for (i = 0; i < frame_blend_leftovers(p->blend); ++i) {
         uint32_t words[12];
         uint8_t packet[12 * 4];
@@ -369,7 +393,14 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
         } else if (op >= 0x20 && op < 0x40) {
             uint32_t xy[4], colours[4];
             unsigned corners = (op & 8) ? 4 : 3, k = 1, mask, shades;
+            int visible = frame_blend_visible(p->blend, p->serial, at->num, at->den);
             mask = frame_blend_polygon(p->blend, p->serial, at->num, at->den, xy, NULL);
+            if (!visible) {
+                /* Consume the packet and its state, without rasterizing it. */
+                xy[0] = le32(packet + 4);
+                for (i = 1; i < corners; ++i) xy[i] = xy[0];
+                mask = (1u << corners) - 1;
+            }
             shades = frame_blend_colours(p->blend, p->serial, at->num, at->den, colours);
             for (i = 0; i < corners; ++i) {
                 if (i && (op & 16)) {
@@ -382,7 +413,10 @@ static void feed(frame_present_t *p, const uint8_t *w, unsigned words, at_t *at)
             }
             if (shades & 1u) put_le32(packet, (le32(packet) & 0xff000000u) | colours[0]);
             if (mask || shades) at->blended = 1;
-            if (p->precision && p->fractions) precise(p, packet, op, at->num, at->den, mask);
+            /* A polygon collapsed to a point gets no part of a pixel: finer than
+             * a pixel, that would give it area back. */
+            if (!visible) p->precise_applied = p->precision && p->fractions;
+            else if (p->precision && p->fractions) precise(p, packet, op, at->num, at->den, mask);
             else if (mask && p->fractions) {
                 float exact[4][2], fraction[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
                 unsigned moving = frame_blend_fractions(p->blend, p->serial, at->num, at->den, exact);

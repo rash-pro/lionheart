@@ -15,6 +15,13 @@ typedef struct {
     frame_identity_setup_t *setups;
     uint8_t *jumped;             /* per run: it jumped, by the cut rule applied to it alone */
     struct motion *motions;      /* per run: how it moves from the frame before */
+    /* Points the CPU moved by a step (FRAME_IDENTITY_POINTS): the step from
+     * the frame before, as its pairs give it, and per run the setup of the
+     * frame before its paired points stood under, or -1. A placed point
+     * stood at its input less the step under that setup. */
+    int32_t step[3];
+    int stepped;
+    int32_t *placed;
     /* Its polygons, with the corners blending resolved, and an index of
      * them by linked corner: (corner, age, projection) to the first polygon,
      * then per polygon corner the next with the same. */
@@ -25,11 +32,15 @@ typedef struct {
     uint32_t (*colours)[4];
     uint32_t (*packets)[12];
     uint32_t *pages;
+    uint64_t *textures;
+    uint32_t *texture_windows, *draw_modes;
+    size_t texture_capacity, window_capacity, mode_capacity;
     uint8_t *coloured;
     uint64_t *corner_keys;
     int32_t *corner_heads, *corner_next;
     size_t projection_count, run_count, setup_count, polygon_count;
     size_t projection_capacity, run_capacity, setup_capacity, jumped_capacity, motion_capacity, polygon_capacity;
+    size_t placed_capacity;
     size_t corner_capacity, next_capacity, colour_capacity, page_capacity, coloured_capacity, packet_capacity;
 } kept_t;
 
@@ -39,13 +50,16 @@ typedef struct {
     uint32_t opcode, page;
     uint32_t colours[4];
     uint32_t words[12];
+    uint64_t texture;
+    uint32_t window, mode;
 } look_t;
 
-/* A polygon of the frame before that the latest no longer draws, having left
- * the screen: its packet and its corners' vertices. */
+/* A polygon of the frame before that the latest no longer draws: its packet
+ * and its corners' vertices. Terrain is culled by facing as well as bounds. */
 typedef struct {
     uint32_t words[12];
     int32_t vertex[4];
+    int facing;                 /* terrain keeps the winding it was drawn with */
 } leftover_t;
 
 /* Both ends of a vertex: where it stood in the frame before (a) and now (b). */
@@ -105,8 +119,13 @@ struct frame_blend {
      * and what the latest frame no longer draws. */
     uint8_t *continued;
     int32_t *forward[2];
+    /* Per run of the frames before whose points the CPU moves by a step: the
+     * setup the frame a game frame later projected them under, or -1. */
+    int32_t *ahead[2];
     leftover_t *leftovers;
-    size_t continued_capacity, forward_capacity[2], leftover_count, leftover_capacity;
+    size_t continued_capacity, forward_capacity[2], ahead_capacity[2], leftover_count, leftover_capacity;
+    uint64_t writes[32][64], revision;
+    uint32_t window, mode, area[2];
     int32_t screen[2];           /* the picture's size in packet coordinates */
 };
 
@@ -122,7 +141,7 @@ static int grow(void **items, size_t *capacity, size_t needed, size_t size) {
 
 frame_blend_t *frame_blend_create(void) {
     frame_blend_t *b = calloc(1, sizeof(frame_blend_t));
-    if (b) { b->screen[0] = 320; b->screen[1] = 240; }
+    if (b) { frame_blend_reset(b); b->screen[0] = 320; b->screen[1] = 240; }
     return b;
 }
 
@@ -133,11 +152,12 @@ void frame_blend_destroy(frame_blend_t *b) {
     if (!b) return;
     for (i = 0; i < 3; ++i) {
         free(b->kept[i].projections); free(b->kept[i].runs); free(b->kept[i].setups); free(b->kept[i].jumped);
-        free(b->kept[i].motions); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
+        free(b->kept[i].motions); free(b->kept[i].placed); free(b->kept[i].polygons); free(b->kept[i].corner_keys); free(b->kept[i].corner_heads);
         free(b->kept[i].corner_next); free(b->kept[i].colours); free(b->kept[i].packets); free(b->kept[i].pages); free(b->kept[i].coloured);
+        free(b->kept[i].textures); free(b->kept[i].texture_windows); free(b->kept[i].draw_modes);
     }
     free(b->looks); free(b->before); free(b->hidden); free(b->fan); free(b->continued); free(b->forward[0]); free(b->forward[1]);
-    free(b->leftovers);
+    free(b->ahead[0]); free(b->ahead[1]); free(b->leftovers);
     free(b->corners); free(b->codes); free(b->vertices); free(b->keys); free(b->slots); free(b->moves); free(b->surfaces);
     free(b);
 }
@@ -147,11 +167,94 @@ void frame_blend_reset(frame_blend_t *b) {
     for (i = 0; i < 3; ++i) b->kept[i].valid = 0;
     memset(&b->info, 0, sizeof(b->info));
     b->look_count = 0; b->leftover_count = 0;
+    memset(b->writes, 0, sizeof(b->writes));
+    b->revision = 0; b->window = b->mode = 0;
+    b->area[0] = 0; b->area[1] = 1023u | 511u << 10;
 }
 
 const frame_blend_info_t *frame_blend_info(const frame_blend_t *b) { return &b->info; }
 
 void frame_blend_straight(frame_blend_t *b, int on) { b->straight = on != 0; }
+
+/* A continued packet must not sample a different texture or palette. Track
+ * writes by VRAM tile, including render targets used as textures. A tile
+ * touched outside the sampled area may reject a continuation conservatively. */
+static void written(frame_blend_t *b, unsigned x, unsigned y, unsigned w, unsigned h) {
+    unsigned i, j;
+    ++b->revision;
+    for (j = 0; j < h; j += 16 - ((y + j) & 15))
+        for (i = 0; i < w; i += 16 - ((x + i) & 15))
+            b->writes[((y + j) & 511) / 16][((x + i) & 1023) / 16] = b->revision;
+}
+
+void frame_blend_command(frame_blend_t *b, const uint32_t *words, unsigned count) {
+    unsigned op, x, y, w, h;
+    if (!count) return;
+    op = words[0] >> 24;
+    if (op == 0xe1) b->mode = words[0] & 0x3fffu;
+    else if (op == 0xe2) b->window = words[0] & 0xfffffu;
+    else if (op == 0xe3 || op == 0xe4) b->area[op - 0xe3] = words[0] & 0xfffffu;
+    else if ((op >= 0x80 && op < 0xc0) || op == 2) {
+        unsigned at = op < 0xa0 && op >= 0x80 ? 2 : 1;
+        if (count <= at + 1) return;
+        x = words[at] & 1023u; y = (words[at] >> 16) & 511u;
+        w = ((words[at + 1] - 1) & 1023u) + 1;
+        h = (((words[at + 1] >> 16) - 1) & 511u) + 1;
+        if (op == 2) { x &= ~15u; w = ((words[at + 1] & 1023u) + 15) & ~15u; h = (words[at + 1] >> 16) & 511u; }
+        written(b, x, y, w, h);
+    } else if (op >= 0x20 && op < 0x80) {
+        x = b->area[0] & 1023u; y = (b->area[0] >> 10) & 511u;
+        w = b->area[1] & 1023u; h = (b->area[1] >> 10) & 511u;
+        if (w >= x && h >= y) written(b, x, y, w - x + 1, h - y + 1);
+    }
+}
+
+static uint64_t texture_revision(const frame_blend_t *b, const uint32_t *words) {
+    unsigned op = words[0] >> 24, page, clut, x, y, w, i, j;
+    unsigned u0 = 255, u1 = 0, v0 = 255, v1 = 0, at = 1;
+    unsigned left = 255, right = 0, top = 255, bottom = 0, shift;
+    uint64_t revision = 0;
+    if (!(op & 4)) return 0;
+    clut = words[2] >> 16;
+    page = words[(op & 16) ? 5 : 4] >> 16;
+    x = (page & 15) * 64; y = (page & 16) ? 256 : 0;
+    w = (page & 0x100) ? 256 : (page & 0x80) ? 128 : 64;
+    shift = w == 256 ? 0 : w == 128 ? 1 : 2;
+    for (i = 0; i < ((op & 8) ? 4u : 3u); ++i) {
+        unsigned u, v;
+        if (i && (op & 16)) ++at;
+        ++at;
+        u = words[at] & 255u; v = (words[at++] >> 8) & 255u;
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+        if (v < v0) v0 = v;
+        if (v > v1) v1 = v;
+    }
+    for (i = u0; i <= u1; ++i) {
+        unsigned u = (i & ~((b->window & 31u) * 8)) | (((b->window >> 10) & b->window & 31u) * 8);
+        if (u < left) left = u;
+        if (u > right) right = u;
+    }
+    for (i = v0; i <= v1; ++i) {
+        unsigned v = (i & ~(((b->window >> 5) & 31u) * 8)) | (((b->window >> 15) & (b->window >> 5) & 31u) * 8);
+        if (v < top) top = v;
+        if (v > bottom) bottom = v;
+    }
+    for (j = (y + top) / 16; j <= (y + bottom) / 16; ++j)
+        for (i = (x + (left >> shift)) / 16; i <= (x + (right >> shift)) / 16; ++i) {
+            uint64_t r = b->writes[j & 31][i & 63];
+            if (r > revision) revision = r;
+        }
+    if (!(page & 0x100)) {
+        x = (clut & 63) * 16; y = (clut >> 6) & 511;
+        w = (page & 0x80) ? 256 : 16;
+        for (i = 0; i < w; i += 16) {
+            uint64_t r = b->writes[y / 16][((x + i) & 1023) / 16];
+            if (r > revision) revision = r;
+        }
+    }
+    return revision;
+}
 
 void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packet) {
     unsigned op = packet[0] >> 24, corners = (op & 8) ? 4 : 3, i, k = 1;
@@ -162,6 +265,7 @@ void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packe
     l = &b->looks[b->look_count++];
     memset(l, 0, sizeof(*l));
     l->serial = serial; l->opcode = op;
+    l->texture = texture_revision(b, packet); l->window = b->window; l->mode = b->mode & 0xe00u;
     for (i = 0; i < 12 && i < 1 + corners * (1u + ((op & 4) ? 1u : 0u)) + ((op & 16) ? corners - 1 : 0); ++i) l->words[i] = packet[i];
     l->colours[0] = packet[0] & 0xffffffu;
     for (i = 0; i < corners; ++i) {
@@ -178,11 +282,30 @@ void frame_blend_packet(frame_blend_t *b, uint64_t serial, const uint32_t *packe
 static int16_t low(uint32_t w) { return (int16_t)(uint16_t)(w & 0xffffu); }
 static int16_t high(uint32_t w) { return (int16_t)(uint16_t)(w >> 16); }
 
+static int facing(const uint32_t xy[4]) {
+    int64_t area = (int64_t)(low(xy[1]) - low(xy[0])) * (high(xy[2]) - high(xy[0])) -
+                   (int64_t)(high(xy[1]) - high(xy[0])) * (low(xy[2]) - low(xy[0]));
+    return (area > 0) - (area < 0);
+}
 /* The GTE's arithmetic shift and saturation, as gte.c has them. */
 static int64_t asr(int64_t n, unsigned bits) {
     return n >= 0 ? (int64_t)((uint64_t)n >> bits) : -1 - (int64_t)((uint64_t)(-1 - n) >> bits);
 }
 static int64_t saturate(int64_t n, int64_t low, int64_t high) { return n < low ? low : n > high ? high : n; }
+
+/* Where the GTE puts a point under a setup in view space, (TR * 4096 + RT * V)
+ * >> sf, for its input moved by a step (sign 1) or back by it (sign -1). */
+static void stepped_view(const frame_identity_setup_t *s, const int16_t *input, const int32_t *step, int sign, int32_t view[3]) {
+    unsigned i, k;
+    for (i = 0; i < 3; ++i) {
+        int64_t n = (int64_t)s->translation[i] * 4096;
+        for (k = 0; k < 3; ++k) {
+            uint32_t w = s->rotation[(i * 3 + k) / 2];
+            n += (int64_t)((i * 3 + k) & 1 ? high(w) : low(w)) * ((int64_t)input[k] + sign * (int64_t)step[k]);
+        }
+        view[i] = (int32_t)(uint32_t)(uint64_t)asr(n, s->shift);
+    }
+}
 
 uint32_t frame_blend_project(const int32_t view[3], int32_t ofx, int32_t ofy, uint32_t h, uint32_t shift, uint32_t lm) {
     /* RTPS: IR1-2 saturate MAC1-2; SZ3 is MAC3 at a fixed 12-bit shift. */
@@ -208,6 +331,9 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
         !grow((void **)&k->pages, &k->page_capacity, f->polygon_count, sizeof(*k->pages)) ||
         !grow((void **)&k->coloured, &k->coloured_capacity, f->polygon_count, sizeof(*k->coloured)) ||
         !grow((void **)&k->packets, &k->packet_capacity, f->polygon_count, sizeof(*k->packets))) return 0;
+    if (!grow((void **)&k->textures, &k->texture_capacity, f->polygon_count, sizeof(*k->textures)) ||
+        !grow((void **)&k->texture_windows, &k->window_capacity, f->polygon_count, sizeof(*k->texture_windows)) ||
+        !grow((void **)&k->draw_modes, &k->mode_capacity, f->polygon_count, sizeof(*k->draw_modes))) return 0;
     if (f->polygon_count) {
         memcpy(k->polygons, f->polygons, f->polygon_count * sizeof(*k->polygons));
         memset(k->coloured, 0, f->polygon_count);
@@ -219,6 +345,54 @@ static int keep(kept_t *k, const frame_identity_frame_t *f) {
     if (f->setup_count) memcpy(k->setups, f->setups, f->setup_count * sizeof(*k->setups));
     k->projection_count = f->projection_count; k->run_count = f->run_count; k->setup_count = f->setup_count;
     k->number = f->number; k->tag = f->tag; k->valid = 1;
+    return 1;
+}
+
+static int zero_translation(const kept_t *k, uint32_t run) {
+    const int32_t *t;
+    if (run >= k->run_count) return 0;
+    t = k->setups[k->runs[run].setup].translation;
+    return !t[0] && !t[1] && !t[2];
+}
+
+/* Terrain is identified in world space; a screen position can stand for
+ * several distant points, and one point may occur in several blocks. */
+static int terrain(const frame_blend_t *b, const frame_identity_polygon_t *q, unsigned age) {
+    unsigned c;
+    if (q->corners != 3 || !(kept_seen(b, age)->tag & FRAME_IDENTITY_POINTS)) return 0;
+    for (c = 0; c < q->corners; ++c) {
+        const kept_t *at;
+        if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] + age > 2 || q->projection[c] < 0) return 0;
+        at = kept_seen(b, q->age[c] + age);
+        if ((size_t)q->projection[c] >= at->projection_count || !zero_translation(at, at->projections[q->projection[c]].run))
+            return 0;
+    }
+    return 1;
+}
+
+/* The step a frame's points moved by and, per run, the setup its paired
+ * points stood under a game frame earlier, for its placed points. Every pair
+ * of points under a zero translation outside runs paired whole is a step
+ * pair: they must agree. */
+static int place_plan(kept_t *cur, const kept_t *prev) {
+    size_t i;
+    cur->stepped = 0;
+    if (!grow((void **)&cur->placed, &cur->placed_capacity, cur->run_count, sizeof(*cur->placed))) return 0;
+    for (i = 0; i < cur->run_count; ++i) cur->placed[i] = -1;
+    if (!(cur->tag & FRAME_IDENTITY_POINTS) || !prev->valid || prev->number + 1 != cur->number) return 1;
+    for (i = 0; i < cur->projection_count; ++i) {
+        const frame_identity_projection_t *p = &cur->projections[i], *o;
+        int32_t d[3];
+        unsigned k;
+        if (p->previous < 0 || (size_t)p->previous >= prev->projection_count || !zero_translation(cur, p->run) ||
+            cur->runs[p->run].previous >= 0) continue;
+        o = &prev->projections[p->previous];
+        if (!zero_translation(prev, o->run)) { cur->stepped = 0; return 1; }
+        for (k = 0; k < 3; ++k) d[k] = p->input[k] - o->input[k];
+        if (!cur->stepped) { memcpy(cur->step, d, sizeof(d)); cur->stepped = 1; }
+        else if (memcmp(cur->step, d, sizeof(d))) { cur->stepped = 0; return 1; }
+        if (cur->placed[p->run] < 0) cur->placed[p->run] = (int32_t)prev->runs[o->run].setup;
+    }
     return 1;
 }
 
@@ -782,8 +956,10 @@ enum { ENDS_OK, ENDS_SERVICE, ENDS_PROJECTION, ENDS_RESET, ENDS_JUMP };
 /* The two ends of a linked corner, or why there are none to trust. */
 static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsigned c, vertex_t *v) {
     const kept_t *at, *before;
-    const frame_identity_projection_t *p, *o;
+    const frame_identity_projection_t *p;
     const frame_identity_setup_t *sp, *so;
+    int32_t oview[3];
+    uint32_t osxy;
     if (q->state[c] == FRAME_IDENTITY_NO_HISTORY || q->state[c] == FRAME_IDENTITY_EXCLUDED_CORNER) return ENDS_RESET;
     if (q->state[c] != FRAME_IDENTITY_LINKED) return ENDS_SERVICE;
     if (q->age[c] > 1) return ENDS_RESET;
@@ -792,22 +968,38 @@ static unsigned ends(frame_blend_t *b, const frame_identity_polygon_t *q, unsign
         return ENDS_RESET;
     if (q->projection[c] < 0 || (size_t)q->projection[c] >= at->projection_count) return ENDS_PROJECTION;
     p = &at->projections[q->projection[c]];
-    if (p->previous < 0 || (size_t)p->previous >= before->projection_count) return ENDS_PROJECTION;
-    if (p->run < at->run_count && at->jumped[p->run]) return ENDS_JUMP;
-    o = &before->projections[p->previous];
-    if (p->run >= at->run_count || o->run >= before->run_count) return ENDS_PROJECTION;
-    sp = &at->setups[at->runs[p->run].setup]; so = &before->setups[before->runs[o->run].setup];
+    if (p->run >= at->run_count) return ENDS_PROJECTION;
+    if (at->jumped[p->run] && p->previous >= 0) return ENDS_JUMP;
+    sp = &at->setups[at->runs[p->run].setup];
+    if (p->previous == FRAME_IDENTITY_PLACED) {
+        /* A point the frame before has no record of stood at its input less
+         * the step, under the setup the run's paired points stood under: what
+         * the GTE would have given for it then. */
+        if (!at->stepped || at->placed[p->run] < 0 || (size_t)at->placed[p->run] >= before->setup_count) return ENDS_PROJECTION;
+        so = &before->setups[at->placed[p->run]];
+        stepped_view(so, p->input, at->step, -1, oview);
+        osxy = frame_blend_project(oview, so->ofx, so->ofy, so->h, so->shift, so->lm);
+    } else {
+        const frame_identity_projection_t *o;
+        if (p->previous < 0 || (size_t)p->previous >= before->projection_count) return ENDS_PROJECTION;
+        o = &before->projections[p->previous];
+        if (o->run >= before->run_count) return ENDS_PROJECTION;
+        so = &before->setups[before->runs[o->run].setup];
+        /* Both ends must be what the GTE's equations give for them: a MAC
+         * that wrapped is not followed. */
+        if (frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return ENDS_PROJECTION;
+        memcpy(oview, o->view, sizeof(oview)); osxy = o->sxy;
+    }
     if (sp->shift != so->shift || sp->lm != so->lm) return ENDS_PROJECTION;
     /* At or behind the camera plane the GTE's division saturates and its
      * projection is no longer a perspective one: nothing between such an end
      * and the other is a place the vertex passed. */
-    if (near_plane(p->view, sp) || near_plane(o->view, so)) return ENDS_PROJECTION;
-    /* Both ends must be what the GTE's equations give for them: a MAC that
-     * wrapped, or a packet word other than the projection's, is not followed. */
-    if (q->xy[c] != p->sxy || frame_blend_project(p->view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm) != p->sxy ||
-        frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return ENDS_PROJECTION;
-    memcpy(v->view[0], o->view, sizeof(o->view)); memcpy(v->view[1], p->view, sizeof(p->view));
-    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = o->sxy;
+    if (near_plane(p->view, sp) || near_plane(oview, so)) return ENDS_PROJECTION;
+    /* Nor is a packet word other than the projection's. */
+    if (q->xy[c] != p->sxy || frame_blend_project(p->view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm) != p->sxy)
+        return ENDS_PROJECTION;
+    memcpy(v->view[0], oview, sizeof(oview)); memcpy(v->view[1], p->view, sizeof(p->view));
+    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = osxy;
     v->ofx[1] = sp->ofx; v->ofy[1] = sp->ofy; v->h[1] = sp->h; v->sxy[1] = p->sxy;
     v->shift = sp->shift; v->lm = sp->lm;
     v->pinned = 0;
@@ -875,7 +1067,7 @@ static int32_t pair_of(frame_blend_t *b, const frame_identity_polygon_t *q, unsi
     if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] > 1) return -1;
     at = kept_at(b, q->age[c]);
     if (!at->valid || q->projection[c] < 0 || (size_t)q->projection[c] >= at->projection_count) return -1;
-    return at->projections[q->projection[c]].previous;
+    return at->projections[q->projection[c]].previous < 0 ? -1 : at->projections[q->projection[c]].previous;
 }
 
 /* The polygon the game drew a game frame earlier as this one: in the frame
@@ -964,6 +1156,7 @@ static void attach_looks(frame_blend_t *b, kept_t *k, const frame_identity_frame
             memcpy(k->colours[at], l->colours, sizeof(l->colours));
             memcpy(k->packets[at], l->words, sizeof(l->words));
             k->pages[at] = l->page; k->coloured[at] = 1;
+            k->textures[at] = l->texture; k->texture_windows[at] = l->window; k->draw_modes[at] = l->mode;
         } else if (l->serial >= f->first_polygon + f->polygon_count) b->looks[kept++] = *l;
     }
     b->look_count = kept;
@@ -985,6 +1178,75 @@ static int drawn(const frame_identity_polygon_t *q) {
     return 0;
 }
 
+/* A vertex from a projection of the frame from to where its point stands a
+ * game frame later, in at, which did not project it: on the world map the CPU
+ * projects only the terrain it draws, and the point stands at its input plus
+ * the step, under the setup at projected the rest of its run under (ahead, by
+ * run of from). */
+static int stepped_ahead(const kept_t *at, const kept_t *from, const int32_t *ahead, int32_t projection, vertex_t *v) {
+    const frame_identity_projection_t *o;
+    const frame_identity_setup_t *so, *sp;
+    int32_t view[3];
+    if (!at->stepped || at->reason != FRAME_BLEND_KEPT || projection < 0 || (size_t)projection >= from->projection_count) return 0;
+    o = &from->projections[projection];
+    if (o->run >= from->run_count || ahead[o->run] < 0 || (size_t)ahead[o->run] >= at->setup_count) return 0;
+    so = &from->setups[from->runs[o->run].setup]; sp = &at->setups[ahead[o->run]];
+    if (sp->shift != so->shift || sp->lm != so->lm ||
+        frame_blend_project(o->view, so->ofx, so->ofy, so->h, so->shift, so->lm) != o->sxy) return 0;
+    stepped_view(sp, o->input, at->step, 1, view);
+    if (near_plane(view, sp) || near_plane(o->view, so)) return 0;
+    memset(v, 0, sizeof(*v));
+    memcpy(v->view[0], o->view, sizeof(view)); memcpy(v->view[1], view, sizeof(view));
+    v->ofx[0] = so->ofx; v->ofy[0] = so->ofy; v->h[0] = so->h; v->sxy[0] = o->sxy;
+    v->ofx[1] = sp->ofx; v->ofy[1] = sp->ofy; v->h[1] = sp->h;
+    v->sxy[1] = frame_blend_project(view, sp->ofx, sp->ofy, sp->h, sp->shift, sp->lm);
+    v->shift = sp->shift; v->lm = sp->lm;
+    v->run = -1;
+    return 1;
+}
+
+/* An outgoing corner needs its projection in the older frame, not a pair
+ * with the frame before that. A newly arrived point may have been held then
+ * and still be an unambiguous endpoint for the interval being presented. */
+static void outgoing_corners(const frame_blend_t *b, frame_identity_polygon_t *q) {
+    unsigned c, d, age = 2;
+    const kept_t *from;
+    if (!(kept_seen(b, 1)->tag & FRAME_IDENTITY_POINTS)) return;
+    for (c = 0; c < q->corners; ++c)
+        if (q->state[c] == FRAME_IDENTITY_LINKED && q->age[c] < age) age = q->age[c];
+    if (age > 1) return;
+    from = kept_seen(b, age + 1);
+    for (c = 0; c < q->corners; ++c) {
+        int32_t chosen = -1;
+        int64_t best = INT64_MAX, second = INT64_MAX;
+        size_t i;
+        if (q->state[c] != FRAME_IDENTITY_UNPAIRED && q->state[c] != FRAME_IDENTITY_AMBIGUOUS) continue;
+        for (i = 0; i < from->projection_count; ++i) {
+            const frame_identity_projection_t *p = &from->projections[i];
+            int64_t near = INT64_MAX;
+            if (p->sxy != q->xy[c] || !zero_translation(from, p->run)) continue;
+            if (chosen >= 0 && !memcmp(p->input, from->projections[chosen].input, sizeof(p->input)) &&
+                !memcmp(p->view, from->projections[chosen].view, sizeof(p->view))) continue;
+            for (d = 0; d < q->corners; ++d) {
+                const frame_identity_projection_t *r;
+                int64_t distance = 0;
+                unsigned a;
+                if (d == c || q->state[d] != FRAME_IDENTITY_LINKED || q->age[d] != age || q->projection[d] < 0) continue;
+                r = &from->projections[q->projection[d]];
+                for (a = 0; a < 3; ++a) {
+                    int64_t delta = (int64_t)p->input[a] - r->input[a];
+                    distance += delta * delta;
+                }
+                if (distance < near) near = distance;
+            }
+            if (near < best) { second = best; best = near; chosen = (int32_t)i; }
+            else if (near < second) second = near;
+        }
+        if (chosen < 0 || (second != INT64_MAX && best * 4 >= second)) continue;
+        q->projection[c] = chosen; q->age[c] = (uint8_t)age; q->state[c] = FRAME_IDENTITY_LINKED;
+    }
+}
+
 /* Polygons of the frame before that the latest frame no longer draws because
  * they left the screen: on a fast camera move, what the older picture had at
  * the edge, which the newer one culls. Between the two they are drawn first,
@@ -993,7 +1255,15 @@ static int drawn(const frame_identity_polygon_t *q) {
  * before it culls its polygons. Only polygons whose every corner is, a game
  * frame later, beyond one edge of the screen: anything still on it that the
  * game no longer draws went for another reason (hidden, or a polygon held,
- * which a ghost of would show). */
+ * which a ghost of would show). The world map's terrain is the exception: the
+ * CPU no longer projects what it stops drawing at the screen's edge, so its
+ * points stand where the step puts them, and a polygon of it with a corner off
+ * the screen a game frame later is drawn beneath too: there is nothing beneath
+ * the terrain but the clear colour. Interior terrain is the union of the two
+ * frames' triangles, each visible only while it keeps its drawn winding.
+ * The older packet keeps its texture coordinates and shading: it has no
+ * newer sample to blend with. A rewritten texture or changed drawing state
+ * cannot supply that look, so only the existing edge rule applies then. */
 static int leftovers(frame_blend_t *b, kept_t *cur) {
     kept_t *prev = kept_at(b, 1);
     size_t i, k;
@@ -1006,45 +1276,71 @@ static int leftovers(frame_blend_t *b, kept_t *cur) {
         int32_t r = predecessor(b, &cur->polygons[i]);
         if (r >= 0) b->continued[r] = 1;
     }
-    /* Where each projection of the two frames before stands a game frame later. */
+    /* Where each projection of the two frames before stands a game frame
+     * later, and for runs of points moved by a step, the setup they stand
+     * under then. */
     for (a = 0; a < 2; ++a) {
         const kept_t *at = kept_at(b, a), *from = kept_at(b, a + 1);
-        if (!grow((void **)&b->forward[a], &b->forward_capacity[a], from->projection_count + 1, sizeof(*b->forward[a]))) return 0;
+        if (!grow((void **)&b->forward[a], &b->forward_capacity[a], from->projection_count + 1, sizeof(*b->forward[a])) ||
+            !grow((void **)&b->ahead[a], &b->ahead_capacity[a], from->run_count + 1, sizeof(*b->ahead[a]))) return 0;
         for (k = 0; k < from->projection_count; ++k) b->forward[a][k] = -1;
+        for (k = 0; k < from->run_count; ++k) b->ahead[a][k] = -1;
         if (!at->valid || !from->valid || at->number != from->number + 1) continue;
         for (k = 0; k < at->projection_count; ++k) {
-            int32_t p = at->projections[k].previous;
-            if (p >= 0 && (size_t)p < from->projection_count) b->forward[a][p] = (int32_t)k;
+            const frame_identity_projection_t *p = &at->projections[k];
+            int32_t o = p->previous;
+            if (o < 0 || (size_t)o >= from->projection_count) continue;
+            b->forward[a][o] = (int32_t)k;
+            if (at->stepped && from->projections[o].run < from->run_count && p->run < at->run_count &&
+                b->ahead[a][from->projections[o].run] < 0 && zero_translation(at, p->run) &&
+                zero_translation(from, from->projections[o].run))
+                b->ahead[a][from->projections[o].run] = (int32_t)at->runs[p->run].setup;
         }
     }
     for (i = 0; i < prev->polygon_count; ++i) {
         frame_identity_polygon_t q = prev->polygons[i];
         int32_t x0 = INT32_MAX, x1 = INT32_MIN, y0 = INT32_MAX, y1 = INT32_MIN;
+        vertex_t ahead[4];
+        unsigned stepped = 0;
+        int world;
         leftover_t *l;
         if (b->continued[i] || !prev->coloured[i] || !drawn(&q)) continue;
+        outgoing_corners(b, &q);
+        world = terrain(b, &q, 1);
+        if (world && ((q.opcode & 2) || prev->texture_windows[i] != b->window ||
+            prev->draw_modes[i] != (b->mode & 0xe00u) ||
+            prev->textures[i] != texture_revision(b, prev->packets[i]))) world = 0;
         for (c = 0; c < q.corners; ++c) {
             int32_t p;
             const kept_t *at;
             if (q.state[c] != FRAME_IDENTITY_LINKED || q.age[c] > 1 || q.projection[c] < 0) break;
-            if ((p = b->forward[q.age[c]][q.projection[c]]) < 0) break;
             at = kept_at(b, q.age[c]);
-            /* The corner as the latest frame would link it. */
-            q.projection[c] = p; q.xy[c] = at->projections[p].sxy;
+            if ((p = b->forward[q.age[c]][q.projection[c]]) >= 0) {
+                /* The corner as the latest frame would link it. */
+                q.projection[c] = p; q.xy[c] = at->projections[p].sxy;
+            } else if (stepped_ahead(at, kept_at(b, q.age[c] + 1u), b->ahead[q.age[c]], q.projection[c], &ahead[c])) {
+                q.xy[c] = ahead[c].sxy[1];
+                stepped |= 1u << c;
+            } else break;
             x0 = low(q.xy[c]) < x0 ? low(q.xy[c]) : x0; x1 = low(q.xy[c]) > x1 ? low(q.xy[c]) : x1;
             y0 = high(q.xy[c]) < y0 ? high(q.xy[c]) : y0; y1 = high(q.xy[c]) > y1 ? high(q.xy[c]) : y1;
         }
-        if (c < q.corners || !(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1])) continue;
+        if (c < q.corners) continue;
+        if (!world && !(x1 < 0 || y1 < 0 || x0 >= b->screen[0] || y0 >= b->screen[1]) &&
+            !(stepped && (x0 < 0 || y0 < 0 || x1 >= b->screen[0] || y1 >= b->screen[1]))) continue;
         if (!grow((void **)&b->leftovers, &b->leftover_capacity, b->leftover_count + 1, sizeof(*b->leftovers)) ||
             !grow((void **)&b->vertices, &b->vertex_capacity, b->vertex_count + q.corners, sizeof(*b->vertices))) return 0;
         l = &b->leftovers[b->leftover_count];
         for (c = 0; c < q.corners; ++c) {
             vertex_t *v = &b->vertices[b->vertex_count + c];
             memset(v, 0, sizeof(*v));
-            if (ends(b, &q, c, v) != ENDS_OK) break;
+            if (stepped & (1u << c)) *v = ahead[c];
+            else if (ends(b, &q, c, v) != ENDS_OK) break;
             l->vertex[c] = (int32_t)(b->vertex_count + c);
         }
         if (c < q.corners) continue;
         memcpy(l->words, prev->packets[i], sizeof(l->words));
+        l->facing = world ? facing(prev->polygons[i].xy) : 0;
         b->vertex_count += q.corners;
         ++b->leftover_count;
     }
@@ -1114,6 +1410,7 @@ int frame_blend_add(frame_blend_t *b, const frame_identity_frame_t *f) {
         return 0;
     }
     attach_looks(b, cur, f);
+    if (!place_plan(cur, prev)) { cur->valid = 0; return 0; }
     if (f->flags & (FRAME_IDENTITY_RESET | FRAME_IDENTITY_OVERFLOW)) cur->reason = FRAME_BLEND_NO_HISTORY;
     else if (f->flags & FRAME_IDENTITY_EXCLUDED) cur->reason = FRAME_BLEND_EXCLUDED;
     else if (!prev->valid || prev->number + 1 != f->number) cur->reason = FRAME_BLEND_NO_HISTORY;
@@ -1378,6 +1675,7 @@ unsigned frame_blend_leftovers(const frame_blend_t *b) { return (unsigned)b->lef
 unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]) {
     const leftover_t *l;
     unsigned op, corners, c, k = 1, n;
+    uint32_t xy[4];
     if (index >= b->leftover_count || !den || num >= den) return 0;
     l = &b->leftovers[index];
     op = l->words[0] >> 24; corners = (op & 8) ? 4 : 3;
@@ -1386,9 +1684,10 @@ unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t n
     for (c = 0; c < corners; ++c) {
         int32_t view[3];
         if (c && (op & 16)) ++k;
-        words[k++] = place(b, &b->vertices[l->vertex[c]], num, den, view);
+        words[k++] = xy[c] = place(b, &b->vertices[l->vertex[c]], num, den, view);
         if (op & 4) ++k;
     }
+    if (l->facing && facing(xy) != l->facing) return 0;
     return n;
 }
 
@@ -1412,6 +1711,20 @@ unsigned frame_blend_leftover_precise(const frame_blend_t *b, unsigned index, ui
         depth[c] = z > 0 && z <= 65535 ? (float)z : 0;
     }
     return (1u << corners) - 1;
+}
+
+/* Incoming terrain is the other half of the same mesh: its newest packet
+ * does not make its back face visible earlier in the interval. */
+int frame_blend_visible(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den) {
+    uint64_t i = serial - b->info.first_polygon;
+    const frame_identity_polygon_t *q;
+    uint32_t xy[4];
+    if (serial < b->info.first_polygon || i >= b->info.polygon_count || !den || num >= den) return 1;
+    q = &kept_seen(b, 0)->polygons[i];
+    if (!terrain(b, q, 0)) return 1;
+    memcpy(xy, q->xy, sizeof(xy));
+    frame_blend_polygon(b, serial, num, den, xy, NULL);
+    return facing(xy) == facing(q->xy);
 }
 
 unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den,
@@ -1505,4 +1818,29 @@ unsigned frame_blend_colours(const frame_blend_t *b, uint64_t serial, uint32_t n
         mask |= 1u << c;
     }
     return mask;
+}
+
+/* Endpoint ground covers faces that neither endpoint submitted. Keep the
+ * packet's material state; presentation restores its state after this pass. */
+unsigned frame_blend_ground(const frame_blend_t *b, unsigned i, uint32_t num, uint32_t den, uint32_t words[14]) {
+    const kept_t *k = kept_seen(b, 0);
+    unsigned n;
+    if (!num || !den || num >= den || b->info.reason != FRAME_BLEND_KEPT ||
+        i >= k->polygon_count || !k->coloured[i] || !(k->tag & FRAME_IDENTITY_POINTS) ||
+        (k->polygons[i].opcode & 2)) return 0;
+    /* Triangles and quads, flat or Gouraud, textured or untextured use the
+     * same net. Model translations and translucent faces cannot be ground. */
+    const frame_identity_polygon_t *q = &k->polygons[i];
+    if (q->corners != 3 && q->corners != 4) return 0;
+    for (unsigned c = 0; c < q->corners; ++c) {
+        if (q->state[c] != FRAME_IDENTITY_LINKED || q->age[c] > 2 || q->projection[c] < 0) return 0;
+        const kept_t *at = kept_seen(b, q->age[c]);
+        if ((size_t)q->projection[c] >= at->projection_count ||
+            !zero_translation(at, at->projections[q->projection[c]].run)) return 0;
+    }
+    words[0] = 0xe1000000u | k->draw_modes[i];
+    words[1] = 0xe2000000u | k->texture_windows[i];
+    n = 1 + q->corners * (1 + !!(q->opcode & 4)) + (q->corners - 1) * !!(q->opcode & 16);
+    memcpy(words + 2, k->packets[i], n * sizeof(*words));
+    return n + 2;
 }

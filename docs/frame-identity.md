@@ -36,9 +36,10 @@ of a frame the service:
 
 Fail closed: a corner with no projection at its position (2D), a polygon split across frames, a position shared
 with an unpaired projection, an ambiguous one, and anything in a frame without history is held and reported with
-its reason. The host may also exclude frames: the developer host and the player exclude FF8's world map
-(`FRAME_IDENTITY_EXCLUDED`), which pairs too poorly to be trusted until it has a check of its own. An excluded
-frame publishes no pairs and no links, but keeps what the mechanism matched in `match` for measurement.
+its reason. The host may also exclude frames (`FRAME_IDENTITY_EXCLUDED`): an excluded frame publishes no pairs and no
+links, but keeps what the mechanism matched in `match` for measurement. FF8's world map, whose terrain the CPU moves
+by the camera, was excluded until it passed a check of its own; it is paired by a step (`FRAME_IDENTITY_POINTS`,
+`docs/frame-world.md`).
 
 ## Interface
 
@@ -124,7 +125,8 @@ cards, `test_frame_identity_routes` runs each route with the default player, ser
 oracle host (`build/frame-oracle/lionheart`, or `LIONHEART_FRAME_ORACLE`), and holds battle and field 3D to the
 bars: at least 90% of the corners of drawn 3D polygons linked, wrong pairs at most 0.01% of the pairs the oracle
 decides, wrong links at most 0.1% of the links it decides; the oracle must decide at least 30% of the pairs, the
-final state must not change, both builds must print one digest, and the world map must publish no pairs.
+final state must not change, and both builds must print one digest. Routes that cross the world map add its own
+check (`docs/frame-world.md`).
 
 | Route | Card | What it exercises |
 |---|---|---|

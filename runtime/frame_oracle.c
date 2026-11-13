@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "frame_blend.h"
 
 /* A root names where a 16-bit value was copied from. src is a physical RAM or
  * scratchpad byte address plus one, with gen counting the writes to that
@@ -29,6 +30,11 @@ static int zero(root_t r) { return r.src == ZERO; }
 typedef struct {
     root_t coord[3], matrix[2]; /* the vertex; the translation's and rotation's first halves */
     int32_t view[3];
+    int16_t input[3];
+    uint8_t zero;               /* projected under a zero translation */
+    uint8_t place;              /* by the world's offset: 0 not judged, 1 one place, 2 two */
+    uint8_t before;             /* previous_sxy is known: paired, or placed */
+    uint32_t setup;             /* index in its frame's setups */
     uint32_t sxy, previous_sxy;
     int32_t match;
     uint8_t verdict;
@@ -42,6 +48,18 @@ typedef struct {
     uint64_t frames, projections, matched, verdicts[5];
     uint64_t corners, linked, link_correct, link_equivalent, link_wrong, link_undecided, held_known, held_unknown;
     uint64_t instance_same, instance_other;
+    /* Pairs of points under a zero translation in frames whose world offset
+     * change the host gave (frame_oracle_world): of those the provenance
+     * leaves undecided or partial, at one place and at two; of those it finds
+     * wrong, at one place. */
+    uint64_t place_correct, place_wrong, wrong_same_place;
+    /* Linked corners whose projection's pair is judged wrong (by provenance
+     * and not at one place, or by place), and undecided by both. */
+    uint64_t corner_pair_wrong, corner_pair_undecided;
+    /* Placed points (FRAME_IDENTITY_PLACED), and those whose place a frame
+     * earlier, their input less the frame's step, is wrong: the step is not
+     * the camera's change. */
+    uint64_t placed, placed_wrong;
 } tally_t;
 
 /* Open addressing from a 64-bit key to a 32-bit value. */
@@ -69,6 +87,10 @@ static struct {
     /* The previous judged frame. */
     kept_t *kept[2];
     size_t kept_count[2], kept_capacity[2];
+    frame_identity_setup_t *setups[2];  /* the kept frames' setups */
+    size_t setup_count[2], setup_capacity[2];
+    int32_t *then;                      /* per run: the setup its pairs stood under before */
+    size_t then_capacity;
     uint64_t kept_first[2], kept_number[2];
     int have_previous;
     map_t generations[2], by_root;
@@ -76,6 +98,8 @@ static struct {
     size_t root_next_capacity;
     tally_t total, scene[SCENES];
     unsigned logged[SCENES][2];
+    int world_known;
+    int32_t world_change[3];
 } o;
 
 /* Maps. */
@@ -429,6 +453,9 @@ static void add(tally_t *t, const tally_t *f) {
     t->link_equivalent += f->link_equivalent; t->link_wrong += f->link_wrong; t->link_undecided += f->link_undecided;
     t->held_known += f->held_known; t->held_unknown += f->held_unknown;
     t->instance_same += f->instance_same; t->instance_other += f->instance_other;
+    t->place_correct += f->place_correct; t->place_wrong += f->place_wrong; t->wrong_same_place += f->wrong_same_place;
+    t->corner_pair_wrong += f->corner_pair_wrong; t->corner_pair_undecided += f->corner_pair_undecided;
+    t->placed += f->placed; t->placed_wrong += f->placed_wrong;
 }
 
 void frame_oracle_judge(const frame_identity_frame_t *f) {
@@ -451,6 +478,15 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
     }
     /* Keep this frame as slot 0, the previous as slot 1. */
     {
+        frame_identity_setup_t *swap_setups = o.setups[1]; size_t setup_cap = o.setup_capacity[1];
+        o.setups[1] = o.setups[0]; o.setup_capacity[1] = o.setup_capacity[0]; o.setup_count[1] = o.setup_count[0];
+        o.setups[0] = swap_setups; o.setup_capacity[0] = setup_cap;
+    }
+    if (!grow((void **)&o.setups[0], &o.setup_capacity[0], f->setup_count + 1, sizeof(*o.setups[0])) ||
+        !grow((void **)&o.then, &o.then_capacity, f->run_count + 1, sizeof(*o.then))) { lose("out of memory"); return; }
+    if (f->setup_count) memcpy(o.setups[0], f->setups, f->setup_count * sizeof(*f->setups));
+    o.setup_count[0] = f->setup_count;
+    {
         kept_t *swap = o.kept[1]; size_t cap = o.kept_capacity[1];
         o.kept[1] = o.kept[0]; o.kept_capacity[1] = o.kept_capacity[0];
         o.kept_count[1] = o.kept_count[0]; o.kept_first[1] = o.kept_first[0]; o.kept_number[1] = o.kept_number[0];
@@ -465,11 +501,52 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
         memcpy(cur[i].coord, o.inputs[i], sizeof(cur[i].coord));
         memcpy(cur[i].matrix, o.inputs[i] + 3, sizeof(cur[i].matrix));
         memcpy(cur[i].view, p->view, sizeof(cur[i].view));
-        cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE;
+        memcpy(cur[i].input, p->input, sizeof(cur[i].input));
+        cur[i].zero = 0;
+        if (p->run < f->run_count) {
+            const int32_t *t = f->setups[f->runs[p->run].setup].translation;
+            cur[i].zero = !t[0] && !t[1] && !t[2];
+        }
+        cur[i].sxy = p->sxy; cur[i].match = p->match; cur[i].verdict = NONE; cur[i].place = 0;
+        if (p->match == FRAME_IDENTITY_PLACED && o.world_known && cur[i].zero)
+            cur[i].place = memcmp(f->step, o.world_change, sizeof(f->step)) ? 2 : 1;
         cur[i].previous_sxy = prev && p->match >= 0 ? prev[p->match].sxy : 0;
+        cur[i].before = prev && p->match >= 0;
+        cur[i].setup = p->run < f->run_count ? f->runs[p->run].setup : 0;
     }
     memset(&t, 0, sizeof(t));
     t.frames = 1; t.projections = f->projection_count;
+    for (i = 0; i < f->projection_count; ++i)
+        if (f->projections[i].match == FRAME_IDENTITY_PLACED) { ++t.placed; if (cur[i].place == 2) ++t.placed_wrong; }
+    /* Where a placed point stood a game frame earlier on screen, as the GTE
+     * would have put it: its input less the step, under the setup its run's
+     * paired points stood under then. Only for telling a link to another
+     * point at its pixel that moved with it from a wrong one. */
+    if (prev && (f->tag & FRAME_IDENTITY_POINTS)) {
+        for (i = 0; i < f->run_count; ++i) o.then[i] = -1;
+        for (i = 0; i < f->projection_count; ++i)
+            if (cur[i].match >= 0 && f->projections[i].run < f->run_count && o.then[f->projections[i].run] < 0)
+                o.then[f->projections[i].run] = (int32_t)prev[cur[i].match].setup;
+        for (i = 0; i < f->projection_count; ++i) {
+            const frame_identity_setup_t *s;
+            int32_t then = f->projections[i].run < f->run_count ? o.then[f->projections[i].run] : -1, view[3];
+            unsigned a, k;
+            if (cur[i].match != FRAME_IDENTITY_PLACED || then < 0 || (size_t)then >= o.setup_count[1]) continue;
+            s = &o.setups[1][then];
+            for (a = 0; a < 3; ++a) {
+                int64_t n = (int64_t)s->translation[a] * 4096;
+                for (k = 0; k < 3; ++k) {
+                    uint32_t w = s->rotation[(a * 3 + k) / 2];
+                    int32_t r = (a * 3 + k) & 1 ? (int16_t)(w >> 16) : (int16_t)(w & 0xffff);
+                    n += (int64_t)r * ((int64_t)cur[i].input[k] - f->step[k]);
+                }
+                n = n >= 0 ? (int64_t)((uint64_t)n >> s->shift) : -1 - (int64_t)((uint64_t)(-1 - n) >> s->shift);
+                view[a] = (int32_t)(uint32_t)(uint64_t)n;
+            }
+            cur[i].previous_sxy = frame_blend_project(view, s->ofx, s->ofy, s->h, s->shift, s->lm);
+            cur[i].before = 1;
+        }
+    }
     if (prev) {
         size_t n = o.kept_count[1];
         if (!generations(&o.generations[0], cur, f->projection_count) || !generations(&o.generations[1], prev, n) ||
@@ -498,6 +575,27 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                         prev[j].sxy == a->sxy) { v = EQUIVALENT; break; }
             }
             cur[i].verdict = (uint8_t)v;
+            /* Where the game moved both points by its world offset, the
+             * offset's change says whether they are one place in the world:
+             * that decides what provenance cannot (a point whose input was
+             * moved by an addend it does not follow), and tells a wrong
+             * record at the right place (an edge both blocks keep) from a
+             * wrong place. */
+            if (o.world_known && cur[i].zero && a->zero) {
+                unsigned k;
+                int same = 1;
+                for (k = 0; k < 3; ++k) if (cur[i].input[k] - a->input[k] != o.world_change[k]) same = 0;
+                cur[i].place = same ? 1 : 2;
+                if (v == UNDECIDED || v == PARTIAL) ++*(same ? &t.place_correct : &t.place_wrong);
+                else if (v == WRONG && same) ++t.wrong_same_place;
+                if ((v == UNDECIDED || v == PARTIAL) && !same && o.out && o.logged[scene_of(f->tag)][0] < 100) {
+                    ++o.logged[scene_of(f->tag)][0];
+                    fprintf(o.out, "W place frame=%" PRIu64 " vblank=%" PRIu64 " tag=%u #%zu<-#%d in=%d,%d,%d<-%d,%d,%d"
+                            " change=%d,%d,%d\n", f->number, f->vblank, f->tag & 0xffffu, i, cur[i].match,
+                            cur[i].input[0], cur[i].input[1], cur[i].input[2], a->input[0], a->input[1], a->input[2],
+                            o.world_change[0], o.world_change[1], o.world_change[2]);
+                }
+            }
             /* Identical instances may share one vertex table, where the
              * vertex sources cannot tell them apart; where each instance's
              * matrix is copied from its own place, that place can. Only a
@@ -538,6 +636,12 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
             ++t.corners;
             if (!linked) { if (truth >= 0) ++t.held_known; else ++t.held_unknown; continue; }
             ++t.linked;
+            {
+                const kept_t *k = by_serial((q->age[c] ? o.kept_first[1] : f->first_projection) + (uint64_t)q->projection[c]);
+                int v = k ? k->verdict : NONE;
+                if (k && ((v == WRONG && k->place != 1) || k->place == 2)) ++t.corner_pair_wrong;
+                else if ((v == UNDECIDED || v == PARTIAL || v == NONE) && (!k || k->place != 1)) ++t.corner_pair_undecided;
+            }
             if (truth < 0) { ++t.link_undecided; continue; }
             {
                 uint64_t chosen = (q->age[c] ? o.kept_first[1] : f->first_projection) + (uint64_t)q->projection[c];
@@ -547,7 +651,7 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                  * within a pixel of each other in the frame before, so the
                  * corner is drawn where the true link would draw it. Whether
                  * that pair is itself right is the pair verdict's business. */
-                else if (mine && real && mine->sxy == real->sxy && mine->match >= 0 && real->match >= 0 &&
+                else if (mine && real && mine->sxy == real->sxy && mine->before && real->before &&
                          within_pixel(mine->previous_sxy, real->previous_sxy))
                     ++t.link_equivalent;
                 else {
@@ -555,11 +659,14 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
                     if (o.out && o.logged[scene_of(f->tag)][1] < 100) {
                         ++o.logged[scene_of(f->tag)][1];
                         fprintf(o.out, "W link frame=%" PRIu64 " vblank=%" PRIu64 " tag=%u polygon=%zu corner=%u age=%u"
-                                " chosen=%" PRIu64 " truth=%" PRId64 " sxy=%08x/%08x match=%d/%d verdict=%d/%d before=%08x/%08x\n",
+                                " chosen=%" PRIu64 " truth=%" PRId64 " sxy=%08x/%08x match=%d/%d verdict=%d/%d before=%08x/%08x"
+                                " in=%d,%d,%d/%d,%d,%d\n",
                                 f->number, f->vblank, f->tag & 0xffffu, i, c, q->age[c], chosen, truth,
                                 mine ? mine->sxy : 0, real ? real->sxy : 0, mine ? mine->match : -9, real ? real->match : -9,
                                 mine ? mine->verdict : -9, real ? real->verdict : -9,
-                                mine ? mine->previous_sxy : 0, real ? real->previous_sxy : 0);
+                                mine ? mine->previous_sxy : 0, real ? real->previous_sxy : 0,
+                                mine ? mine->input[0] : 0, mine ? mine->input[1] : 0, mine ? mine->input[2] : 0,
+                                real ? real->input[0] : 0, real ? real->input[1] : 0, real ? real->input[2] : 0);
                     }
                 }
             }
@@ -576,6 +683,11 @@ void frame_oracle_judge(const frame_identity_frame_t *f) {
     /* Drop what this frame consumed. */
     o.have_previous = !(f->flags & FRAME_IDENTITY_OVERFLOW);
     o.input_base = o.serial; o.polygon_base = o.polygons;
+}
+
+void frame_oracle_world(int known, const int32_t change[3]) {
+    o.world_known = known;
+    memcpy(o.world_change, change, sizeof(o.world_change));
 }
 
 static const frame_oracle_gpu_t gpu_hooks = {frame_oracle_packet_word, frame_oracle_polygon};
@@ -615,11 +727,14 @@ static void totals(const char *label, const tally_t *t) {
     fprintf(o.out, "T %s frames=%" PRIu64 " projections=%" PRIu64 " matched=%" PRIu64 " correct=%" PRIu64 " partial=%" PRIu64
             " wrong=%" PRIu64 " equivalent=%" PRIu64 " undecided=%" PRIu64 " corners=%" PRIu64 " linked=%" PRIu64
             " link-correct=%" PRIu64 " link-equivalent=%" PRIu64 " link-wrong=%" PRIu64 " link-undecided=%" PRIu64
-            " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64 "\n",
+            " held-known=%" PRIu64 " held-unknown=%" PRIu64 " instance-same=%" PRIu64 " instance-other=%" PRIu64
+            " place-correct=%" PRIu64 " place-wrong=%" PRIu64 " wrong-same-place=%" PRIu64
+            " corner-pair-wrong=%" PRIu64 " corner-pair-undecided=%" PRIu64 " placed=%" PRIu64 " placed-wrong=%" PRIu64 "\n",
             label, t->frames, t->projections, t->matched,
             t->verdicts[CORRECT], t->verdicts[PARTIAL], t->verdicts[WRONG], t->verdicts[EQUIVALENT], t->verdicts[UNDECIDED],
             t->corners, t->linked, t->link_correct, t->link_equivalent, t->link_wrong, t->link_undecided,
-            t->held_known, t->held_unknown, t->instance_same, t->instance_other);
+            t->held_known, t->held_unknown, t->instance_same, t->instance_other, t->place_correct, t->place_wrong, t->wrong_same_place,
+            t->corner_pair_wrong, t->corner_pair_undecided, t->placed, t->placed_wrong);
 }
 
 int frame_oracle_stop(void) {
@@ -635,6 +750,7 @@ int frame_oracle_stop(void) {
     }
     if (o.lost) { fprintf(stderr, "Frame oracle lost track: %s\n", o.lost_reason); ok = 0; }
     free(o.mem); free(o.gen); free(o.inputs); free(o.sources); free(o.kept[0]); free(o.kept[1]);
+    free(o.setups[0]); free(o.setups[1]); free(o.then);
     free(o.generations[0].keys); free(o.generations[0].values); free(o.generations[1].keys); free(o.generations[1].values);
     free(o.by_root.keys); free(o.by_root.values); free(o.root_next);
     memset(&o, 0, sizeof(o));

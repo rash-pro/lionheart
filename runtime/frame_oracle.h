@@ -25,6 +25,11 @@
 int frame_oracle_start(cpu_t *c, const char *report);
 void frame_oracle_restored(cpu_t *c);
 void frame_oracle_judge(const frame_identity_frame_t *frame);
+/* Before judging a frame: whether the host knows how far the game moved the
+ * points it projects under a zero translation since the frame before (a world
+ * drawn around a camera), and that change. Pairs of such points the
+ * provenance cannot decide are then judged by place. */
+void frame_oracle_world(int known, const int32_t change[3]);
 /* Writes the totals; 0 if the report could not be written or the oracle lost
  * track of the service (native code ran, or counts disagree). */
 int frame_oracle_stop(void);

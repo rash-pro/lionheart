@@ -1,6 +1,7 @@
 /* Drives the frame identity service with synthetic projections and GPU
  * packets, no game data, and prints every frame it delivers:
  *   F<number> flags=<R reset, E excluded, O overflow or -> runs=<n> projections=<n> polygons=<n> vblank=<n>
+ *   S step=<x,y,z> votes=<n>, in frames the host marks FRAME_IDENTITY_POINTS
  *   R<i> first=<n> count=<n> previous=<run or -> repeats=<n>
  *   P<i> run=<n> previous=<projection or -> match=<projection or ->
  *   Q<i> <corner>... with L<age>:<projection> linked, X<age>:<projection> excluded, or
@@ -23,7 +24,9 @@ static void check(int ok, const char *what) {
 }
 
 static void print_index(int32_t i) {
-    if (i < 0) printf("-"); else printf("%d", (int)i);
+    if (i == FRAME_IDENTITY_PLACED) printf("placed");
+    else if (i < 0) printf("-");
+    else printf("%d", (int)i);
 }
 
 static void sink(void *context, const frame_identity_frame_t *f) {
@@ -33,6 +36,8 @@ static void sink(void *context, const frame_identity_frame_t *f) {
            f->flags & FRAME_IDENTITY_RESET ? "R" : "", f->flags & FRAME_IDENTITY_EXCLUDED ? "E" : "",
            f->flags & FRAME_IDENTITY_OVERFLOW ? "O" : "", f->flags ? "" : "-",
            f->run_count, f->projection_count, f->polygon_count, (unsigned long long)f->vblank);
+    if (f->tag & FRAME_IDENTITY_POINTS)
+        printf("S step=%d,%d,%d votes=%u\n", (int)f->step[0], (int)f->step[1], (int)f->step[2], f->step_votes);
     for (i = 0; i < f->run_count; ++i) {
         printf("R%u first=%u count=%u previous=", i, f->runs[i].first, f->runs[i].count);
         print_index(f->runs[i].previous);
@@ -245,6 +250,79 @@ static void scenario_excluded(void) {
     camera(4, 0, 1000); rtpt(tri, a); triangle(a[0], a[1], a[2]); swap();
 }
 
+/* A world drawn around a camera: the CPU adds an offset to every point of a
+ * terrain and projects it under a zero translation. 25 triangles of a 6x6
+ * grid whose heights make every triangle's shape its own. */
+static void terrain(int ox, int oy, int oz, int x0, unsigned triangles) {
+    unsigned i, j, n = 0;
+    camera(0, 0, 0);
+    for (i = 0; i < 5; ++i)
+        for (j = 0; j < 5 && n < triangles; ++j, ++n) {
+            int v[9];
+            uint32_t out[3];
+            unsigned k;
+            for (k = 0; k < 3; ++k) {
+                unsigned x = i + (k == 1), z = j + (k == 2);
+                v[k * 3] = x0 + (int)x * 100 + ox;
+                v[k * 3 + 1] = (int)((x * x * 13 + z * z * 7 + x * z * 5) % 61) * 3 + oy;
+                v[k * 3 + 2] = (int)z * 100 + oz;
+            }
+            rtpt(v, out);
+        }
+}
+
+static void scenario_points(void) {
+    start_service(0);
+    exclude = 2 | FRAME_IDENTITY_POINTS;
+    /* Frame 0 has no history. Frame 1: everything moved by one step. */
+    terrain(-250, 200, 1500, 0, 25); swap(); vblanks(2);
+    terrain(-242, 200, 1488, 0, 25); swap(); vblanks(2);
+    /* Frame 2: another step, and a second block comes in: its points have no
+     * place in the frame before. */
+    terrain(-237, 201, 1491, 0, 25); terrain(-237, 201, 1491, 1000, 5); swap(); vblanks(2);
+    /* Frame 3: the grid's first point is also projected under another
+     * rotation, so the frame keeps that place at two places in view space. Frame
+     * 4: the point at that place does not pair; the rest does. */
+    terrain(-234, 201, 1491, 0, 25);
+    camera(0, 0, 0); c->gte_ctrl[0] = 2048; rtps(-234, 201, 1491);
+    swap(); vblanks(2);
+    terrain(-230, 201, 1491, 0, 25); swap(); vblanks(2);
+    /* Frame 5: two triangles make four shapes, too few to agree on a step. */
+    terrain(-220, 201, 1491, 0, 2); swap(); vblanks(2);
+    /* Frame 6: without the host's word nothing pairs by a step. */
+    exclude = 2;
+    terrain(-210, 201, 1491, 0, 25); swap();
+    exclude = 0;
+}
+
+/* Some places twice on one ray from the camera: a triangle of the terrain
+ * and a copy of it twice as far, at the same pixels. The camera moves, the
+ * terrain pairs by the step, the copy (its points on no step) is placed, and
+ * the copy's points stood elsewhere a frame earlier: the triangle drawn at
+ * those pixels takes the terrain's own corners, nearest to its others. */
+static void copies(int ox, int oy, int oz, uint32_t out[3]) {
+    static const int tri[9] = {0, 0, 0, 100, 30, 0, 0, 60, 100};
+    int v[9], w[9];
+    unsigned k;
+    terrain(ox, oy, oz, 0, 25);
+    for (k = 0; k < 9; ++k) v[k] = tri[k] + (k % 3 == 0 ? ox + 2000 : k % 3 == 1 ? oy : oz);
+    for (k = 0; k < 9; ++k) w[k] = v[k] * 2;
+    camera(0, 0, 0);
+    rtpt(w, out);
+    rtpt(v, out);
+}
+
+static void scenario_copies(void) {
+    uint32_t a[3];
+    start_service(0);
+    exclude = 2 | FRAME_IDENTITY_POINTS;
+    copies(-250, 200, 1500, a); swap(); vblanks(2);
+    copies(-242, 200, 1488, a);
+    triangle(a[0], a[1], a[2]);
+    swap();
+    exclude = 0;
+}
+
 /* The recording entries leave the GTE exactly as the plain ones do. */
 static void scenario_entries(void) {
     static const uint32_t ops[] = {(1u << 19) | 0x01, 0x30, (1u << 19) | (1u << 10) | 0x30, 0x06, (1u << 19) | 0x12, 0x2d};
@@ -283,6 +361,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "corners")) scenario_corners();
     else if (!strcmp(name, "shared")) scenario_shared();
     else if (!strcmp(name, "excluded")) scenario_excluded();
+    else if (!strcmp(name, "points")) scenario_points();
+    else if (!strcmp(name, "copies")) scenario_copies();
     else if (!strcmp(name, "entries")) scenario_entries();
     else { fprintf(stderr, "unknown scenario %s\n", name); return 2; }
     frame_identity_stop();
