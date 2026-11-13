@@ -384,6 +384,8 @@ static void present_frame(cpu_t *c, void *context) {
     if (host_frame_present_running()) smooth_present(c);
     else host_present(c->hw->gpu);
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
+    host_display_events();
+    host_display_input_delivered();
     host_input_sync(c, &input);
     if (state_bridge) host_state_bridge_frame(state_bridge, c, c->hw->vblanks);
     if (achievements) host_achievements_frame(achievements, c);

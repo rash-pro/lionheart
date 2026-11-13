@@ -36,6 +36,9 @@ static struct {
     uint64_t capture_from;
     const char *frames, *vram_path;
     uint8_t keys[SDL_NUM_SCANCODES];
+    Uint32 presses[16], wait_max;
+    unsigned pending_presses;
+    unsigned long long press_count, wait_sum;
     unsigned disc_request, state_action, state_slot, state_pending;
     SDL_GameController *controllers[2];
     SDL_JoystickID controller_ids[2];
@@ -269,6 +272,9 @@ static void clear_pad(void) {
 }
 static void input_event(const SDL_Event *event) {
     unsigned port;
+    if ((event->type == SDL_CONTROLLERBUTTONDOWN ||
+         (event->type == SDL_KEYDOWN && !event->key.repeat)) && host.pending_presses < 16)
+        host.presses[host.pending_presses++] = event->common.timestamp;
     if (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) {
         unsigned key=(unsigned)event->key.keysym.scancode;
         int down=event->type==SDL_KEYDOWN;
@@ -958,6 +964,34 @@ void host_display_park(int park) {
     if (park) SDL_LockMutex(presenter.running); else SDL_UnlockMutex(presenter.running);
 }
 #endif
+static void plain_events(void) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        input_event(&event);
+        if (event.type == SDL_QUIT ||
+            (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)) host.quit = 1;
+    }
+}
+void host_display_events(void) {
+    if (!host.initialized || host.quit) return;
+#ifdef FF8_GUI
+    if (host_gui_enabled()) {
+        host_osd_hold(1); gui_poll(); host_osd_hold(0);
+    } else
+#endif
+    if (host.video) plain_events();
+}
+void host_display_input_delivered(void) {
+    Uint32 now = SDL_GetTicks();
+    unsigned i;
+    for (i = 0; i < host.pending_presses; ++i) {
+        Uint32 wait = now - host.presses[i];
+        ++host.press_count;
+        host.wait_sum += wait;
+        if (wait > host.wait_max) host.wait_max = wait;
+    }
+    host.pending_presses = 0;
+}
 static void present(gpu_t *g, int capture) {
     int w, h;
     if (!host.initialized || host.quit) return;
@@ -972,12 +1006,7 @@ static void present(gpu_t *g, int capture) {
     } else
 #endif
     if (host.video) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            input_event(&event);
-            if (event.type == SDL_QUIT ||
-                (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)) host.quit = 1;
-        }
+        plain_events();
     }
     if (host.quit) { host_input_pause(1); return; }
 #ifdef FF8_VULKAN
@@ -1151,6 +1180,9 @@ int host_display_shutdown(gpu_t *g) {
     if (smooth.stats && fclose(smooth.stats)) host.failed = 1;
     memset(&smooth, 0, sizeof(smooth));
 #endif
+    if (host.press_count)
+        fprintf(stderr, "Input: presses=%llu wait mean=%.1f ms max=%u ms\n",
+                host.press_count, (double)host.wait_sum / host.press_count, (unsigned)host.wait_max);
     host_input_pause(1);
     if (host.vram_path && (!g || !host_vram_dump(g, host.vram_path))) fail("cannot write VRAM PNG");
     host_screenshot_shutdown();

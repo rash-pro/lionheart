@@ -9,6 +9,10 @@
 int host_display_init(int headless, const char *dump_frames, const char *dump_vram);
 int host_display_configure(int fullscreen, int scale_mode, int linear);
 void host_present(gpu_t *);
+/* Read presses that arrived during pacing before the guest resumes. */
+void host_display_events(void);
+/* Account for pending presses at the guest input handoff. */
+void host_display_input_delivered(void);
 unsigned host_input_state(void);
 void host_display_state_slot(unsigned);
 void host_display_crt(int preset);
