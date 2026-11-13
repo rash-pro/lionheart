@@ -51,7 +51,7 @@ struct frame_present {
     gpu_t *gpu, *checkpoint;
     uint64_t serial, checkpoint_serial; /* the presentation GPU's next polygon */
     frame_present_renderer_t renderer;
-    int fractions, precision;
+    int fractions, precision, precise_applied;
     /* The guest's PGXP corners of the polygons since the checkpoint, in
      * serial order. */
     struct corners { uint64_t serial; unsigned mask; float at[4][3]; } *corners;
@@ -81,7 +81,8 @@ static void count_polygon(void *context, unsigned opcode, const uint32_t *packet
 }
 static void ignore_start(void *context, uint32_t start) { (void)context; (void)start; }
 static void ignore_vblank(void *context) { (void)context; }
-static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon, NULL};
+static void complete(void *context, const uint32_t *packet, unsigned count);
+static const gpu_observer_t counter = {ignore_start, ignore_vblank, count_polygon, complete};
 
 frame_present_t *frame_present_create(void) {
     frame_present_t *p = calloc(1, sizeof(*p));
@@ -223,6 +224,22 @@ static void beneath(frame_present_t *p, at_t *at) {
         uint32_t words[12];
         uint8_t packet[12 * 4];
         if (!(n = frame_blend_leftover(p->blend, i, at->num, at->den, words))) continue;
+        if (p->precision && p->fractions) {
+            float xy[4][2], depth[4] = {0, 0, 0, 0}, fraction[4][2] = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+            unsigned op = words[0] >> 24, corners = (op & 8) ? 4 : 3, c, word = 1, known = 0;
+            frame_blend_leftover_precise(p->blend, i, at->num, at->den, xy, depth);
+            for (c = 0; c < corners; ++c) {
+                if (c && (op & 16)) ++word;
+                fraction[c][0] = xy[c][0] - 0.5f - low(words[word]);
+                fraction[c][1] = xy[c][1] - 0.5f - high(words[word]);
+                word += (op & 4) ? 2 : 1;
+                if (depth[c] > 0) ++known;
+            }
+            gpu_subpixel(p->gpu, fraction);
+            if (p->precision == 2 && known == corners) gpu_subpixel_depth(p->gpu, depth);
+            p->precise_applied = 1;
+            p->totals.corners_blended += corners;
+        }
         for (k = 0; k < n; ++k) put_le32(packet + k * 4, words[k]);
         gpu_gp0_words(p->gpu, packet, n);
         p->serial = serial;
@@ -289,6 +306,21 @@ static void precise(frame_present_t *p, const uint8_t *packet, unsigned op, uint
     }
     gpu_subpixel(p->gpu, fraction);
     if (p->precision == 2 && known == corners) gpu_subpixel_depth(p->gpu, depth);
+    p->precise_applied = 1;
+}
+
+static void complete(void *context, const uint32_t *words, unsigned count) {
+    frame_present_t *p = context;
+    unsigned op = words[0] >> 24, i;
+    if (op < 0x20 || op >= 0x40 || !p->precision || !p->fractions) return;
+    /* A packet split across chunks cannot blend, but once complete it has
+     * the same endpoint precision as an unsplit packet and its checkpoint. */
+    if (!p->precise_applied) {
+        uint8_t packet[12 * 4];
+        for (i = 0; i < count; ++i) put_le32(packet + i * 4, words[i]);
+        precise(p, packet, op, 1, 1, 0);
+    }
+    p->precise_applied = 0;
 }
 
 /* GP0 words, with the newest frame's polygons, offsets and sprites where

@@ -87,7 +87,14 @@ static uint64_t le64(const uint8_t *p) { return le32(p) | (uint64_t)le32(p + 4) 
 static frame_present_t *present;
 static uint64_t polygons;
 static int precision;
-static void tap_gp0(void *context, const uint8_t *words, unsigned count) { (void)context; frame_present_gp0(present, words, count); }
+static int split;
+static void tap_gp0(void *context, const uint8_t *words, unsigned count) {
+    (void)context;
+    if (split) {
+        unsigned i;
+        for (i = 0; i < count; ++i) frame_present_gp0(present, words + i * 4, 1);
+    } else frame_present_gp0(present, words, count);
+}
 static void tap_gp1(void *context, uint32_t word) { (void)context; frame_present_gp1(present, word); }
 static void tap_read(void *context) { (void)context; frame_present_read(present); }
 static void tap_vblank(void *context) { (void)context; frame_present_vblank(present); }
@@ -257,6 +264,7 @@ static int run_waiting(void) {
 }
 
 int main(int argc, char **argv) {
+    split = argc > 6 && !strcmp(argv[6], "split");
     if (argc > 1 && !strcmp(argv[1], "phases")) return run_phases();
     if (argc > 1 && !strcmp(argv[1], "waiting")) return run_waiting();
     if (argc > 3 && !strcmp(argv[1], "replay"))

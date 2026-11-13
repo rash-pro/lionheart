@@ -174,11 +174,12 @@ struct Triangle {
     Corner c[3];
     std::string colour;
 };
-std::vector<std::vector<Triangle>> drawn(lh::Case &t, const char *scene, const char *precision) {
+std::vector<std::vector<Triangle>> drawn(lh::Case &t, const char *scene, const char *precision, bool split = false) {
     auto record = t.temp() / (std::string(scene) + "-" + precision + ".rec");
     t.ok(t.harness("scene").arg(scene).arg(record).timeout(60));
-    auto out = t.ok(t.harness("probe").arg("replay").arg(record).arg(t.temp() / "probe.rgb").arg("fractions").arg(precision)
-                        .timeout(120)).out;
+    auto command = t.harness("probe").arg("replay").arg(record).arg(t.temp() / "probe.rgb").arg("fractions").arg(precision);
+    if (split) command.arg("split");
+    auto out = t.ok(command.timeout(120)).out;
     std::vector<std::vector<Triangle>> pictures;
     std::istringstream in(out);
     for (std::string line; std::getline(in, line);) {
@@ -263,4 +264,40 @@ LH_TEST(test_precision_takes_the_guests_pgxp_where_blending_does_not) {
     for (const auto &picture : drawn(t, "held", "vertex"))
         for (const auto &tri : picture)
             for (const auto &c : tri.c) LH_EQ(c.w, 0.0);
+}
+
+LH_TEST(test_precision_reaches_polygons_culled_at_the_edge) {
+    // The strip's recovered quads use the same projection as their visible
+    // neighbours, including depth. A whole-pixel affine quad would break
+    // that surface just before it leaves the screen.
+    auto pictures = drawn(t, "pan-shaded", "perspective");
+    size_t corners = 0;
+    for (size_t p = 8; p < pictures.size(); ++p)
+        for (const auto &tri : pictures[p]) {
+            if (tri.colour != "808080") continue;
+            for (const auto &c : tri.c) {
+                ++corners;
+                LH_EQ(c.w, 1200.0);
+                LH_CHECK_MSG(!whole(c.x) || !whole(c.y), "a culled corner lost its fraction");
+            }
+        }
+    LH_CHECK_MSG(corners > 0, "no strip corners drawn");
+}
+
+LH_TEST(test_precision_survives_split_packets) {
+    // Splitting every GPU write must preserve endpoint precision even
+    // though split packets are held rather than interpolated.
+    for (auto mode : {"vertex", "perspective"}) {
+        auto whole_packets = drawn(t, "still", mode), split_packets = drawn(t, "still", mode, true);
+        LH_EQ(whole_packets.size(), split_packets.size());
+        for (size_t p = 8; p < whole_packets.size(); ++p) {
+            LH_EQ(whole_packets[p].size(), split_packets[p].size());
+            for (size_t i = 0; i < whole_packets[p].size(); ++i)
+                for (size_t c = 0; c < 3; ++c) {
+                    LH_EQ(whole_packets[p][i].c[c].x, split_packets[p][i].c[c].x);
+                    LH_EQ(whole_packets[p][i].c[c].y, split_packets[p][i].c[c].y);
+                    LH_EQ(whole_packets[p][i].c[c].w, split_packets[p][i].c[c].w);
+                }
+        }
+    }
 }

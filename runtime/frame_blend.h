@@ -164,6 +164,10 @@ unsigned frame_blend_colours(const frame_blend_t *, uint64_t serial, uint32_t nu
  * (320 by 240 unless set). */
 unsigned frame_blend_leftovers(const frame_blend_t *);
 unsigned frame_blend_leftover(const frame_blend_t *, unsigned index, uint32_t num, uint32_t den, uint32_t words[12]);
+/* Culled corners have linked projections too: retain their precision and
+ * depth until they leave the screen, as frame_blend_precise does. */
+unsigned frame_blend_leftover_precise(const frame_blend_t *, unsigned index, uint32_t num, uint32_t den,
+                                     float xy[4][2], float depth[4]);
 void frame_blend_screen(frame_blend_t *, int32_t width, int32_t height);
 
 /* Move every corner on a straight line in view space, as before runs turned

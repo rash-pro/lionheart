@@ -97,7 +97,10 @@ command as the guest's GPU is about to draw it (`pgxp_packet`) and hands the ans
 command (`frame_present_corners`); the presentation GPU draws the same packet with it. As PGXP draws, a corner
 stands half a pixel up and left of that point, and a polygon is drawn in perspective only when every corner
 has a depth. A corner that follows the polygons around it (a shadow's centre) moves by fractions as without
-PGXP. The depths reach the renderer beside the fractions (`gpu_subpixel_depth`). What PGXP did not resolve
+PGXP. Polygons recovered at the screen's edge use their linked projections too, so they retain precision and
+depth until they leave the picture. A packet split across journal chunks stays uninterpolated, but receives
+its endpoint precision when the presentation GPU finishes assembling it. The depths reach the renderer beside
+the fractions (`gpu_subpixel_depth`). What PGXP did not resolve
 stays at whole pixels, as without smooth motion. At 1x smooth motion draws whole pixels and PGXP has no effect
 with it, so that its pictures stay those of the offline renderer.
 
@@ -218,8 +221,9 @@ with Vulkan).
 
 With PGXP enabled, precision comes from linked view-space positions and from the guest's PGXP records.
 A corner without either source stays at its whole pixel; a polygon without depth at every corner
-keeps affine texturing. Shared edges need consistent corner positions, so mixed precision can retain
-the same small gaps as PGXP without smooth motion.
+keeps affine texturing. Shared edges need consistent corner positions: a whole corner beside a precise one
+can leave a subpixel gap, and adjacent affine and perspective polygons can disagree in their texture mapping.
+Identity and the guest's cache can also choose different projections at a shared whole-pixel position.
 
 In 600 pictures of Squall standing in the Garden's bed room, the mean displacement of matched textured
 triangle corners was 0.3926 PlayStation pixels per picture before the turning correction, and zero after it,

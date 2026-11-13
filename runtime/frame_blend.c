@@ -1392,6 +1392,28 @@ unsigned frame_blend_leftover(const frame_blend_t *b, unsigned index, uint32_t n
     return n;
 }
 
+unsigned frame_blend_leftover_precise(const frame_blend_t *b, unsigned index, uint32_t num, uint32_t den,
+                                      float xy[4][2], float depth[4]) {
+    const leftover_t *l;
+    unsigned c, corners;
+    if (index >= b->leftover_count || !den || num >= den) return 0;
+    l = &b->leftovers[index];
+    corners = (l->words[0] & 0x08000000u) ? 4 : 3;
+    for (c = 0; c < corners; ++c) {
+        const vertex_t *v = &b->vertices[l->vertex[c]];
+        int32_t view[3];
+        int64_t z;
+        double at[2];
+        (void)place(b, v, num, den, view);
+        project_exact(view, between(v->ofx[0], v->ofx[1], num, den), between(v->ofy[0], v->ofy[1], num, den),
+                      (uint32_t)between((int32_t)v->h[0], (int32_t)v->h[1], num, den), v->shift, v->lm, at);
+        z = v->shift ? view[2] : asr(view[2], 12);
+        xy[c][0] = (float)at[0]; xy[c][1] = (float)at[1];
+        depth[c] = z > 0 && z <= 65535 ? (float)z : 0;
+    }
+    return (1u << corners) - 1;
+}
+
 unsigned frame_blend_polygon(const frame_blend_t *b, uint64_t serial, uint32_t num, uint32_t den,
                              uint32_t xy[4], frame_blend_check_t *check) {
     uint64_t i = serial - b->info.first_polygon;
