@@ -176,17 +176,33 @@ car route, the minimap and 2D (53%), far terrain that blending holds where its n
 terrain whose shading changes with distance (16%).
 
 The automatic checks on the complete recordings report zero stray corners and zero resized world
-polygons. The 27 resized polygons on the town route remain in the Garden at VBlank 2426. At a one-pixel
-reporting threshold, walking improves from 5 hole pixels to 0; town from 110 to 83 (7 world, 76 Garden);
-car from 821 to 205. All remaining occurrences are classified below. A zero stray/resized count does
-not imply a closed mesh.
+polygons. The 27 resized polygons on the town route remain in the Garden at VBlank 2426.
+
+## Endpoint ground net
+
+Some faces are absent from both game frames but face the camera between them. A union of submitted
+faces cannot supply their material. Between world frames, the presenter draws the newer frame's
+opaque ground at its recorded positions underneath the interpolated picture. This net supplies ground
+where the intermediate mesh opens. It does not invent packets for the missing faces. The live presenter
+and offline tool restore polygon serials after injected draws, and restore draw mode and texture window.
+Triangles and quads, textured or untextured, flat or Gouraud are supported. Models with their own
+translation and semitransparent polygons are excluded. At alpha 0 and 1 the net draws nothing.
+
+The minimap can cover a hole with a semitransparent draw. The hole counter then credits the minimap,
+so its clear-colour definition cannot see that hole. The net also closes these holes, including their
+dark blended edges. The tool reports net pixels separately by their last opaque fragment. Translucent overlays preserve
+that attribution. A later opaque draw replaces it even when the colour does not change.
+The hole definition and reporting threshold are unchanged.
+
+The accepted cost is ground extending one to three pixels beyond the blended horizon at the right
+screen edge: six grey pixels across VBlanks 6708 and 6744 become slightly lighter. This is invisible
+in motion. No timing or cost measurement is claimed.
 
 ## Verification status
 
-The identity check and visual acceptance are separate gates. The world map is enabled on this branch,
-but the remaining missing faces fail the closed-world-mesh gate. It must not be reported as release-ready.
-The camera check proves terrain displacement on the recorded routes; it does not prove visibility,
-texture continuity, or geometry at unvisited locations.
+The endpoint net closes the recorded world holes. Unvisited locations and the outstanding routes
+still require verification. The camera check proves terrain displacement on the recorded routes.
+It does not prove visibility, texture continuity, or geometry at unvisited locations.
 
 The late cards have not yet been used to establish a flying route. Sea animation, shadows, vehicle exit
 and map-edge wrapping remain unverified. The local shape vote alone is not evidence that wrapping
@@ -194,28 +210,10 @@ is handled or that it resets safely.
 
 ## Limits
 
-The car crack at VBlank 6802 is fixed: the older triangle remains in the intermediate mesh before
-collapsing to zero area, closing all 69 pixels. The final rule reduces the complete car recording from
-821 pixels in 52 pictures to 205 in 23, and removes all five walking pixels. Moving-corner percentages
-are unchanged. It also fixes 27 world pixels on the town route.
-
-Every remaining world detection was classified with endpoint and intermediate corners, and checked
-against actual triangle packets elsewhere in the recording. Of 212 detected world pixels:
-
-- 197 belong to faces absent from both endpoint lists: 190 car pixels and 7 town pixels. Their integer
-  signed areas are nonpositive at both endpoints and positive between. Some are front-facing below
-  the game's integer culling precision, while others acquire the intermediate positive area through
-  rounding. At car 6890, the actual face's first submitted packet is at 6892: a two-frame union cannot
-  recover its material from the adjacent endpoint packets.
-- Five, at car 6848, belong to a face degenerate in the older frame and wholly beyond the right screen
-  edge in the newer frame. Neither packet list contains it. Its intermediate triangle covers five pixels.
-- Nine are transparent texture samples inside a current triangle, and one is an opaque near-black texel
-  shaded to black. These are at car 6696–6708. Independent packet/VRAM replay identifies the samples;
-  they are not gaps in connectivity. The hole checker still counts all ten; no exception hides them.
-
-Thus 202 geometric hole pixels remain in 17 world pictures. Observed connectivity, rather than a
-hypothetical quad split or T junction, accounts for every one. The 76 Garden detections and 27 resized
-Garden polygons also occur on a fresh redraw built from trunk b2076a6; they are field defects.
+Before the net, 202 geometric hole pixels remained in 17 world pictures: faces absent from both
+endpoint lists, including a face beyond the screen edge at the newer endpoint. Ten material detections
+were also counted. The net now covers these gaps with recorded ground. The Garden remains a field
+matter, outside this pass.
 
 Removing holds independently separates shared points at car 7138: identical endpoints at (40,189)
 produce (40,189) along one path and (40,190) along the other. Two diverging shared edges explain its
@@ -227,7 +225,7 @@ it was first submitted. These variants stay outside production.
 
 Far held terrain, distance-dependent shading, the minimap and other 2D still change at the game's rate.
 Sea animation, flight, vehicle exit and map-edge wrapping/reset remain unverified. The optional routes
-were not added while the prerequisite visual gate fails.
+remain outstanding.
 
 ## Headless live evidence
 
@@ -241,26 +239,25 @@ No timing or display-pacing claim is made for this continuation change.
 
 ## Visual defects observed
 
-All original one-pixel hole occurrences were inspected with their two adjacent game pictures, together
-with turn, height-change and block-entry samples. No additional wrong picture was found beyond the
-remaining world geometry below and the unchanged Garden defects. The original 6802 crack is closed.
+The net closes the previously enumerated world geometry holes, including those obscured by the
+minimap. Full-recording counts follow. Town's remaining detections are unchanged Garden pixels.
 
-Remaining geometric world defects, as VBlank (pixels):
+| Route | Hole pixels | Net pixels | Pictures showing net |
+|---|---:|---:|---:|
+| walk | 0 | 0 | 0 |
+| town | 76 | 7 | 1 |
+| car | 0 | 263 | 40 |
 
-- Town: 1966 (7).
-- Car: 6610 (5), 6618 (5), 6788 (2), 6848 (5), 6882 (10), 6888 (25), 6890 (33),
-  7166 (10), 7170 (18), 7188 (9), 7192 (4), 7244 (27), 7246 (28), 7252 (1),
-  7260 (10), 7262 (3).
+All alpha-1 frames are exact. Moving corners on the clip windows remain 81.75%, 92.00%, and 94.19%
+for walk, town, and car. Stray corners and resized world polygons remain zero.
 
-Material detections, still counted: car 6696 (1), 6698 (2), 6700 (3), 6702 (1), 6704 (1),
-6706 (1), 6708 (1). Nine sample transparent texels; at 6700 one opaque texel shades to black.
+The net adds three native cases covering omitted-face ground, serial preservation and zero-net
+picture equality, model and translucency exclusion, and endpoint suppression. Disabling only the net
+fails the omitted-face fixture with 55 incorrect pixels. The final non-game, non-realtime suite has 4,155 passes and two skips.
+The earlier battle-magic and field-bedroom windows retain byte-identical output pictures.
 
-Unchanged Garden detections: 2428 (2), 2430 (2), 2432 (3), 2434 (1), 2436 (4), 2438 (10),
-2440 (2), 2442 (14), 2444 (5), 2446 (2), 2448 (8), 2450 (9), 2452 (14). A fresh trunk
-comparison reproduces all 76 pixels at these VBlanks, with 32 alpha-1 game frames exact.
-
-The checker was not weakened. One-pixel enumeration uses a private threshold-only build; the production
-tool retains its default reporting threshold. Aggregate counts include every detected pixel.
+Reproduce the counts with `build/devtools/inbetween RECORDING --causes`. Run the native suite with
+`FF8_PLAYER_HOST=$PWD/build/player/lionheart SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy nice -n 19 ctest --test-dir build/native-tests -j4 -LE "game|realtime"`.
 
 ## Suite receipts
 
