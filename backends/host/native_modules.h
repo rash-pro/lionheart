@@ -50,6 +50,11 @@ void native_modules_take_over(int enabled);
 /* Registers everything queued. Only call while no guest code or lookup is running. */
 void native_modules_commit(cpu_t *c);
 size_t native_modules_registered(void);
+/* The GTE projection entries every module calls: recording versions while a
+ * host observes projections, gte_rtps and gte_rtpt again with NULL. Applies to
+ * registered modules at once and to every later one. Call it on the emulation
+ * thread, outside module code. */
+void native_modules_bind_projection(void (*rtps)(cpu_t *, unsigned, int), void (*rtpt)(cpu_t *, unsigned, int));
 
 /* Developer path: a directory of modules, handed over a few at a time. */
 int native_modules_scan(const char *directory);

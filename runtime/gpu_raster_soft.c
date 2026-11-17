@@ -85,6 +85,8 @@ static void pixel(gpu_raster_t *s, int x, int y, int r, int g, int b,
         r = clamp(r, 31); g = clamp(g, 31); b = clamp(b, 31);
     }
     out = (uint16_t)(r | (g << 5) | (b << 10) | (texel & 0x8000));
+    if (s->fragment && !((s->mask & 2) && (s->vram[y * 1024 + x] & 0x8000)))
+        s->fragment(s->fragment_context, x, y, semi);
     gpu_raster_store(s, x, y, out);
 }
 

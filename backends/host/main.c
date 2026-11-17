@@ -38,6 +38,8 @@
 #include "pgxp.h"
 #endif
 #include "native_modules.h"
+#include "frame_identity_host.h"
+#include "frame_present_host.h"
 #ifdef FF8_PLAYER
 #include "native_player.h"
 #include "native_setup.h"
@@ -79,6 +81,15 @@ static host_input_t input;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
 static int pgxp_mode;
+/* Developer switch: --frame-identity, --frame-identity-dump PATH, --frame-oracle PATH,
+ * --frame-record PATH [--frame-record-window FROM:UNTIL]. */
+static int frame_identity;
+static const char *frame_identity_dump, *frame_oracle, *frame_record;
+static uint64_t frame_record_from = 1, frame_record_until;
+/* Smooth motion: wanted (the setting), the renderer draws above the
+ * PlayStation's resolution, and a change from the menu waits for the next
+ * VBlank. */
+static int smooth_motion, smooth_fractions, smooth_pending, headless_run;
 #ifdef FF8_PLAYER
 static int player_disc_insert(cpu_t *c, const char *path, int swap, char *error, size_t size) {
     host_disc_runtime_t prepared;
@@ -109,6 +120,7 @@ static void gui_changed(void *context, const char *key, int overlay) {
     if (!strcmp(key,"fullscreen") || !strcmp(key,"scale-mode") || !strcmp(key,"filter"))
         host_display_configure(o->fullscreen,o->scale_mode,o->linear);
     else if (!strcmp(key,"crt")) host_display_crt(o->crt);
+    else if (!strcmp(key,"smooth-motion")) { smooth_motion = o->smooth_motion; smooth_pending = 1; }
     else if (!strcmp(key,"osd")) host_osd_configure(o->osd,o->osd_tests);
     else if (!strcmp(key,"ra")) host_ra_enable(o->ra);
     else if (!strcmp(key,"ra-notify")) host_ra_notify(o->ra_notify);
@@ -246,6 +258,8 @@ static void restored(cpu_t *c, unsigned disc) {
     (void)disc;
 #endif
     if (state_bridge) host_state_bridge_restore(state_bridge,c,c->hw->vblanks);
+    host_frame_identity_restored(c);
+    host_frame_present_restored(c);
     if (disc) host_display_disc(disc);
 #ifdef FF8_PLAYER
     if (disc) host_native_disc(disc);
@@ -287,14 +301,91 @@ static void native_poll(void) {
 #endif
 }
 #endif
+#ifdef FF8_VULKAN
+/* Smooth motion's pictures on the display's clock (host_display_tick): drawn
+ * on a thread of their own, from what the guest queues for it; where that
+ * thread cannot start, on the game thread while pacing waits for the guest's
+ * next VBlank, and once after each. */
+static gpu_t *smooth_draw(void *context, double since, int whole) {
+    return host_frame_present_draw((cpu_t *)context, since, whole);
+}
+static void smooth_take(void *context) { (void)context; host_frame_present_take(); }
+static void smooth_wait(double ms) {
+    host_display_tick();
+    host_display_hold(ms);
+    SDL_Delay(ms > 1.5 ? 1 : 0);
+}
+/* Once the window and the audio are up. */
+static void smooth_begin(void) {
+    if (!host_display_smoothing()) return;
+    host_frame_present_queue(1, host_display_rebind);
+    if (host_display_presenter(smooth_take, 1)) return;
+    host_frame_present_queue(0, NULL);
+    host_audio_waiter(smooth_wait);
+}
+#endif
+/* Starts or stops smooth motion to match the setting. */
+static void smooth_apply(cpu_t *c, int audio) {
+    smooth_pending = 0;
+    if (smooth_motion && !host_frame_present_running()) {
+        if (frame_identity) { fprintf(stderr, "Smooth motion is off while the frame identity developer switches run\n"); return; }
+        if (!host_frame_present_start(c, smooth_fractions, pgxp_mode)) { fprintf(stderr, "Smooth motion could not start\n"); return; }
+        if (pgxp_mode && !smooth_fractions) fprintf(stderr, "Smooth motion draws whole pixels at 1x; PGXP has no effect with it there\n");
+        host_display_source(host_frame_present_gpu());
+        host_display_rebind(host_frame_present_gpu());
+#ifdef FF8_VULKAN
+        host_display_smooth(smooth_draw, c);
+        if (audio) smooth_begin();
+#else
+        (void)audio;
+#endif
+    } else if (!smooth_motion && host_frame_present_running()) {
+#ifdef FF8_VULKAN
+        host_display_presenter(NULL, 0);
+        host_frame_present_queue(0, NULL);
+        host_audio_waiter(NULL);
+        host_display_smooth(NULL, NULL);
+#endif
+        host_display_source(NULL);
+        host_display_rebind(c->hw->gpu);
+        host_frame_present_stop(0);
+    }
+}
+/* VBlanks since the display last took a picture: with none for a while (a
+ * hidden window), the presenter is still drawn whole, to keep its journal short. */
+static unsigned smooth_idle;
+static uint64_t smooth_pictures;
+static cpu_t *smooth_cpu;
+static void smooth_present(cpu_t *c) {
+    int whole = host_input_fast() || (fast && !headless_run);
+#ifdef FF8_VULKAN
+    if (host_display_smoothing()) {
+        if (c != smooth_cpu) { smooth_cpu = c; host_display_park(1); host_display_smooth(smooth_draw, c); host_display_park(0); }
+        host_display_smooth_vblank(!!(gpu_status(c->hw->gpu) & (1u << 20)), whole);
+        host_present(host_frame_present_gpu());
+        if (host_display_presenting()) return;
+        host_display_tick();
+        if (host_display_pictures() != smooth_pictures) { smooth_pictures = host_display_pictures(); smooth_idle = 0; }
+        else if (++smooth_idle > 30) host_frame_present_draw(c, 0, 1);
+        return;
+    }
+#endif
+    /* Without a window to pace by, every VBlank is drawn on the guest's own
+     * timeline; fast-forward shows the game as it is. */
+    host_present(host_frame_present_draw(c, 0, whole));
+}
 static void present_frame(cpu_t *c, void *context) {
     (void)context;
 #ifdef FF8_PLAYER
     native_poll();
 #endif
     if (!host_audio_pump(c->hw->spu)) cpu_stop(c, "host audio dump failed");
-    host_present(c->hw->gpu);
+    if (smooth_pending) smooth_apply(c, 1);
+    if (host_frame_present_running()) smooth_present(c);
+    else host_present(c->hw->gpu);
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
+    host_display_events();
+    host_display_input_delivered();
     host_input_sync(c, &input);
     if (state_bridge) host_state_bridge_frame(state_bridge, c, c->hw->vblanks);
     if (achievements) host_achievements_frame(achievements, c);
@@ -512,6 +603,7 @@ int main(int argc, char **argv) {
     const char *frame_path = NULL, *vram_path = NULL;
     const char *audio_path = NULL;
     const char *audio_stats_path = NULL;
+    const char *present_stats_path = NULL;
     const char *spu_path = NULL;
     const char *savestate_dir = NULL, *load_state = NULL, *save_state = NULL;
     uint64_t save_at = 0;
@@ -569,6 +661,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Diagnostic: --screenshot-at FRAME (repeatable, presentation frame starting at zero)\n");
         fprintf(stderr, "Notifications: --osd 0|1 (default 1)\n");
         fprintf(stderr, "CRT (Vulkan): --crt off|pvm|tv|arcade (F9 cycles) --dump-presented-frames DIR --present-size WxH\n");
+        fprintf(stderr, "Smooth motion: --smooth-motion [0|1] (frames between the game's); --present-stats PATH.csv\n");
         fprintf(stderr, "Local telemetry: --state-bridge PORT (0 picks a port), --achievements PATCH.json [--achievement-progress PATH]\n");
         fprintf(stderr, "Audio options: --mute --dump-audio PATH.wav --audio-stats PATH.csv --fast (or hold Tab)\n");
         fprintf(stderr, "SPU validation: --spu-control (exact guest state, raw CD output only)\n");
@@ -630,6 +723,18 @@ int main(int argc, char **argv) {
             native_pace_count = (unsigned)count; native_pace_vblanks = (unsigned)vblanks;
         }
 #endif
+        else if (!strcmp(argv[i], "--frame-identity")) frame_identity = 1;
+        else if (!strcmp(argv[i], "--frame-identity-dump") && i + 1 < argc) { frame_identity = 1; frame_identity_dump = argv[++i]; }
+        else if (!strcmp(argv[i], "--frame-oracle") && i + 1 < argc) { frame_identity = 1; frame_oracle = argv[++i]; }
+        else if (!strcmp(argv[i], "--frame-record") && i + 1 < argc) { frame_identity = 1; frame_record = argv[++i]; }
+        else if (!strcmp(argv[i], "--frame-record-window") && i + 1 < argc) {
+            char *end;
+            frame_record_from = strtoull(argv[++i], &end, 10);
+            frame_record_until = *end == ':' ? strtoull(end + 1, &end, 10) : 0;
+            if (*end || !frame_record_from || (frame_record_until && frame_record_until < frame_record_from)) {
+                fprintf(stderr, "Invalid recording window: %s (FROM:UNTIL, VBlanks)\n", argv[i]); free(c); return 2;
+            }
+        }
         else if (!strcmp(argv[i], "--legacy-overlays")) legacy_overlays = 1;
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-state") && i + 1 < argc) state_path = argv[++i];
@@ -647,6 +752,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--log-events")) log_events = 1;
         else if (!strcmp(argv[i], "--dump-audio") && i + 1 < argc) audio_path = argv[++i];
         else if (!strcmp(argv[i], "--audio-stats") && i + 1 < argc) audio_stats_path = argv[++i];
+        else if (!strcmp(argv[i], "--present-stats") && i + 1 < argc) present_stats_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-spu") && i + 1 < argc) spu_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-frames") && i + 1 < argc) frame_path = argv[++i];
         else if (!strcmp(argv[i], "--dump-vram") && i + 1 < argc) vram_path = argv[++i];
@@ -925,6 +1031,9 @@ int main(int argc, char **argv) {
 #ifdef FF8_PGXP
     pgxp_bind(hw_get(c)->gpu, !strcmp(pgxp, "vertex") ? PGXP_VERTEX : !strcmp(pgxp, "perspective") ? PGXP_PERSPECTIVE : PGXP_OFF);
 #endif
+    smooth_motion = options.smooth_motion; headless_run = headless;
+    smooth_fractions = !strcmp(renderer, "vulkan") && internal_scale > 1;
+    if (smooth_motion) smooth_apply(c, 0);
 #ifdef FF8_VULKAN
     if (!host_display_gpu(hw_get(c)->gpu)) {
         host_display_shutdown(NULL); fclose(log); hw_destroy(c); free(c); HOST_GUI_CLEANUP(); return 2;
@@ -987,6 +1096,16 @@ int main(int argc, char **argv) {
         sio_destroy(c);
         host_display_shutdown(NULL); fclose(log); hw_destroy(c); free(c); HOST_GUI_CLEANUP(); return 2;
     }
+#ifdef FF8_VULKAN
+    if (!host_display_present_stats(present_stats_path)) {
+        fprintf(stderr, "Cannot open present statistics: %s\n", present_stats_path);
+        host_audio_shutdown(c->hw->spu); sio_destroy(c);
+        host_display_shutdown(NULL); fclose(log); hw_destroy(c); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
+    smooth_begin();
+#else
+    (void)present_stats_path;
+#endif
     if (!host_audio_stats(audio_stats_path)) {
         fprintf(stderr, "Cannot open audio statistics: %s\n", audio_stats_path);
         host_audio_shutdown(c->hw->spu); sio_destroy(c);
@@ -1045,6 +1164,14 @@ int main(int argc, char **argv) {
         if (!native_pace_vblanks) { native_modules_feed(SIZE_MAX); native_modules_commit(c); }
     }
 #endif
+    /* Before any module is opened, so every one binds the recording entries. */
+    if (frame_identity && !host_frame_identity_start(c, frame_identity_dump, frame_oracle,
+                                                     generated_count && !c->interpreter_only,
+                                                     frame_record, frame_record_from, frame_record_until)) {
+        host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+        host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+        sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); HOST_GUI_CLEANUP(); return 2;
+    }
 #ifdef FF8_PLAYER
     /* The player starts on the interpreter and switches set by set as its own
      * modules arrive; without the compiler this starts nothing. */
@@ -1124,6 +1251,7 @@ int main(int argc, char **argv) {
     }
     hw_sync(c);
     summary(c);
+    if (!host_frame_identity_stop()) result = 2;
     printf("Trace: %s\n", log_path);
     if (spu_path) {
         FILE *file = fopen(spu_path, "wb");
@@ -1143,6 +1271,7 @@ int main(int argc, char **argv) {
     if (gui_allowed) host_gui_shutdown();
 #endif
     if (!host_display_shutdown(c->hw ? c->hw->gpu : NULL)) result = 2;
+    host_frame_present_stop(1);
     if (!sio_cards_ok(c)) { fprintf(stderr, "Memory card write-back failed\n"); result = 2; }
     host_states_shutdown();
     if (!host_achievements_close(achievements)) result = 2;

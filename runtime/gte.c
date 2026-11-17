@@ -1,4 +1,5 @@
 #include "gte.h"
+#include "gte_divide.h"
 #if defined(FF8_PGXP)
 #include "pgxp.h"
 #endif
@@ -206,19 +207,31 @@ static const uint8_t unr[257] = {
     0x00
 };
 
-static uint32_t divide(cpu_t *c, uint32_t h, uint32_t z) {
+/* The UNR division, for h < z * 2. */
+static uint32_t reciprocal(uint32_t h, uint32_t z) {
     unsigned shift = 0;
-    uint32_t d, u, reciprocal;
+    uint32_t d, u, r;
     uint64_t quotient;
-    if (h >= z * 2) { flag(c, 17); return 0x1ffff; }
     while (!(z & 0x8000u)) { z <<= 1; ++shift; }
     d = z;
     u = unr[(d - 0x7fc0u) >> 7] + 0x101u;
-    reciprocal = (0x2000080u - d * u) >> 8;
-    reciprocal = (0x80u + reciprocal * u) >> 8;
-    quotient = ((uint64_t)(h << shift) * reciprocal + 0x8000u) >> 16;
+    r = (0x2000080u - d * u) >> 8;
+    r = (0x80u + r * u) >> 8;
+    quotient = ((uint64_t)(h << shift) * r + 0x8000u) >> 16;
     return quotient > 0x1ffffu ? 0x1ffffu : (uint32_t)quotient;
 }
+
+static uint32_t divide(cpu_t *c, uint32_t h, uint32_t z) {
+    if (h >= z * 2) { flag(c, 17); return 0x1ffff; }
+    return reciprocal(h, z);
+}
+
+#ifndef FF8_GTE_REFERENCE
+/* The reference build is linked beside this one and judges commands only. */
+uint32_t gte_divide(uint32_t h, uint32_t z) {
+    return h >= z * 2 ? 0x1ffffu : reciprocal(h, z);
+}
+#endif
 
 #if defined(FF8_PGXP)
 /* Both the generic oracle and specialized exact/play commands publish here. */

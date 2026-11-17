@@ -1,0 +1,35 @@
+# FF8 USA disc1-early.mcr (use a copy): load the default save, on the world map by Galbadia
+# Garden, for 60 fps presentation on the world map. VBlanks are one-based. The camera turns
+# left (L1), Squall walks up while it turns, the camera turns back (R1), Squall walks left,
+# the camera tilts to the high view (R2) while he walks down and it turns right, then right
+# and up-right until an encounter starts (the world map ends near VBlank 2350).
+300 CROSS
+302 -
+600 CROSS
+602 -
+900 CROSS
+902 -
+1140 CROSS
+1148 -
+1300 CROSS
+1308 -
+1460 CROSS
+1468 -
+1900 L1
+1950 -
+1960 UP+L1
+2040 -
+2050 R1
+2100 -
+2110 LEFT
+2200 -
+2210 R2
+2218 -
+2240 DOWN+R1
+2320 -
+2330 RIGHT
+2420 -
+2430 R2
+2438 -
+2450 UP+RIGHT
+2700 -

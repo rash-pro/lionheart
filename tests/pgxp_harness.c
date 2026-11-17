@@ -58,6 +58,21 @@ int main(void){
     assert(captured[0][0].x==30&&captured[0][0].w==1&&captured[0][1].w==1);
     pgxp_bind(g,PGXP_VERTEX);seed();
     gpu_gp0(g,0x600000ff);gpu_gp0(g,xy(-10,-20));gpu_gp0(g,xy(10,10));assert(pgxp_stats().polygons==0);
+    /* A presenter asks for a packet's corners before the bound GPU draws it:
+     * packet coordinates, the depth only in perspective, as drawn after. */
+    {
+        uint32_t flat[4]={0x200000ff,xy(-10,-20),xy(20,-20),xy(-10,30)};
+        uint32_t shaded[9]={0x340000ff,xy(-10,-20),0,0xff,xy(20,-20),0,0xff,xy(5,5),0};
+        pgxp_vertex_t out[4];
+        pgxp_bind(g,PGXP_PERSPECTIVE);seed();
+        assert(pgxp_packet(g,flat,out)==7);
+        assert(out[0].x==-10.25f&&out[0].y==-20&&out[0].w==100&&out[2].w==400);
+        draw(g,0,1);assert(captured[0][0].x==out[0].x+40&&captured[0][0].y==out[0].y-5&&captured[0][0].w==out[0].w);
+        assert(pgxp_packet(other,flat,out)==0);
+        assert(pgxp_packet(g,shaded,out)==3&&out[1].x==19.75f&&out[1].w==200&&out[2].x==5&&out[2].w==0);
+        pgxp_bind(g,PGXP_VERTEX);seed();
+        assert(pgxp_packet(g,flat,out)==7&&out[0].w==0&&out[1].x==19.75f);
+    }
     pgxp_bind(g,PGXP_OFF);seed();draw(g,0,0);assert(pgxp_stats().projections==0);
     pgxp_bind(NULL,PGXP_OFF);free(g);free(other);puts("PGXP cache/parser contracts passed");return 0;
 }

@@ -1,4 +1,5 @@
 #include "hw.h"
+#include "frame_oracle.h"
 
 static void irq(cpu_t *c) {
     struct hw *h = c->hw;
@@ -330,7 +331,11 @@ void dma_event(cpu_t *c) {
                     address = (address + count * 4) & 0x1ffffc;
                 } else for (i = 0; i < count; ++i) {
                     if (ch == 2) {
-                        if (from_ram) gpu_gp0(h->gpu, mem_read32(c, address));
+                        if (from_ram) {
+                            FRAME_ORACLE(frame_oracle_dma_word(address));
+                            gpu_gp0(h->gpu, mem_read32(c, address));
+                            FRAME_ORACLE(frame_oracle_dma_word(UINT32_MAX));
+                        }
                         else mem_write32(c, address, gpu_read(h->gpu));
                     } else if (ch == 3) mem_write32(c, address, cdrom_dma(c));
                     else if (ch == 6) {

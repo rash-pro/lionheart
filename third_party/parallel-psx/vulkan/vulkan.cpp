@@ -727,15 +727,114 @@ bool Context::create_device(VkPhysicalDevice gpu, VkSurfaceKHR surface, const ch
 		if (maintenance.swapchainMaintenance1) {
 			if (ext.supports_physical_device_properties2) *ppNext = &maintenance;
 			else device_info.pNext = &maintenance;
+			if (ext.supports_physical_device_properties2) ppNext = &maintenance.pNext;
 			enabled_extensions.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 		}
 	}
+	// Host: when each present reaches the display, for a host that paces by it.
+	VkPhysicalDevicePresentIdFeaturesKHR present_id = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR };
+	VkPhysicalDevicePresentWaitFeaturesKHR present_wait = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR };
+	if (surface && vkGetPhysicalDeviceFeatures2 &&
+	    has_vk_extension(queried_extensions, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+	    has_vk_extension(queried_extensions, VK_KHR_PRESENT_WAIT_EXTENSION_NAME)) {
+		VkPhysicalDeviceFeatures2 probe = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		probe.pNext = &present_id;
+		present_id.pNext = &present_wait;
+		vkGetPhysicalDeviceFeatures2(gpu, &probe);
+		present_id.pNext = nullptr;
+		if (present_id.presentId && present_wait.presentWait) {
+			present_id.pNext = &present_wait;
+			if (ext.supports_physical_device_properties2)
+			{
+				*ppNext = &present_id;
+				ppNext = &present_wait.pNext;
+			}
+			else
+			{
+				present_wait.pNext = const_cast<void *>(device_info.pNext);
+				device_info.pNext = &present_id;
+			}
+			enabled_extensions.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+			enabled_extensions.push_back(VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+		}
+	}
+#ifdef VK_EXT_present_mode_fifo_latest_ready
+	// Host: a present mode that shows the latest picture ready at each refresh
+	// without blocking, for a host that paces its presents itself.
+	VkPhysicalDevicePresentModeFifoLatestReadyFeaturesEXT latest_ready = {
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_EXT };
+	if (surface && vkGetPhysicalDeviceFeatures2 &&
+	    has_vk_extension(queried_extensions, VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME)) {
+		VkPhysicalDeviceFeatures2 probe = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		probe.pNext = &latest_ready;
+		vkGetPhysicalDeviceFeatures2(gpu, &probe);
+		latest_ready.pNext = nullptr;
+		if (latest_ready.presentModeFifoLatestReady) {
+			if (ext.supports_physical_device_properties2)
+			{
+				*ppNext = &latest_ready;
+				ppNext = &latest_ready.pNext;
+			}
+			else
+			{
+				latest_ready.pNext = const_cast<void *>(device_info.pNext);
+				device_info.pNext = &latest_ready;
+			}
+			enabled_extensions.push_back(VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME);
+		}
+	}
+#endif
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+	// Host: when each picture was shown, as the presentation engine saw it, and
+	// presents that wait for a given time, for a host that paces by the display.
+	VkPhysicalDevicePresentId2FeaturesKHR present_id2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR };
+	VkPhysicalDevicePresentTimingFeaturesEXT present_timing = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_TIMING_FEATURES_EXT };
+	const char *calibrated = has_vk_extension(queried_extensions, VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ?
+		VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME :
+		has_vk_extension(queried_extensions, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) ? VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME : nullptr;
+	if (present_fences && surface && vkGetPhysicalDeviceFeatures2 && calibrated &&
+	    has_vk_extension(queried_extensions, VK_KHR_PRESENT_ID_2_EXTENSION_NAME) &&
+	    has_vk_extension(queried_extensions, VK_EXT_PRESENT_TIMING_EXTENSION_NAME)) {
+		VkPhysicalDeviceFeatures2 probe = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		probe.pNext = &present_id2;
+		present_id2.pNext = &present_timing;
+		vkGetPhysicalDeviceFeatures2(gpu, &probe);
+		present_id2.pNext = nullptr;
+		if (present_id2.presentId2 && present_timing.presentTiming) {
+			present_id2.pNext = &present_timing;
+			if (ext.supports_physical_device_properties2)
+			{
+				*ppNext = &present_id2;
+				ppNext = &present_timing.pNext;
+			}
+			else
+			{
+				present_timing.pNext = const_cast<void *>(device_info.pNext);
+				device_info.pNext = &present_id2;
+			}
+			if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(), [&](const char *e) { return strcmp(e, calibrated) == 0; }))
+				enabled_extensions.push_back(calibrated);
+			enabled_extensions.push_back(VK_KHR_PRESENT_ID_2_EXTENSION_NAME);
+			enabled_extensions.push_back(VK_EXT_PRESENT_TIMING_EXTENSION_NAME);
+		}
+		else
+			present_id2.presentId2 = present_timing.presentTiming = present_timing.presentAtAbsoluteTime = VK_FALSE;
+	}
+#endif
 	if (ext.supports_physical_device_properties2)
 		vkGetPhysicalDeviceFeatures2KHR(gpu, &features);
 	else
 		vkGetPhysicalDeviceFeatures(gpu, &features.features);
 
 	ext.supports_swapchain_maintenance1 = maintenance.swapchainMaintenance1 == VK_TRUE;
+	ext.supports_present_wait = present_id.presentId == VK_TRUE && present_wait.presentWait == VK_TRUE;
+#ifdef VK_EXT_present_mode_fifo_latest_ready
+	ext.supports_fifo_latest_ready = latest_ready.presentModeFifoLatestReady == VK_TRUE;
+#endif
+#if defined(VK_EXT_present_timing) && defined(VK_KHR_present_id2)
+	ext.supports_present_timing = present_id2.presentId2 == VK_TRUE && present_timing.presentTiming == VK_TRUE;
+	ext.supports_present_at_absolute_time = ext.supports_present_timing && present_timing.presentAtAbsoluteTime == VK_TRUE;
+#endif
 	// Enable device features we might care about.
 	{
 		VkPhysicalDeviceFeatures enabled_features = *required_features;

@@ -14,6 +14,7 @@ static struct {
     FILE *stats;
     uint64_t clock_start, clock_frequency, samples, queue_sum, queue_min, queue_max, underruns;
     double deadline, resample_step, resample_phase;
+    void (*wait)(double ms);
     int16_t previous[2];
     unsigned have_previous;
 } host_audio;
@@ -67,6 +68,8 @@ int host_audio_stats(const char *path) {
     return fprintf(host_audio.stats, "frame,wall_seconds,queue_frames,speed,resample_ratio,throttled\n") > 0;
 }
 
+void host_audio_waiter(void (*wait)(double ms)) { host_audio.wait = wait; }
+
 void host_audio_pace(int pal, int fast) {
     uint64_t now = SDL_GetPerformanceCounter();
     double frequency = (double)host_audio.clock_frequency;
@@ -86,7 +89,8 @@ void host_audio_pace(int pal, int fast) {
         else host_audio.deadline += period / (1 - correction);
         while ((double)now < host_audio.deadline) {
             double ms = (host_audio.deadline - (double)now) * 1000 / frequency;
-            SDL_Delay(ms > 2 ? (Uint32)(ms - 1) : 0);
+            if (host_audio.wait) host_audio.wait(ms);
+            else SDL_Delay(ms > 2 ? (Uint32)(ms - 1) : 0);
             now = SDL_GetPerformanceCounter();
         }
     } else host_audio.deadline = 0;
