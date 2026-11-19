@@ -97,7 +97,9 @@ static int startup_error(const char *message, int headless) {
 }
 static int player_entry(int argc, char **argv) {
     for (int i=1;i<argc;++i) {
-        if (strcmp(argv[i],"--version")) continue;
+        int version=!strcmp(argv[i],"--version");
+        int help=!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h");
+        if (!version && !help) continue;
 #ifdef _WIN32
         /* Preserve pipes; a GUI launch from a console may not inherit stdout. */
         HANDLE output=GetStdHandle(STD_OUTPUT_HANDLE);
@@ -112,8 +114,8 @@ static int player_entry(int argc, char **argv) {
         }
         _setmode(fileno(stdout),O_BINARY);
 #endif
-        puts(HOST_PLAYER_IDENTITY);
-        return 0;
+        if (version) { puts(HOST_PLAYER_IDENTITY); return 0; }
+        return host_player_main(argc,argv);
     }
 #ifdef _WIN32
     if (fileno(stdout)<0) freopen("NUL","w",stdout);

@@ -588,7 +588,55 @@ static int toolchain_command(int argc, char **argv) {
     if(!host_tc_executable(data,host_tc_pinned(),exe,sizeof(exe))) return 1;
     fprintf(stderr,"toolchain installed: %s\n",exe);return 0;
 }
+static void print_usage(FILE *out, const char *program) {
+    const char *name = (program && *program) ? program :
+#ifdef FF8_PLAYER
+        "lionheart";
+#else
+        "ff8";
+#endif
+#ifdef FF8_PLAYER
+    fprintf(out, "Usage: %s [DISC_CUE_OR_BIN] [OPTIONS]\n", name);
+    fprintf(out, "General: --help, -h, --version, --gui, --no-gui, --verify-discs quick|full\n");
+#else
+    fprintf(out, "Usage: %s EXE [--disc CUE_OR_BIN] [--log PATH] [--stall N] [--max-instructions N] [--interpreter] [--dump-state PATH] [--headless] [--dump-frames DIR] [--dump-vram PATH]\n", name);
+    fprintf(out, "General: --help, -h, --version\n");
+#endif
+    fprintf(out, "Disc options: --disc PATH (up to four, in disc order); F1..F4 or scripted DISC1..DISC4 at the game's prompt\n");
+    fprintf(out, "Save states: F5 save, F7 load, F6/F8 slot; --savestate-dir DIR --load-state PATH --save-state PATH --save-at VBLANK\n");
+    fprintf(out, "State cards: --savestate-cards live|snapshot (default live; snapshot uses private copies)\n");
+    fprintf(out, "Disc identity: --savestate-verify-disc quick|full (default quick, cached at image insertion)\n");
+    fprintf(out, "GPU options: --renderer soft|vulkan --internal-scale 1..8 --true-color --msaa 1|2|4|8 --pgxp off|vertex|perspective --dump-scaled-frames DIR --gpu-timings CSV\n");
+    fprintf(out, "Movie options: --movies DIR --movie-stats CSV (Vulkan only; original guest audio)\n");
+    fprintf(out, "Input options: --card1 PATH --card2 PATH --input-script FILE\n");
+    fprintf(out, "Controller options: --pad digital|dualshock --rumble 0|1 (scripts and keyboard stay digital)\n");
+    fprintf(out, "Presentation: --fullscreen [0|1] (F11) --windowed --scale-mode aspect|integer|stretch|aspect-crop --filter nearest|linear --config PATH\n");
+    fprintf(out, "Controller hotkeys: --pad-hotkey guide|off (default guide); Guide + R1/L1 save/load, Left/Right slot, R2 fast-forward, Triangle CRT, Square screenshot, Select disc, Start fullscreen\n");
+    fprintf(out, "Screenshots: F12 or Guide + Square; --screenshot-dir PATH (default XDG Pictures/FF8)\n");
+    fprintf(out, "Diagnostic: --screenshot-at FRAME (repeatable, presentation frame starting at zero)\n");
+    fprintf(out, "Notifications: --osd 0|1 (default 1)\n");
+    fprintf(out, "CRT (Vulkan): --crt off|pvm|tv|arcade (F9 cycles) --dump-presented-frames DIR --present-size WxH\n");
+    fprintf(out, "Smooth motion: --smooth-motion [0|1] (frames between the game's); --present-stats PATH.csv\n");
+#ifdef FF8_PLAYER
+    fprintf(out, "Local telemetry: --state-bridge PORT (0 picks a port)\n");
+#else
+    fprintf(out, "Local telemetry: --state-bridge PORT (0 picks a port), --achievements PATCH.json [--achievement-progress PATH]\n");
+#endif
+    fprintf(out, "RetroAchievements: --ra 0|1 --ra-notify 0|1\n");
+    fprintf(out, "Audio options: --mute --dump-audio PATH.wav --audio-stats PATH.csv --fast (or hold Tab)\n");
+    fprintf(out, "SPU validation: --spu-control (exact guest state, raw CD output only)\n");
+    fprintf(out, "Capture options: --max-vblanks N --frame-step N --frames-from N --log-events\n");
+#ifdef FF8_PLAYER
+    fprintf(out, "Session options: --log PATH --stall N --max-instructions N --interpreter --dump-state PATH --headless --dump-frames DIR --dump-vram PATH\n");
+#endif
+}
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        }
+    }
     if(argc>1 && !strcmp(argv[1],"--toolchain-install")) return toolchain_command(argc,argv);
     cpu_t *c;
     FILE *log;
@@ -647,28 +695,7 @@ int main(int argc, char **argv) {
 #endif
     host_options_defaults(&options);
 #ifndef FF8_PLAYER
-    if (argc < 2) {
-        fprintf(stderr, "Save states: F5 save, F7 load, F6/F8 slot; --savestate-dir DIR --load-state PATH --save-state PATH --save-at VBLANK\n");
-        fprintf(stderr, "State cards: --savestate-cards live|snapshot (default live; snapshot uses private copies)\n");
-        fprintf(stderr, "Disc identity: --savestate-verify-disc quick|full (default quick, cached at image insertion)\n");
-        fprintf(stderr, "GPU options: --renderer soft|vulkan --internal-scale 1..8 --true-color --msaa 1|2|4|8 --pgxp off|vertex|perspective --dump-scaled-frames DIR --gpu-timings CSV\n");
-        fprintf(stderr, "Movie options: --movies DIR --movie-stats CSV (Vulkan only; original guest audio)\n");
-        fprintf(stderr, "Input options: --card1 PATH --card2 PATH --input-script FILE\n");
-        fprintf(stderr, "Controller options: --pad digital|dualshock --rumble 0|1 (scripts and keyboard stay digital)\n");
-        fprintf(stderr, "Presentation: --fullscreen [0|1] (F11) --windowed --scale-mode aspect|integer|stretch|aspect-crop --filter nearest|linear --config PATH\n");
-        fprintf(stderr, "Controller hotkeys: --pad-hotkey guide|off (default guide); Guide + R1/L1 save/load, Left/Right slot, R2 fast-forward, Triangle CRT, Square screenshot, Select disc, Start fullscreen\n");
-        fprintf(stderr, "Screenshots: F12 or Guide + Square; --screenshot-dir PATH (default XDG Pictures/FF8)\n");
-        fprintf(stderr, "Diagnostic: --screenshot-at FRAME (repeatable, presentation frame starting at zero)\n");
-        fprintf(stderr, "Notifications: --osd 0|1 (default 1)\n");
-        fprintf(stderr, "CRT (Vulkan): --crt off|pvm|tv|arcade (F9 cycles) --dump-presented-frames DIR --present-size WxH\n");
-        fprintf(stderr, "Smooth motion: --smooth-motion [0|1] (frames between the game's); --present-stats PATH.csv\n");
-        fprintf(stderr, "Local telemetry: --state-bridge PORT (0 picks a port), --achievements PATCH.json [--achievement-progress PATH]\n");
-        fprintf(stderr, "Audio options: --mute --dump-audio PATH.wav --audio-stats PATH.csv --fast (or hold Tab)\n");
-        fprintf(stderr, "SPU validation: --spu-control (exact guest state, raw CD output only)\n");
-        fprintf(stderr, "Capture options: --max-vblanks N --frame-step N --frames-from N --log-events\n");
-        fprintf(stderr, "Disc options: --disc PATH (up to four, in disc order); F1..F4 or scripted DISC1..DISC4 at the game's prompt\n");
-        fprintf(stderr, "Usage: %s EXE [--disc CUE_OR_BIN] [--log PATH] [--stall N] [--max-instructions N] [--interpreter] [--dump-state PATH] [--headless] [--dump-frames DIR] [--dump-vram PATH]\n", argv[0]); return 2;
-    }
+    if (argc < 2) { print_usage(stderr, argv[0]); return 2; }
 #endif
 #ifndef FF8_PLAYER
     const char *native_module_dir = NULL;
