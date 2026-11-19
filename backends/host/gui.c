@@ -22,7 +22,7 @@ static struct {
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
     host_gui_result_t result; host_gui_input_t input;
     int configured,game,want_open,modal,setup_step,ra_form,ra_error,ra_seen;
-    int force_hub,first_focus,focus_rail,keyboard,keyboard_first,shift,symbols,pick_slot,drop_active;
+    int force_hub,first_focus,focus_rail,reset_scroll,keyboard,keyboard_first,shift,symbols,pick_slot,drop_active;
     int card_imported[2];
     unsigned focus_epoch;
     unsigned generation; float width,height,rail;
@@ -94,7 +94,7 @@ static void changed(const char *key,const char *value) {
     if (gui.services.changed) gui.services.changed(gui.services.context,key,overlay());
 }
 static void changed_number(const char *key,unsigned value) { char number[32]; snprintf(number,sizeof(number),"%u",value); changed(key,number); }
-static void change_pane(host_gui_pane_t pane) { gui.pane=pane; gui.focus_rail=0; request_focus(); gui.keyboard=0; gui.edit=NULL; }
+static void change_pane(host_gui_pane_t pane) { gui.pane=pane; gui.focus_rail=0; gui.reset_scroll=1; request_focus(); gui.keyboard=0; gui.edit=NULL; }
 static void section(int direction) {
     static const host_gui_pane_t panes[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
     for (unsigned i=0;i<7;++i) if (gui.pane==panes[i]) { change_pane(panes[(i+(direction>0 ? 1 : 6))%7]); return; }
@@ -148,14 +148,14 @@ int host_gui_wants_shell(void) { return gui.configured && (*gui.crash_log || nat
 host_gui_result_t host_gui_shell(void) {
     gui.native_only=!gui.force_hub && gui.options->disc1_configured && native_offer();
     gui.mode=(!gui.force_hub && !gui.options->disc1_configured) || gui.native_only ? HOST_GUI_SETUP : HOST_GUI_HUB;
-    gui.result=HOST_GUI_RUNNING; request_focus(); gui.setup_step=gui.native_only ? 2 : 0;
+    gui.result=HOST_GUI_RUNNING; gui.reset_scroll=1; request_focus(); gui.setup_step=gui.native_only ? 2 : 0;
     if (gui.services.loop) gui.result=gui.services.loop(gui.services.context,1);
     return gui.result;
 }
 void host_gui_open(void) {
     if (!gui.configured) return;
     gui.mode=HOST_GUI_OVERLAY; gui.result=HOST_GUI_RUNNING; gui.want_open=0;
-    gui.pane=gui.requested; request_focus(); gui.focus_rail=0;
+    gui.pane=gui.requested; gui.reset_scroll=1; request_focus(); gui.focus_rail=0;
     if (gui.services.loop) gui.result=gui.services.loop(gui.services.context,0);
     gui.mode=HOST_GUI_HIDDEN;
 }
@@ -400,7 +400,6 @@ static void setup_next(void) {
 static void rail(void) {
     static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.controls","nav.ra","nav.achievements"};
     static const unsigned order[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
-    gui_ui_panel(R(0,0,gui.rail,gui.height-56),0x101016ff,0);
     gui_ui_emblem(R(28,26,48,48)); label("app.name",86,32,gui.rail-98,GUI_TITLE,GUI_TEXT);
 #ifdef _WIN32
     const char *platform=S("platform.windows");
@@ -444,6 +443,13 @@ static void pane_header(const char *title,const char *subtitle) {
     label(title,gui.rail+48,32,gui.width-gui.rail-96,GUI_TITLE,GUI_TEXT);
     if (subtitle) text("pane.subtitle",subtitle,gui.rail+48,72,gui.width-gui.rail-96,GUI_SUB,GUI_DIM);
 }
+static void pane_body_begin(void) {
+    float h=gui.height-160;
+    if (h<1) h=1;
+    if (gui.reset_scroll) { gui_ui_scroll_reset(); gui.reset_scroll=0; }
+    gui_ui_scroll_begin("pane.body",R(gui.rail,104,gui.width-gui.rail,h));
+}
+static void pane_body_end(void) { gui_ui_scroll_end(); }
 static void card_status(unsigned slot,float x,float y,float width) {
     char summary[256]; gui_card_summary_t card;
     const char *path=gui.options->cards[slot];
@@ -713,6 +719,7 @@ static void draw_game(void) {
         snprintf(time,sizeof(time),S("game.time"),(unsigned)(minutes/60),(unsigned)(minutes%60));
         snprintf(sub,sizeof(sub),S("game.sub"),gui.services.disc ? gui.services.disc(gui.services.context) : 1,time);
         pane_header("game.paused",sub);
+        pane_body_begin();
         if (button("btn.resume",x,126,170,GUI_PRIMARY)) host_gui_close();
         if (gui.first_focus) gui_ui_focus("btn.resume");
         gui_ui_control_row(R(x,200,width,52));
@@ -728,8 +735,10 @@ static void draw_game(void) {
         if (gui_ui_row("game.shot",S("game.shot"),NULL,R(x,446,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F12); }
         if (gui_ui_row("btn.view_ach",S("btn.view_ach"),NULL,R(x,514,width,58),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
         native_row(x,582,width,58);
+        pane_body_end();
     } else {
         pane_header("nav.play",S("hub.subtitle"));
+        pane_body_begin();
         if (button("btn.play",x,126,170,ready_to_play() ? GUI_PRIMARY : GUI_DISABLED)) play();
         if (gui.first_focus) gui_ui_focus(ready_to_play() ? "btn.play" : gui.discs[0].state==GUI_DISC_CHECKING ? "nav.play" : "hub.locate");
         if (!ready_to_play()) {
@@ -752,11 +761,13 @@ static void draw_game(void) {
         if (gui_ui_row("hub.ra",S("nav.ra"),S(gui.options->ra ? "tag.casual" : "ra.off"),R(x,top+4*step,width,tall),0)) change_pane(HOST_GUI_RA);
         native_row(x,top+5*step,width,tall);
         label("app.wip",x,has_native() ? 618 : 606,width,GUI_SUB,GUI_MUTED);
+        pane_body_end();
     }
 }
 static void draw_discs(void) {
     float x=gui.rail+48,width=gui.width-gui.rail-96;
     pane_header("nav.discs",S("setup.discs.later"));
+    pane_body_begin();
     for (unsigned i=0;i<4;++i) draw_disc_row(i,x,126+(float)i*92,width,84);
     label("disc.verify.title",x+18,526,width-36,GUI_REGULAR,GUI_TEXT);
     char verify[256]; snprintf(verify,sizeof(verify),S("disc.verify.sub"),3u); text("disc.verify.sub",verify,x+18,558,width-240,GUI_SUB,GUI_DIM);
@@ -769,10 +780,12 @@ static void draw_discs(void) {
         else snprintf(folder,sizeof(folder),"%s",*gui.last_folder ? gui.last_folder : ".");
         gui_media_scan(folder,gui.generation);
     }
+    pane_body_end();
 }
 static void draw_cards(void) {
     float x=gui.rail+48,width=gui.width-gui.rail-96; char slot[64],id[64];
     pane_header("nav.card",overlay() ? S("tag.next_launch") : S("setup.card.import.help"));
+    pane_body_begin();
     for (unsigned i=0;i<2;++i) {
         float y=132+(float)i*210;
         gui_ui_panel(R(x,y,width,180),0x13131aff,7);
@@ -789,6 +802,7 @@ static void draw_cards(void) {
         if (overlay()) label("tag.next_launch",x+width-180,y+132,160,GUI_SUB,GUI_MUTED);
     }
     if (*gui.error) text("card.error",gui.error,x,584,width,GUI_SUB,GUI_ERROR);
+    pane_body_end();
 }
 static int segments(const char *id,const char *title,const char *const *values,unsigned count,int current,float y,int enabled,int next) {
     float x=gui.rail+48,width=gui.width-gui.rail-96,control=(float)count*88;
@@ -819,6 +833,7 @@ static void draw_video(void) {
     if (device && !strcmp(device,S("val.soft"))) snprintf(subtitle,sizeof(subtitle),"%s",S("val.soft"));
     else snprintf(subtitle,sizeof(subtitle),S("video.subtitle"),S(device || vulkan ? "val.vulkan" : "val.soft"),device ? device : S("ui.dash"));
     pane_header("nav.video",subtitle);
+    pane_body_begin();
     value=segments("video.renderer","video.renderer",renderers,2,gui.options->renderer,116,1,overlay());
     if (value!=gui.options->renderer) { changed("renderer",value ? "vulkan" : "soft"); if (!overlay()) set_result(HOST_GUI_RECREATE); }
     if (gui.first_focus) gui_ui_focus("video.renderer");
@@ -841,6 +856,7 @@ static void draw_video(void) {
     if (gui_ui_button("video.movies.clear",S("btn.clear"),R(x+width-84,516,76,38),vulkan && *gui.options->movies ? 0 : GUI_DISABLED)) changed("movies","");
     value=toggle("video.osd","video.osd",gui.options->osd,590,1,0); if (value!=gui.options->osd) changed_number("osd",(unsigned)value);
     value=toggle("video.smooth","video.smooth",gui.options->smooth_motion,646,1,0); if (value!=gui.options->smooth_motion) changed_number("smooth-motion",(unsigned)value);
+    pane_body_end();
 }
 static const char *pad_name(unsigned bit) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_UNKNOWN;
@@ -865,6 +881,7 @@ static void draw_controls(void) {
     if (controller && *controller) snprintf(subtitle,sizeof(subtitle),S("controls.sub"),controller);
     else snprintf(subtitle,sizeof(subtitle),"%s",S("controls.no_pad"));
     pane_header("nav.controls",subtitle);
+    pane_body_begin();
     value=segments("controls.type","controls.type",types,2,gui.options->dualshock,116,1,1); if (value!=gui.options->dualshock) changed("pad",value ? "dualshock" : "digital");
     if (gui.first_focus) gui_ui_focus("controls.type");
     value=toggle("controls.rumble","controls.rumble",gui.options->rumble,172,1,0); if (value!=gui.options->rumble) changed_number("rumble",(unsigned)value);
@@ -883,6 +900,7 @@ static void draw_controls(void) {
         snprintf(id,sizeof(id),"controls.key.%u",i); text(id,chords[i].pad_button==PAD_LEFT ? S("controls.f6f8") : chords[i].pad_button==PAD_SELECT ? S("controls.f1f4") : SDL_GetScancodeName((SDL_Scancode)chords[i].scancode),x+270,y,110,GUI_MONO,GUI_DIM);
         text(chords[i].label_id,S(chords[i].label_id),x+400,y,width-420,GUI_SUB,GUI_TEXT);
     }
+    pane_body_end();
 }
 static void draw_ra(void) {
     float x=gui.rail+48,width=gui.width-gui.rail-96;
@@ -895,6 +913,7 @@ static void draw_ra(void) {
     int online=status->state==HOST_RA_CONNECTED || (status->state==HOST_RA_OFFLINE && *status->username);
     if (online || (status->state==HOST_RA_REJECTED && !gui.ra_form)) {
         char value[1024]; close_form(); pane_header("ra.title",S("ra.site"));
+        pane_body_begin();
         if (online) snprintf(value,sizeof(value),S("ra.signed_in"),status->username);
         else snprintf(value,sizeof(value),"%s",S("ra.rejected"));
         text(online ? "ra.signed_in" : "ra.rejected",value,x+18,138,width-36,GUI_TITLE,online ? GUI_TEXT : GUI_ERROR);
@@ -919,15 +938,18 @@ static void draw_ra(void) {
         if (button("btn.sign_out",x+18,494,160,0)) { host_ra_signout(); changed_number("ra",0); request_focus(); }
         label("ra.signout.sub",x+18,550,width-36,GUI_SUB,GUI_DIM);
         if (status->storage_failed) label("ra.err.storage",x+18,598,width-36,GUI_SUB,GUI_ERROR);
+        pane_body_end();
         return;
     }
     if (gui.options->ra && status->state!=HOST_RA_UNAVAILABLE) gui.ra_form=1;
     pane_header("ra.title",gui.ra_form ? S("ra.form.sub") : S("ra.site"));
+    pane_body_begin();
     if (!gui.ra_form) {
         label("ra.off",x+18,148,width-36,GUI_TITLE,GUI_TEXT);
         label("ra.off.sub",x+18,194,width-36,GUI_SUB,GUI_DIM);
         if (button("btn.turn_on",x+18,254,170,GUI_PRIMARY)) { gui.modal=MODAL_RA_WARNING; request_focus(); }
         if (gui.first_focus) gui_ui_focus("btn.turn_on");
+        pane_body_end();
         return;
     }
     label("ra.signin",x+18,132,width-36,GUI_TITLE,GUI_TEXT); label("tag.casual",x+180,140,130,GUI_SUB,GUI_CASUAL);
@@ -943,6 +965,7 @@ static void draw_ra(void) {
     }
     if (button("btn.cancel",x+180,434,128,0)) { host_ra_signout(); changed_number("ra",0); close_form(); request_focus(); }
     label("ra.token_note",x+18,500,width-36,GUI_SUB,GUI_DIM);
+    pane_body_end();
 }
 static const char *browser_tag(const char *path,char *out,size_t capacity) {
     for (unsigned i=0;i<gui.browser_result_count;++i) if (!strcmp(gui.browser_results[i].path,path)) {
@@ -1078,10 +1101,11 @@ void host_gui_frame(unsigned width,unsigned height) {
     gui_ui_panel(R(0,0,gui.width,gui.height),overlay() ? 0x00000000 : 0x0b0b10ff,0);
     if (gui.mode==HOST_GUI_SETUP) draw_setup();
     else {
+        gui_ui_panel(R(0,0,gui.rail,gui.height-56),0x101016ff,0);
         gui_ui_panel(R(gui.rail,0,gui.width-gui.rail,gui.height-56),overlay() ? 0x101014c7 : 0x0b0b10ff,0);
-        gui_ui_region_begin("rail",R(0,0,gui.rail,gui.height-56));
+        gui_ui_scroll_begin("rail",R(0,0,gui.rail,gui.height-56));
         rail();
-        gui_ui_region_end();
+        gui_ui_scroll_end();
         gui_ui_region_begin("pane",R(gui.rail,0,gui.width-gui.rail,gui.height-56));
         switch (gui.pane) {
         case HOST_GUI_GAME:draw_game();break; case HOST_GUI_DISCS:draw_discs();break;

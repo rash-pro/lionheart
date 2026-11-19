@@ -17,19 +17,20 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 struct Observation {
-    char id[128], text[2048];
-    ImGuiID widget;
+    std::string id, text;
+    ImGuiID widget = 0;
 };
 struct Ui {
     ImGuiContext *context = nullptr;
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
     ImFont *fonts[5] = {};
-    unsigned observation_count = 0;
     char focus[128] = {}, requested_focus[128] = {}, modal_parent[128] = {};
     gui_rect_t control_row = {};
     ImGuiID last_edit = 0, frame_edit = 0;
@@ -44,10 +45,16 @@ struct Ui {
     float opacity = 1;
     unsigned badge_revision = 0;
     uint64_t badges_at = 0;
+    struct ScrollScope { float left, bottom, max_y; };
+    ScrollScope scroll_stack[4] = {};
+    unsigned scroll_depth = 0;
+    bool reset_scroll = false;
 } ui;
 struct BadgeRect { unsigned id; int colour,grey; };
 std::vector<BadgeRect> badges;
-Observation observations[2048];
+std::vector<Observation> observations;
+std::unordered_map<std::string, size_t> observations_by_id;
+std::unordered_map<ImGuiID, size_t> observations_by_widget;
 
 const ImU32 colours[] = {
     IM_COL32(242,242,242,255), IM_COL32(165,165,175,255), IM_COL32(107,107,120,255),
@@ -62,6 +69,12 @@ float pixel(float v) { return std::round(v * ui.scale); }
 float scroll_y() { return ImGui::GetCurrentWindow()->Scroll.y; }
 ImVec2 point(float x, float y) { return ImVec2(pixel(x), pixel(y) - scroll_y()); }
 ImRect bounds(gui_rect_t r) { return ImRect(point(r.x,r.y), point(r.x+r.w,r.y+r.h)); }
+void scroll_note(float bottom_y) {
+    if (ui.scroll_depth) {
+        Ui::ScrollScope &s = ui.scroll_stack[ui.scroll_depth - 1];
+        if (bottom_y > s.max_y) s.max_y = bottom_y;
+    }
+}
 ImDrawList *draw() { return ImGui::GetWindowDrawList(); }
 void copy(char *out, size_t cap, const char *text) {
     if (!cap) return;
@@ -71,13 +84,22 @@ void copy(char *out, size_t cap, const char *text) {
 }
 void observe(const char *id, const char *text, ImGuiID widget = 0) {
     if (!id || !*id) return;
-    Observation *entry = nullptr;
-    for (unsigned n = 0; n < ui.observation_count; ++n)
-        if (!std::strcmp(observations[n].id,id)) { entry=&observations[n]; break; }
-    if (!entry && ui.observation_count < sizeof(observations)/sizeof(observations[0]))
-        entry=&observations[ui.observation_count++];
-    if (!entry) return;
-    copy(entry->id,sizeof(entry->id),id); copy(entry->text,sizeof(entry->text),text); entry->widget=widget;
+    const char *value = text ? text : "";
+    auto inserted = observations_by_id.emplace(id, observations.size());
+    size_t index = inserted.first->second;
+    if (inserted.second) {
+        observations.push_back({inserted.first->first, value, widget});
+    } else {
+        Observation &entry = observations[index];
+        if (entry.widget && entry.widget != widget) {
+            auto existing = observations_by_widget.find(entry.widget);
+            if (existing != observations_by_widget.end() && existing->second == index)
+                observations_by_widget.erase(existing);
+        }
+        entry.text.assign(value);
+        entry.widget = widget;
+    }
+    if (widget) observations_by_widget.emplace(widget, index);
 }
 void focus_after_item(const char *id, ImGuiID widget, bool enabled) {
     if (!enabled && !std::strcmp(ui.requested_focus,id)) ui.requested_focus[0]=0;
@@ -96,6 +118,7 @@ void focus_after_item(const char *id, ImGuiID widget, bool enabled) {
 struct Item { ImRect rect; bool pressed, focused, hovered, held, enabled; ImGuiID id; };
 Item item(const char *id, gui_rect_t r, unsigned flags) {
     Item out={bounds(r),false,false,false,false,!(flags & GUI_DISABLED),0};
+    scroll_note(r.y + r.h);
     ImGui::SetCursorScreenPos(out.rect.Min);
     if (!out.enabled) ImGui::BeginDisabled();
     out.pressed=ImGui::InvisibleButton(id,out.rect.GetSize(),ImGuiButtonFlags_EnableNav);
@@ -361,6 +384,9 @@ extern "C" void gui_ui_detach(void) {
     if (ui.platform) ImGui_ImplSDL2_Shutdown();
     host_gui_test_window(nullptr);
     ImGui::DestroyContext(ui.context); ui=Ui{};
+    observations.clear(); observations.shrink_to_fit();
+    observations_by_id={}; observations_by_widget={};
+    badges.clear();
 }
 extern "C" void gui_ui_reset_input(void) {
     if (!ui.context) return;
@@ -395,6 +421,7 @@ extern "C" void gui_ui_event(const SDL_Event *event) {
         SDL_Event copy=*event;
         if ((copy.type==SDL_KEYDOWN || copy.type==SDL_KEYUP) && !copy.key.windowID) copy.key.windowID=SDL_GetWindowID(ui.window);
         if (copy.type==SDL_TEXTINPUT && !copy.text.windowID) copy.text.windowID=SDL_GetWindowID(ui.window);
+        if (copy.type==SDL_MOUSEWHEEL && !copy.wheel.windowID) copy.wheel.windowID=SDL_GetWindowID(ui.window);
         ImGui_ImplSDL2_ProcessEvent(&copy);
     } else headless_event(event);
 }
@@ -431,9 +458,11 @@ extern "C" void gui_ui_begin(unsigned width,unsigned height,int overlay) {
     style.Colors[ImGuiCol_ChildBg]=ImVec4(0,0,0,0); style.Colors[ImGuiCol_PopupBg]=ImVec4(0,0,0,0);
     style.Colors[ImGuiCol_ModalWindowDimBg]=ImVec4(5/255.0f,5/255.0f,8/255.0f,0.62f);
     style.Colors[ImGuiCol_ScrollbarBg]=ImVec4(0,0,0,0);
-    style.Colors[ImGuiCol_ScrollbarGrab]=ImVec4(0.18f,0.18f,0.22f,1);
-    ImGui::NewFrame(); ui.in_frame=true; ui.opacity=1; ui.observation_count=0;ui.focus[0]=0;ui.modal_frame=false;ui.modal_depth=0;ui.modal_parent[0]=0;
-    ui.control_row_pending=false;ui.frame_edit=0;
+    style.Colors[ImGuiCol_ScrollbarGrab]=ImVec4(0.24f,0.24f,0.30f,1);
+    style.Colors[ImGuiCol_ScrollbarGrabHovered]=ImVec4(0.36f,0.36f,0.44f,1);
+    style.Colors[ImGuiCol_ScrollbarGrabActive]=ImVec4(0.62f,0.71f,0.85f,1);
+    ImGui::NewFrame(); ui.in_frame=true; ui.opacity=1; observations.clear(); observations_by_id.clear(); observations_by_widget.clear(); ui.focus[0]=0;ui.modal_frame=false;ui.modal_depth=0;ui.modal_parent[0]=0;
+    ui.control_row_pending=false;ui.frame_edit=0;ui.scroll_depth=0;
     ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(float(width),float(height)));
     ImGui::Begin("##lionheart",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse);
     if (overlay) draw()->AddRectFilled(ImVec2(0,0),ImVec2(float(width),float(height)),IM_COL32(6,6,10,189));
@@ -446,20 +475,26 @@ extern "C" void gui_ui_end(void) {
     else if (!ui.modal_frame) ui.last_edit=0;
     ImGui::End(); ImGui::Render(); ui.in_frame=false;
     /* Nav may settle at EndFrame; resolve the semantic ID after scoring. */
-    for (unsigned n=0;n<ui.observation_count;++n)
-        if (observations[n].widget && observations[n].widget==GImGui->NavId) {
-            copy(ui.focus,sizeof(ui.focus),observations[n].id);break;
-        }
+    if (GImGui->NavId) {
+        auto found=observations_by_widget.find(GImGui->NavId);
+        if (found!=observations_by_widget.end())
+            copy(ui.focus,sizeof(ui.focus),observations[found->second].id.c_str());
+    }
 }
 extern "C" void gui_ui_soft_render(SDL_Renderer *renderer) {
     if (ui.context && ui.soft && ImGui::GetDrawData()) ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(),renderer);
 }
 extern "C" void gui_ui_text(const char *id,const char *text,gui_rect_t r,gui_font_t f,gui_colour_t c) {
     if (!ui.in_frame) return;
+    if (ui.scroll_depth && text && *text && r.w>0 && r.h>0 && ui.fonts[f]) {
+        ImVec2 sz=ui.fonts[f]->CalcTextSizeA(ui.fonts[f]->FontSize,FLT_MAX,pixel(r.w),text);
+        scroll_note(r.y+std::min(r.h,sz.y/ui.scale));
+    }
     observe(id,text); text_at(text,bounds(r),f,colours[c],false,true);
 }
 extern "C" void gui_ui_text_centred(const char *id,const char *text,gui_rect_t r,gui_font_t f,gui_colour_t c) {
     if (!ui.in_frame) return;
+    scroll_note(r.y+r.h);
     observe(id,text);text_at(text,bounds(r),f,colours[c],true);
 }
 extern "C" void gui_ui_keycap(const char *id,const char *key_text,const char *label,gui_rect_t r) {
@@ -494,7 +529,7 @@ extern "C" float gui_ui_text_width(const char *text,gui_font_t font) {
     return f->CalcTextSizeA(f->FontSize,FLT_MAX,0,text).x/ui.scale;
 }
 extern "C" void gui_ui_panel(gui_rect_t r,unsigned colour,float radius) {
-    if (ui.in_frame) { ImRect b=bounds(r);draw()->AddRectFilled(b.Min,b.Max,rgba(colour),pixel(radius)); }
+    if (ui.in_frame) { scroll_note(r.y+r.h); ImRect b=bounds(r);draw()->AddRectFilled(b.Min,b.Max,rgba(colour),pixel(radius)); }
 }
 extern "C" void gui_ui_line(float x1,float y1,float x2,float y2,unsigned colour,float width) {
     if (ui.in_frame) draw()->AddLine(point(x1,y1),point(x2,y2),rgba(colour),std::max(1.0f,pixel(width)));
@@ -569,6 +604,7 @@ extern "C" int gui_ui_stepper(const char *id,gui_rect_t r,int current,int minimu
 }
 extern "C" int gui_ui_edit(const char *id,gui_rect_t r,char *text,size_t capacity,int password) {
     if (!ui.in_frame || !text || !capacity) return 0;
+    scroll_note(r.y+r.h);
     ImRect b=bounds(r);
     draw()->AddRectFilled(b.Min,b.Max,IM_COL32(19,19,26,255),pixel(6));
     draw()->AddRect(b.Min,b.Max,IM_COL32(255,255,255,20),pixel(6));
@@ -633,8 +669,9 @@ extern "C" int gui_ui_visible(gui_rect_t r) {
     ImRect b=bounds(r);return ImGui::IsRectVisible(b.Min,b.Max);
 }
 extern "C" const char *gui_ui_text_for(const char *id) {
-    for (unsigned n=0;n<ui.observation_count;++n) if (!std::strcmp(observations[n].id,id)) return observations[n].text;
-    return nullptr;
+    if (!id) return nullptr;
+    auto found=observations_by_id.find(id);
+    return found!=observations_by_id.end() ? observations[found->second].text.c_str() : nullptr;
 }
 extern "C" int gui_ui_native_pick(gui_pick_t kind,char *path,size_t capacity) {
 #ifdef FF8_NFD
@@ -692,12 +729,28 @@ extern "C" void gui_ui_badge(unsigned id,gui_rect_t r,int locked,float opacity) 
         }
     }
 }
+extern "C" void gui_ui_scroll_reset(void) { ui.reset_scroll=true; }
 extern "C" void gui_ui_scroll_begin(const char *id,gui_rect_t r) {
     if (!ui.in_frame) return;
     ImRect b=bounds(r);ImGui::SetCursorScreenPos(b.Min);
+    if (ui.reset_scroll) {
+        ImGui::SetNextWindowScroll(ImVec2(0.0f,0.0f));
+        ui.reset_scroll=false;
+    }
     ImGui::BeginChild(id,b.GetSize(),ImGuiChildFlags_None,ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoSavedSettings);
+    if (ui.scroll_depth<4) ui.scroll_stack[ui.scroll_depth++]={r.x,r.y+r.h,r.y};
 }
-extern "C" void gui_ui_scroll_end(void) { if (ui.in_frame) ImGui::EndChild(); }
+extern "C" void gui_ui_scroll_end(void) {
+    if (!ui.in_frame) return;
+    if (ui.scroll_depth) {
+        Ui::ScrollScope s=ui.scroll_stack[--ui.scroll_depth];
+        if (s.max_y>s.bottom) {
+            ImGui::SetCursorScreenPos(point(s.left,s.max_y+20.0f));
+            ImGui::Dummy(ImVec2(0.0f,0.0f));
+        }
+    }
+    ImGui::EndChild();
+}
 extern "C" void gui_ui_region_begin(const char *id,gui_rect_t r) {
     if (!ui.in_frame) return;
     ImRect b=bounds(r); ImGui::SetCursorScreenPos(b.Min);
