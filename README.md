@@ -15,6 +15,7 @@ it runs.
 ## Features
 
 - Vulkan rendering at up to 8× internal resolution, with PGXP precise geometry, MSAA and CRT presets.
+- Opt-in 60 fps smooth motion for fields and the world map (`--smooth-motion`, `smooth-motion=1`, or **Video → Smooth motion**; off by default, preserves PGXP and guest timing).
 - A setup screen and an in-game menu for discs, memory cards, video and controls.
 - Save states, screenshots, and controller hotkeys for both.
 - Optional HD movies from your own files.
@@ -142,6 +143,7 @@ crt=tv
 | `true-color` | `0`, `1` |
 | `msaa` | `1`, `2`, `4`, `8` |
 | `crt` | `off`, `pvm`, `tv`, `arcade` (Vulkan only) |
+| `smooth-motion` | `0`, `1` |
 | `scale-mode` | `aspect`, `integer`, `stretch`, `aspect-crop` |
 | `filter` | `nearest`, `linear` |
 | `fullscreen` | `0`, `1` |
@@ -194,7 +196,7 @@ it fits together, and [docs/debugging.md](docs/debugging.md) for tracking down r
 
 ## Roadmap
 
-- Smoother battles: fewer frame-time spikes, and interpolated 60 fps presentation.
+- Smoother battles: fewer frame-time spikes, and extending smooth motion (available for fields and the world map) to battle geometry and battle magic effects.
 - Packaged Linux and Windows releases.
 
 ## Legal
