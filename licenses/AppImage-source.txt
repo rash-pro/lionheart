@@ -1,0 +1,18 @@
+AppImage type2-runtime, upstream commit fedfad51acc2860b2916a1eef32ba4a500ff31ef,
+SHA-256 617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46.
+Complete runtime source, build scripts and libfuse patch:
+https://github.com/AppImage/type2-runtime/archive/fedfad51acc2860b2916a1eef32ba4a500ff31ef.tar.gz
+The scripts/common/install-dependencies.sh recipe fetches libfuse 3.15.0:
+https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz
+SHA-256 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0.
+It applies patches/libfuse/mount.c.diff and links the library statically into
+the launcher. See BUILD.md and scripts/docker/build-with-docker.sh to rebuild.
+You may modify libfuse and relink the runtime using those scripts. Replace the
+runtime prefix with your rebuilt runtime and append the unchanged squashfs
+payload (the original --appimage-offset gives its starting byte). Alternatively
+extract with --appimage-extract and run squashfs-root/AppRun directly.
+The launcher is a separate executable; the player does not link to libfuse.
+Distributors must provide the corresponding source and preserve these notices
+and the LGPL-2.1 text. The source URLs and complete build recipe accompany this
+unmodified upstream launcher. Reverse engineering for debugging modifications
+to the LGPL library is permitted.

@@ -1,7 +1,7 @@
 # Third-party notices
 
 No game code or assets are included. The following components accompany the
-source or the Windows distribution. Vendored sources retain their notices;
+source, the Linux AppImage or the Windows distribution. Vendored sources retain their notices;
 `SOURCE.md` files record upstream revisions and local changes.
 
 | Component | Licence and shipped notice |
@@ -12,7 +12,7 @@ source or the Windows distribution. Vendored sources retain their notices;
 | Vulkan/util helpers in parallel-psx | MIT notices in the individual source headers |
 | volk | MIT: [volk.h](third_party/parallel-psx/volk/volk.h) |
 | rcheevos | MIT: [LICENSE](third_party/rcheevos/LICENSE); MD5 also retains its zlib-style notice in [md5.c](third_party/rcheevos/src/util/md5.c) |
-| libcurl (Linux, dynamically linked) | curl licence (MIT-style): [curl.txt](licenses/curl.txt) |
+| libcurl 8.22.0 (Linux; bundled in the AppImage, HTTP and HTTPS only) | curl licence (MIT-style): [curl.txt](licenses/curl.txt) |
 | Spleen 2.2.0 | BSD-2-Clause: [LICENSE](third_party/spleen/LICENSE); compiled OSD cells |
 | XZ Embedded v2024-12-30 | 0BSD: [COPYING](third_party/xz-embedded/COPYING); decodes the Linux compiler archive |
 | Dear ImGui 1.91.9b | MIT: [LICENSE.txt](third_party/imgui/LICENSE.txt) |
@@ -23,6 +23,7 @@ source or the Windows distribution. Vendored sources retain their notices;
 | zlib 1.3.1 | zlib: [zlib.txt](licenses/zlib.txt) |
 | llvm-mingw runtime | LLVM Apache-2.0 with LLVM exception: [llvm-mingw-runtime.txt](licenses/llvm-mingw-runtime.txt) |
 | MinGW-w64 / winpthreads | Public domain / ZPL notices: [COPYING.MinGW-w64-runtime.txt](licenses/COPYING.MinGW-w64-runtime.txt) and [COPYING.winpthreads.txt](licenses/COPYING.winpthreads.txt) |
+| AppImage type2-runtime fedfad51 | MIT, BSD-2-Clause, BSD-3-Clause, zlib; statically linked libfuse LGPL-2.1-or-later: [licences](licenses/AppImage-runtime.txt), [LGPL](licenses/AppImage-LGPL-2.1.txt), [source and relinking](licenses/AppImage-source.txt) |
 
 FFmpeg is dynamically linked. The exact unmodified corresponding source is
 https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz (SHA-256 and size are locked in
@@ -33,8 +34,13 @@ the DLLs. Rebuild with `cmake -P tools/build_windows.cmake`. Users may replace t
 shared libraries with compatible modified versions.
 
 SDL2, zlib and the compiler's exact source/archive URLs, versions and SHA-256
-values are also recorded in that lock file. Linux uses the installed system
-libraries and their distribution's licence/source packages.
+values are also recorded in that lock file. The Linux AppImage builds SDL2, zlib,
+libcurl and the same FFmpeg from the sources pinned in
+[linux-deps.json](tools/linux-deps.json), with `tools/build_appimage.cmake`; its
+FFmpeg configure line and source notice are in `usr/share/doc/lionheart/licences/`
+inside it, and its libraries can be replaced after `--appimage-extract`. A player
+built from source on Linux uses the installed system libraries and their
+distribution's licence and source packages.
 
 The RetroAchievements transport uses system libcurl on Linux and the Windows WinHTTP system API on Windows.
 The badge decoder uses the existing zlib dependency; no additional image library is shipped.

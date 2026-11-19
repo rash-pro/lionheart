@@ -1,0 +1,154 @@
+name: Release packages
+# A tag vVERSION, VERSION being the one in CMakeLists.txt, builds the AppImage
+# and the Windows zip from clean sources in pinned images, checks them, and
+# attaches them with SHA256SUMS to a draft release. A person publishes it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to package again (vVERSION)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag names the project version
+        id: version
+        run: |
+          version=$(sed -n 's/^project(lionheart VERSION \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p' CMakeLists.txt)
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG does not name the version in CMakeLists.txt ($version)" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  appimage:
+    needs: version
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11
+    steps:
+      # The first checkout only brings the image script; the second, with the
+      # image's git, brings the history the build reads its file dates from.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Prepare the build image
+        run: sh packaging/build-environment.sh linux
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build the AppImage
+        run: nice -n 10 cmake -DJOBS=4 -P tools/build_appimage.cmake
+      - name: Build the release scanner and its synthetic input
+        run: |
+          cmake -S tools/player-check -B build/player-check -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/player-check -j4
+          c++ -std=c++17 tests/native/support/synthetic_metadata.cpp -o build/synthetic-metadata
+          build/synthetic-metadata build/synthetic-disc
+      - name: Check the package
+        run: >
+          cmake -DPACKAGE=build/packages/Lionheart-${{ needs.version.outputs.version }}-x86_64.AppImage
+          -DSCANNER=build/player-check/check_player_binary -DEXE=build/synthetic-disc/exe
+          -DCOMPILE_COMMANDS=build/appimage/player/compile_commands.json -P tools/check_package.cmake
+      - name: Start the package without discs
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: sh packaging/linux/test-appimage.sh build/packages/Lionheart-${{ needs.version.outputs.version }}-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: build/packages/Lionheart-${{ needs.version.outputs.version }}-x86_64.AppImage
+          if-no-files-found: error
+  windows:
+    needs: version
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Prepare the build image
+        run: sh packaging/build-environment.sh windows
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Cross-build and stage the player
+        run: nice -n 10 cmake -DJOBS=4 -P tools/build_windows.cmake
+      - name: Pack the zip
+        run: cmake -P tools/package_windows.cmake
+      - name: Build the release scanner and its synthetic input
+        run: |
+          cmake -S tools/player-check -B build/player-check -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/player-check -j4
+          c++ -std=c++17 tests/native/support/synthetic_metadata.cpp -o build/synthetic-metadata
+          build/synthetic-metadata build/synthetic-disc
+      - name: Check the package
+        run: >
+          cmake -DPACKAGE=build/packages/Lionheart-${{ needs.version.outputs.version }}-windows-x86_64.zip
+          -DSCANNER=build/player-check/check_player_binary -DEXE=build/synthetic-disc/exe
+          -DCOMPILE_COMMANDS=build/windows/compile_commands.json -P tools/check_package.cmake
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/packages/Lionheart-${{ needs.version.outputs.version }}-windows-x86_64.zip
+          if-no-files-found: error
+  windows-start:
+    needs: [version, windows]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: package
+      - name: Start the unpacked zip without discs
+        shell: pwsh
+        run: |
+          cmake -E chdir package cmake -E tar xf Lionheart-${{ needs.version.outputs.version }}-windows-x86_64.zip
+          cmake -DPLAYER=package/Lionheart/Lionheart.exe -P tools/smoke_package.cmake
+  draft:
+    needs: [version, appimage, windows, windows-start]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Attach the packages to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd packages
+          appimage="Lionheart-$VERSION-x86_64.AppImage"
+          zip="Lionheart-$VERSION-windows-x86_64.zip"
+          sha256sum "$appimage" "$zip" > SHA256SUMS
+          cat SHA256SUMS
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "Release $TAG is already published; its files stay as they are" >&2
+              exit 1
+            fi
+            gh release upload "$TAG" "$appimage" "$zip" SHA256SUMS --clobber
+          else
+            gh release create "$TAG" "$appimage" "$zip" SHA256SUMS --draft --verify-tag --title "Lionheart $VERSION" \
+              --notes "Packages built from $TAG by the release workflow. Write the notes, then publish."
+          fi
