@@ -237,11 +237,40 @@ struct Backend {
     QueryPoolHandle first, last, present_first, present_last, osd_first, osd_last;
     gpu_scanout_t scanout_timing{};
     int native_width=0, native_height=0;
+    uint64_t scanout_revision=0;
     ImageHandle image; // GPU scanout; CPU mapping is only for explicit captures.
     ImageHandle scanouts[3];
     // CRT intermediates, the window's CRT target and the offscreen capture target,
     // recreated on size changes.
     ImageHandle crt_lines, crt_beam, crt_glow_h, crt_glow, output, capture_output;
+#ifdef FF8_GUI
+    struct BackdropKey {
+        uint64_t scanout_revision=0;
+        bool has_image=false;
+        unsigned extent_width=0, extent_height=0;
+        VkFormat format=VK_FORMAT_UNDEFINED;
+        unsigned preset=0;
+        int scale_mode=0, linear=0;
+        unsigned scale=0;
+        int native_width=0, native_height=0;
+        unsigned output_width=0, output_height=0;
+        gpu_scanout_t scanout_timing{};
+        bool operator==(const BackdropKey &o) const noexcept {
+            return scanout_revision==o.scanout_revision && has_image==o.has_image &&
+                   extent_width==o.extent_width && extent_height==o.extent_height &&
+                   format==o.format && preset==o.preset &&
+                   scale_mode==o.scale_mode && linear==o.linear && scale==o.scale &&
+                   native_width==o.native_width && native_height==o.native_height &&
+                   output_width==o.output_width && output_height==o.output_height &&
+                   scanout_timing.horizontal==o.scanout_timing.horizontal &&
+                   scanout_timing.vertical==o.scanout_timing.vertical &&
+                   scanout_timing.mode==o.scanout_timing.mode;
+        }
+    };
+    ImageHandle gui_backdrop;
+    BackdropKey gui_backdrop_key{};
+    bool gui_backdrop_valid=false;
+#endif
     std::vector<uint8_t> presented;
     ImageHandle osd_image;
     unsigned osd_revision=0;
@@ -264,6 +293,9 @@ struct Backend {
 #endif
         for (auto &scanout:scanouts) scanout.reset();
         crt_lines.reset(); crt_beam.reset(); crt_glow_h.reset(); crt_glow.reset(); output.reset(); capture_output.reset();
+#ifdef FF8_GUI
+        gui_backdrop.reset(); gui_backdrop_valid=false;
+#endif
         osd_image.reset();
         movie_buffer.reset(); movie_frame.reset(); movie_patches.clear();
         first.reset(); last.reset(); present_first.reset(); present_last.reset(); osd_first.reset(); osd_last.reset();
@@ -370,7 +402,12 @@ std::unique_ptr<Backend> backend;
 void degrade(const char *where, const char *reason) noexcept {
     if (!backend || !backend->failed)
         std::fprintf(stderr,"Vulkan warning (%s): %s; falling back to soft presentation\n",where,reason);
-    if (backend) backend->failed=true;
+    if (backend) {
+        backend->failed=true;
+#ifdef FF8_GUI
+        backend->gui_backdrop_valid=false;
+#endif
+    }
     options.enabled=false;
 }
 template<class Work> bool gpu_work(const char *where, Work work) noexcept {
@@ -571,7 +608,13 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
             }
 #endif
         }
-        if (options.timings) { b->timings=std::fopen(options.timings,"w"); if (!b->timings) throw std::runtime_error("Cannot open GPU timings");
+        if (options.timings) {
+#ifdef _WIN32
+            b->timings=host_win_fopen(options.timings,"w");
+#else
+            b->timings=std::fopen(options.timings,"w");
+#endif
+            if (!b->timings) throw std::runtime_error("Cannot open GPU timings");
             std::fprintf(b->timings,"frame,cpu_ms,gpu_ms,wall_ms,draw_calls,vertices,render_passes,soft_ms,encode_ms,submit_ms,capture_ms,upload_bytes,submissions,backpressure,submit_wall_ms,present_ms,osd_ms,pipeline_ms,pipelines\n"); }
         std::fprintf(stderr,"Vulkan: %s, scale=%u, MSAA requested=%u active=%u, native readbacks=soft reference\n",b->context->get_gpu_props().deviceName,options.scale,options.msaa,b->renderer->get_msaa());
         backend=std::move(b);
@@ -584,6 +627,7 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
             info.usage|=VK_IMAGE_USAGE_TRANSFER_SRC_BIT; info.initial_layout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             ImageInitialData initial={black,0,0};
             backend->image=backend->device->create_image(info,&initial);
+            ++backend->scanout_revision;
         } else
 #endif
         if (!host_gpu_resume(g)) { backend.reset(); options.enabled=false; }
@@ -606,6 +650,10 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     backend->movie_patches.clear();
     backend->movie_frame.reset(); backend->movie_buffer.reset();
     backend->dirty=false;
+    ++backend->scanout_revision;
+#ifdef FF8_GUI
+    backend->gui_backdrop.reset(); backend->gui_backdrop_valid=false;
+#endif
     for (auto &row:backend->dirty_rows) row.fill(0);
     backend->raster=gpu_raster_state(g);
     backend->effect_pages=0;
@@ -929,6 +977,7 @@ extern "C" int host_gpu_scanout(gpu_t *g) try {
         depth!=0,options.true_color,enabled && nw && nh,target);
     backend->image=target;
     backend->output_width=target->get_width(); backend->output_height=target->get_height();
+    ++backend->scanout_revision;
     return 1;
 } catch (const std::exception &e) { degrade("host_gpu_scanout",e.what()); return 0; }
 catch (...) { degrade("host_gpu_scanout","unknown backend exception"); return 0; }
@@ -1080,9 +1129,13 @@ void blit_present(Backend &b,VkCommandBuffer cmd,VkImage target,VkExtent2D exten
         blit.dstOffsets[0]={left,top,0}; blit.dstOffsets[1]={right,bottom,1};
         vkCmdBlitImage(cmd,final->get_image(),VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,target,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,presentation_linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     }
+    bool for_transfer=final_layout==VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout=final_layout;
-    barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask=0;
-    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,0,0,nullptr,0,nullptr,1,&barrier);
+    barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask=for_transfer ? VK_ACCESS_TRANSFER_READ_BIT : 0;
+    vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         for_transfer ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                         0,0,nullptr,0,nullptr,1,&barrier);
 }
 
 // CRT presets. Lengths are native pixels or scanline pitches unless noted, so
@@ -1131,6 +1184,33 @@ void ensure_image(Device &device,ImageHandle &image,unsigned w,unsigned h,VkForm
     info.initial_layout=VK_IMAGE_LAYOUT_UNDEFINED; info.usage=usage;
     image=device.create_image(info);
 }
+#ifdef FF8_GUI
+void ensure_backdrop_image(Device &device,ImageHandle &image,unsigned w,unsigned h,VkFormat format) {
+    if (image && image->get_width()==w && image->get_height()==h && image->get_format()==format) return;
+    auto info=ImageCreateInfo::render_target(w,h,format);
+    info.initial_layout=VK_IMAGE_LAYOUT_UNDEFINED;
+    info.usage=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image=device.create_image(info);
+}
+Backend::BackdropKey make_backdrop_key(const Backend &b,VkExtent2D extent,VkFormat format,unsigned preset) {
+    Backend::BackdropKey key{};
+    key.scanout_revision=b.scanout_revision;
+    key.has_image=bool(b.image);
+    key.extent_width=extent.width;
+    key.extent_height=extent.height;
+    key.format=format;
+    key.preset=preset;
+    key.scale_mode=presentation_mode;
+    key.linear=presentation_linear;
+    key.scale=options.scale;
+    key.native_width=b.native_width;
+    key.native_height=b.native_height;
+    key.output_width=b.output_width;
+    key.output_height=b.output_height;
+    key.scanout_timing=b.scanout_timing;
+    return key;
+}
+#endif
 template<size_t N> Program &program(Device &device,const uint32_t (&frag)[N]) {
     return *device.request_program(crt_vert,sizeof(crt_vert),frag,sizeof(frag));
 }
@@ -1329,12 +1409,48 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
         auto view=host_viewport(b.scanout_timing,b.native_width,b.native_height,int(extent.width),int(extent.height),presentation_mode);
         host_gui_toast_frame(extent.width,extent.height,host_osd_area(view));
     }
-#endif
-    if (preset) crt_present(b,target,extent,format,preset);
-    else {
+    bool use_backdrop=host_gui_visible() && (&target==&b.output || !b.window);
+    Backend::BackdropKey backdrop_key{};
+    bool backdrop_hit=false;
+    if (use_backdrop) {
+        backdrop_key=make_backdrop_key(b,extent,format,preset);
+        backdrop_hit=b.gui_backdrop_valid && b.gui_backdrop && b.gui_backdrop_key==backdrop_key;
+    }
+    if (backdrop_hit) {
         ensure_image(*b.device,target,extent.width,extent.height,format,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        blit_present(b,b.renderer->command_buffer_hack_fixme()->get_command_buffer(),target->get_image(),extent,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        auto &cmd=*b.renderer->command_buffer_hack_fixme();
+        cmd.image_barrier(*target,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+        cmd.copy_image(*target,*b.gui_backdrop);
+        cmd.image_barrier(*target,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+    } else
+#endif
+    {
+        if (preset) crt_present(b,target,extent,format,preset);
+        else {
+            ensure_image(*b.device,target,extent.width,extent.height,format,
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            blit_present(b,b.renderer->command_buffer_hack_fixme()->get_command_buffer(),target->get_image(),extent,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        }
+#ifdef FF8_GUI
+        if (use_backdrop) {
+            ensure_backdrop_image(*b.device,b.gui_backdrop,extent.width,extent.height,format);
+            if (b.gui_backdrop) {
+                auto &cmd=*b.renderer->command_buffer_hack_fixme();
+                cmd.image_barrier(*b.gui_backdrop,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,0,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT);
+                cmd.copy_image(*b.gui_backdrop,*target);
+                cmd.image_barrier(*b.gui_backdrop,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT);
+                b.gui_backdrop_key=backdrop_key;
+                b.gui_backdrop_valid=true;
+            } else b.gui_backdrop_valid=false;
+        }
+#endif
     }
     if (host_screenshot_pending() && (!b.window || &target==&b.output)
 #ifdef FF8_GUI
@@ -1409,6 +1525,10 @@ extern "C" int host_gpu_present(void) {
     try {
         auto &b=*backend;
 #ifdef FF8_GUI
+        if (!host_gui_visible() && b.gui_backdrop) {
+            b.gui_backdrop.reset();
+            b.gui_backdrop_valid=false;
+        }
         struct PreserveCounters {
             Renderer &renderer;
             decltype(Renderer::counters) saved;
@@ -1532,6 +1652,7 @@ extern "C" int host_gpu_present_image(const uint8_t *rgb,int width,int height,gp
     b.image=b.device->create_image(info,&initial);
     b.output_width=unsigned(width); b.output_height=unsigned(height);
     b.scanout_timing=timing; b.native_width=native_w; b.native_height=native_h;
+    ++b.scanout_revision;
     b.renderer->command_buffer_hack_fixme();
     offscreen_present(b,std::max(1u,out_w),std::max(1u,out_h),preset>0 && preset<4 ? unsigned(preset) : 0u);
     download_output(b,out,w,h);

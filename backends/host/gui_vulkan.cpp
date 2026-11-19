@@ -26,6 +26,7 @@ struct Target {
 };
 ImGuiContext *owner=nullptr;
 VkDescriptorPool pool=VK_NULL_HANDLE;
+bool fonts_uploaded=false;
 std::vector<Renderer> renderers;
 std::vector<Target> targets;
 
@@ -88,6 +89,22 @@ VkFramebuffer framebuffer(VkImage image,VkImageView view,VkExtent2D extent,VkRen
     targets.push_back({image,result});
     return result;
 }
+void reset_resources() {
+    if (!device.logical) return;
+    vkDeviceWaitIdle(device.logical);
+    CurrentContext restore;
+    for (const auto &target:targets) vkDestroyFramebuffer(device.logical,target.framebuffer,nullptr);
+    targets.clear();
+    for (const auto &backend:renderers) {
+        ImGui::SetCurrentContext(backend.context);
+        ImGui_ImplVulkan_Shutdown();
+        ImGui::DestroyContext(backend.context);
+        vkDestroyRenderPass(device.logical,backend.pass,nullptr);
+    }
+    renderers.clear();
+    if (pool) vkDestroyDescriptorPool(device.logical,pool,nullptr);
+    pool=VK_NULL_HANDLE; owner=nullptr; fonts_uploaded=false;
+}
 }
 
 namespace HostGuiVulkan {
@@ -116,9 +133,10 @@ bool render(VkCommandBuffer command,VkImage image,VkImageView view,VkExtent2D ex
     barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; barrier.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     barrier.srcQueueFamilyIndex=barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
     barrier.image=image; barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-    barrier.srcAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+    vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                          0,0,nullptr,0,nullptr,1,&barrier);
     VkRenderPassBeginInfo pass={}; pass.sType=VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     pass.renderPass=backend.pass; pass.framebuffer=target; pass.renderArea.extent=extent;
@@ -138,24 +156,40 @@ bool render(VkCommandBuffer command,VkImage image,VkImageView view,VkExtent2D ex
 extern "C" int host_gui_vulkan_active(void) { return device.logical!=VK_NULL_HANDLE; }
 extern "C" int host_gui_vulkan_prepare(unsigned width,unsigned height) try {
     (void)width; (void)height;
-    if (!device.logical || !ImGui::GetCurrentContext()) return 0;
+    ImGuiContext *current=ImGui::GetCurrentContext();
+    if (!device.logical || !current) return 0;
+    if (owner && owner!=current) reset_resources();
     if (!owner) {
-        owner=ImGui::GetCurrentContext();
-        VkDescriptorPoolSize size={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,32};
-        VkDescriptorPoolCreateInfo info={}; info.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        info.flags=VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        info.maxSets=32; info.poolSizeCount=1; info.pPoolSizes=&size;
-        require(vkCreateDescriptorPool(device.logical,&info,nullptr,&pool));
-        // These passes have format-specific pipelines but share the atlas and its
-        // descriptor layout. The official backend remains entirely unmodified.
-        renderer(VK_FORMAT_R8G8B8A8_UNORM);
-        renderer(VK_FORMAT_B8G8R8A8_UNORM);
-        renderer(VK_FORMAT_A8B8G8R8_UNORM_PACK32);
-        ImGui::GetIO().BackendFlags|=ImGuiBackendFlags_RendererHasVtxOffset;
+        try {
+            VkDescriptorPoolSize size={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,32};
+            VkDescriptorPoolCreateInfo info={}; info.sType=VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            info.flags=VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            info.maxSets=32; info.poolSizeCount=1; info.pPoolSizes=&size;
+            require(vkCreateDescriptorPool(device.logical,&info,nullptr,&pool));
+            // These passes have format-specific pipelines with identically defined
+            // descriptor layouts, so they share one font atlas and texture.
+            renderer(VK_FORMAT_R8G8B8A8_UNORM);
+            renderer(VK_FORMAT_B8G8R8A8_UNORM);
+            renderer(VK_FORMAT_A8B8G8R8_UNORM_PACK32);
+            ImGui::GetIO().BackendFlags|=ImGuiBackendFlags_RendererHasVtxOffset;
+            owner=current;
+        } catch (...) {
+            reset_resources();
+            throw;
+        }
     }
     CurrentContext restore;
-    ImGui::SetCurrentContext(renderer(VK_FORMAT_R8G8B8A8_UNORM).context);
+    if (fonts_uploaded && !ImGui::GetIO().Fonts->TexID) {
+        vkDeviceWaitIdle(device.logical);
+        for (const auto &backend:renderers) {
+            ImGui::SetCurrentContext(backend.context);
+            ImGui_ImplVulkan_DestroyFontsTexture();
+        }
+        fonts_uploaded=false;
+    }
+    ImGui::SetCurrentContext(renderers.front().context);
     ImGui_ImplVulkan_NewFrame(); // Own staging commands, never the guest pass.
+    fonts_uploaded=ImGui::GetIO().Fonts->TexID!=0;
     return 1;
 } catch (const std::exception &error) {
     std::fprintf(stderr,"%s\n",error.what()); return 0;
@@ -164,22 +198,14 @@ extern "C" void host_gui_vulkan_invalidate_fonts(void) {
     if (!device.logical || renderers.empty()) return;
     vkDeviceWaitIdle(device.logical);
     CurrentContext restore;
-    ImGui::SetCurrentContext(renderer(VK_FORMAT_R8G8B8A8_UNORM).context);
-    ImGui_ImplVulkan_DestroyFontsTexture();
+    for (const auto &backend:renderers) {
+        ImGui::SetCurrentContext(backend.context);
+        ImGui_ImplVulkan_DestroyFontsTexture();
+    }
+    fonts_uploaded=false;
 }
 extern "C" void host_gui_vulkan_shutdown(void) {
     if (!device.logical) return;
-    vkDeviceWaitIdle(device.logical);
-    CurrentContext restore;
-    for (const auto &target:targets) vkDestroyFramebuffer(device.logical,target.framebuffer,nullptr);
-    targets.clear();
-    for (const auto &backend:renderers) {
-        ImGui::SetCurrentContext(backend.context);
-        ImGui_ImplVulkan_Shutdown();
-        ImGui::DestroyContext(backend.context);
-        vkDestroyRenderPass(device.logical,backend.pass,nullptr);
-    }
-    renderers.clear();
-    if (pool) vkDestroyDescriptorPool(device.logical,pool,nullptr);
-    pool=VK_NULL_HANDLE; owner=nullptr; device={};
+    reset_resources();
+    device={};
 }
