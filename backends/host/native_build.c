@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #endif
 #include "native_build.h"
+#include "path_util.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -123,14 +124,7 @@ static int path_of(char *out, const char *format, ...) {
 static int join(char *out, const char *a, const char *b) { return path_of(out, "%s/%s", a, b); }
 
 static int make_directory(const char *path) {
-#ifdef _WIN32
-    wchar_t *w = wide(path);
-    int ok = w && (CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
-    free(w);
-    return ok;
-#else
-    return !mkdir(path, 0755) || errno == EEXIST;
-#endif
+    return host_mkdir_p(path, 0755);
 }
 
 static int exists(const char *path, uint64_t *size) {

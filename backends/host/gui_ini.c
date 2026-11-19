@@ -13,11 +13,44 @@
 
 static int parents(const char *path) {
     char *copy=strdup(path), *p;
+    struct stat st;
     if (!copy) return 0;
-    for (p=copy+1; *p; ++p) if (*p=='/' || *p=='\\') {
+    p=copy;
+#ifdef _WIN32
+    if (isalpha((unsigned char)p[0]) && p[1]==':') {
+        p+=2;
+        while (*p=='/' || *p=='\\') ++p;
+    } else if ((p[0]=='/' || p[0]=='\\') && (p[1]=='/' || p[1]=='\\')) {
+        p+=2;
+        while (*p && *p!='/' && *p!='\\') ++p;
+        while (*p=='/' || *p=='\\') ++p;
+        while (*p && *p!='/' && *p!='\\') ++p;
+        while (*p=='/' || *p=='\\') ++p;
+    } else {
+        while (*p=='/' || *p=='\\') ++p;
+    }
+#else
+    while (*p=='/') ++p;
+#endif
+    for (; *p; ++p) {
+#ifdef _WIN32
+        if (*p!='/' && *p!='\\') continue;
+#else
+        if (*p!='/') continue;
+#endif
         char c=*p; *p=0;
-        if (mkdir(copy,0700) && errno!=EEXIST) { free(copy); return 0; }
+        if (mkdir(copy,0700)) {
+            int why=errno;
+            if (why!=EEXIST && why!=EACCES) { free(copy); return 0; }
+            if (stat(copy,&st)) { errno=why; free(copy); return 0; }
+            if (!S_ISDIR(st.st_mode)) { errno=(why==EEXIST ? ENOTDIR : why); free(copy); return 0; }
+        }
         *p=c;
+#ifdef _WIN32
+        while (p[1]=='/' || p[1]=='\\') ++p;
+#else
+        while (p[1]=='/') ++p;
+#endif
     }
     free(copy); return 1;
 }

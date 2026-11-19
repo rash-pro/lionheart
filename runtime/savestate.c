@@ -1,7 +1,17 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <stddef.h>
 #if defined(FF8_SAVESTATES)
 #include "savestate_internal.h"
 #include <errno.h>
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 cpu_t *savestate_pending;
 static int (*handler)(cpu_t *, void *);
@@ -117,13 +127,23 @@ static void sections(ss_io *io, cpu_t *c) {
     }
 }
 int savestate_write(cpu_t *c, const char *path, const savestate_identity_t *identity_value, char *error, size_t error_size) {
+    static uint64_t tmp_counter;
     ss_io buffer = {0}, *io = &buffer;
     savestate_identity_t id = *identity_value;
     uint8_t magic[8] = {'F','F','8','S','A','V','E',0}, hash[20] = {0};
     uint32_t version = 1, size = 0;
     FILE *f = NULL;
-    char *tmp = malloc(strlen(path) + 5);
-    int ok = 0;
+    size_t tmp_cap = strlen(path) + 64;
+    char *tmp = malloc(tmp_cap);
+    int fd = -1, created = 0, ok = 0;
+    unsigned attempt;
+#ifdef _WIN32
+    unsigned long pid = (unsigned long)_getpid();
+    int open_flags = O_WRONLY | O_CREAT | O_EXCL | O_BINARY;
+#else
+    unsigned long pid = (unsigned long)getpid();
+    int open_flags = O_WRONLY | O_CREAT | O_EXCL;
+#endif
     if (!tmp) goto done;
     if (!c->hw || c->hw->syncing || c->hw->in_exception || c->fault_instructions || c->native_pin_count || c->dispatch_depth > 1) goto done;
     S8(magic); S32(version); S32(size); S8(hash);
@@ -132,16 +152,37 @@ int savestate_write(cpu_t *c, const char *path, const savestate_identity_t *iden
     size = (uint32_t)io->size;
     code_sha1(io->data + 36, size - 36, hash);
     io->pos = 12; S32(size); S8(hash);
-    snprintf(tmp, strlen(path) + 5, "%s.tmp", path);
-    f = fopen(tmp, "wb");
+    for (attempt = 0; attempt < 64; ++attempt) {
+        unsigned long long seq = (unsigned long long)(++tmp_counter);
+        int n = snprintf(tmp, tmp_cap, "%s.tmp.%lu.%llu", path, pid, seq);
+        if (n < 0 || (size_t)n >= tmp_cap) { errno = ENAMETOOLONG; goto done; }
+        fd = open(tmp, open_flags, 0600);
+        if (fd >= 0) { created = 1; break; }
+        if (errno != EEXIST) goto done;
+    }
+    if (fd < 0) goto done;
+    f = fdopen(fd, "wb");
     if (!f) goto done;
-    ok = fwrite(io->data, 1, size, f) == size;
-    if (fclose(f)) ok = 0;
+    fd = -1;
+    if (fwrite(io->data, 1, size, f) != size) goto done;
+    if (fflush(f)) goto done;
+#ifdef _WIN32
+    if (_commit(_fileno(f))) goto done;
+#else
+    if (fsync(fileno(f))) goto done;
+#endif
+    if (fclose(f)) { f = NULL; goto done; }
     f = NULL;
-    if (ok && rename(tmp, path)) ok = 0;
-    if (!ok) remove(tmp);
+    if (rename(tmp, path)) goto done;
+    ok = 1;
 done:
-    if (!ok) snprintf(error, error_size, "save failed (unsafe boundary, unsupported device state, or I/O): %s", strerror(errno));
+    {
+        int saved_errno = errno;
+        if (f) fclose(f);
+        if (fd >= 0) close(fd);
+        if (!ok && created) remove(tmp);
+        if (!ok) snprintf(error, error_size, "save failed (unsafe boundary, unsupported device state, or I/O): %s", strerror(saved_errno));
+    }
     free(tmp); free(io->data); return ok;
 }
 void savestate_dispose(cpu_t *c) {

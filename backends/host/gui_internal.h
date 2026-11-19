@@ -55,6 +55,7 @@ struct host_rect;
 void gui_achievement_toast(unsigned width,unsigned height,struct host_rect);
 int host_gui_toast_visible(void);
 void host_gui_toast_frame(unsigned width,unsigned height,struct host_rect);
+void gui_ui_scroll_reset(void);
 void gui_ui_scroll_begin(const char *id, gui_rect_t);
 void gui_ui_scroll_end(void);
 void gui_ui_region_begin(const char *id, gui_rect_t);

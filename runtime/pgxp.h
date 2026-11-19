@@ -28,6 +28,14 @@ void pgxp_vblank(struct gpu *);
 void pgxp_reset(struct gpu *);
 void pgxp_polygon(struct gpu *, const gpu_vertex_t *, unsigned count, int offset_x, int offset_y);
 void pgxp_select(struct gpu *, unsigned first);
+/* For a presenter that draws the bound GPU's polygon packets again on a GPU of
+ * its own (docs/frame-present.md): the corners of one packet as pgxp_polygon
+ * resolves them, in packet coordinates (without the drawing offset), x and y
+ * to a fraction of a pixel, w the depth in perspective mode and 0 otherwise.
+ * Returns a mask of the corners resolved; the others are left at their whole
+ * pixels. Called before the bound GPU executes the packet, it resolves what
+ * pgxp_polygon will. */
+unsigned pgxp_packet(struct gpu *, const uint32_t *packet, pgxp_vertex_t out[4]);
 int pgxp_triangle(const gpu_raster_t *, pgxp_vertex_t out[3]);
 pgxp_stats_t pgxp_stats(void);
 /* Export oldest to newest, inserting generation boundaries between visits. */

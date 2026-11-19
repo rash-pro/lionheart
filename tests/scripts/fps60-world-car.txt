@@ -1,0 +1,29 @@
+# FF8 USA disc3-start.mcr (use a copy): load the default save, on the world map by the
+# Lunar Gate beside a rental car. Supply all four discs; disc 3 is selected at the game's
+# prompt. VBlanks are one-based. Squall boards the car (Circle) and drives left, down,
+# down-left, right and up around the Gate, the camera following, until it stops near 7420.
+2400 CROSS
+2402 -
+3000 CROSS
+3008 -
+3600 CROSS
+3608 -
+4800 CROSS
+4808 -
+5400 CROSS
+5408 -
+6000 DISC3
+6600 LEFT
+6606 -
+6620 CIRCLE
+6628 -
+6660 LEFT
+6820 -
+6830 DOWN
+6960 -
+6970 DOWN+LEFT
+7100 -
+7110 RIGHT
+7300 -
+7310 UP
+7450 -

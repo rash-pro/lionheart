@@ -1,0 +1,62 @@
+# FF8 USA disc1-start-maxed.mcr (use a copy): load the save in slot 1, then walk through Balamb
+# Garden for the field layers of 60 fps presentation (docs/frame-layer.md). VBlanks are one-based.
+# The infirmary bed room with animated tiles (from ~1860), the infirmary, the corridor that
+# scrolls horizontally with plants drawn over Squall, run right, back and right again
+# (~2940-3540), the ring hall that scrolls horizontally with animated lights and students
+# walking (~3660-4860), the lobby that scrolls vertically and then both ways while Squall walks
+# down among students (~5040-5930), the turnstiles and the front gate, and the courtyard whose
+# camera follows Squall up and down while two students walk towards it (~8100-9100).
+300 CROSS
+302 -
+600 CROSS
+602 -
+900 CROSS
+902 -
+1140 CROSS
+1148 -
+1300 CROSS
+1308 -
+1460 CROSS
+1468 -
+1900 LEFT
+1940 -
+1960 UP
+2020 -
+2040 RIGHT
+2120 -
+2140 UP
+2180 -
+2200 LEFT
+2260 -
+2300 DOWN
+2500 -
+2700 RIGHT
+2820 -
+3100 RIGHT
+3260 -
+3280 LEFT
+3350 -
+3370 RIGHT
+3800 -
+4050 RIGHT
+4450 -
+4750 DOWN+RIGHT
+5550 -
+5700 DOWN
+6400 -
+6700 UP
+6708 -
+6900 RIGHT
+6920 -
+7100 DOWN
+7400 -
+7700 DOWN
+8150 -
+8200 LEFT
+8350 -
+8400 RIGHT
+8600 -
+8650 UP
+8750 -
+8800 DOWN
+9200 -

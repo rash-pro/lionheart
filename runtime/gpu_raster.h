@@ -18,6 +18,17 @@ typedef struct {
     int left, top, right, bottom;
     int display_x, display_y, display_w, display_h, display_enabled;
     int interlaced, field;
+    /* Presentation only, never saved (gpu_subpixel): what to add, in pixels, to
+     * the vertices of the primitive being drawn. shift applies to everything;
+     * corner to the triangle being drawn when cornered is set. corner_w is
+     * each corner's depth for perspective texturing, 0 for none. */
+    float shift_x, shift_y;
+    float corner[3][2];
+    float corner_w[3];
+    int cornered;
+    /* Optional presentation diagnostic: every accepted fragment, even unchanged. */
+    void (*fragment)(void *, int x, int y, int semi);
+    void *fragment_context;
 } gpu_raster_t;
 
 void gpu_raster_triangle(gpu_raster_t *, gpu_vertex_t a, gpu_vertex_t b,

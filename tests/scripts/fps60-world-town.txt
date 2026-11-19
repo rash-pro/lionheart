@@ -1,0 +1,28 @@
+# FF8 USA disc1-early.mcr (use a copy): load the default save, on the world map by Galbadia
+# Garden. VBlanks are one-based. The camera turns left (L1) and Squall walks down-left into
+# the Garden (its front gate from near VBlank 2300), walks back out to the world map (from
+# near 2700), opens the menu (Triangle) and closes it (Cross), and walks up-right.
+300 CROSS
+302 -
+600 CROSS
+602 -
+900 CROSS
+902 -
+1140 CROSS
+1148 -
+1300 CROSS
+1308 -
+1460 CROSS
+1468 -
+1900 L1
+1930 -
+1940 DOWN+LEFT
+2150 -
+2420 DOWN
+2620 -
+2760 TRIANGLE
+2768 -
+2900 CROSS
+2908 -
+2960 UP+RIGHT
+3100 -

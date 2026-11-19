@@ -1,14 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include "achievements.h"
 #include "json_text.h"
+#include "path_util.h"
 #include "rc_runtime.h"
 #include "rc_hash.h"
 #include "rc_api_common.h"
 #include <errno.h>
 #include <ctype.h>
-#include <dirent.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <stdio.h>
@@ -17,6 +16,10 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
+#else
+#include <dirent.h>
+#include <signal.h>
 #endif
 
 struct host_achievements {
@@ -58,74 +61,147 @@ static int parse_json(rc_api_response_t *response, char *data, size_t size,
     return rc_json_parse_server_response(response, &input, fields, count) == RC_OK && response->succeeded;
 }
 
-static char *progress_directory(const char *path) {
+static const char *last_separator(const char *path) {
     const char *slash = strrchr(path, '/');
+    const char *back = strrchr(path, '\\');
+    return back && (!slash || back > slash) ? back : slash;
+}
+
+static char *progress_directory(const char *path) {
+    const char *slash = last_separator(path);
     size_t n = slash ? (size_t)(slash - path) : 0;
     char *dir;
     if (!slash) return strdup(".");
     if (!n) n = 1;
+#ifdef _WIN32
+    if (n == 2 && path[1] == ':') n = 3;
+#endif
     dir = malloc(n + 1);
     if (dir) { memcpy(dir, path, n); dir[n] = 0; }
     return dir;
 }
 
-/* Only this progress file's owned regular mkstemp files are candidates.
+#ifdef _WIN32
+static wchar_t *wide_path(const char *text) {
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    wchar_t *w = count > 0 ? malloc((size_t)count * sizeof(*w)) : NULL, *absolute, *out;
+    DWORD n, got;
+    if (!w) return NULL;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, w, count)) { free(w); return NULL; }
+    n = GetFullPathNameW(w, 0, NULL, NULL);
+    absolute = n ? malloc((size_t)n * sizeof(*absolute)) : NULL;
+    got = absolute ? GetFullPathNameW(w, n, absolute, NULL) : 0;
+    free(w);
+    if (!got || got >= n) { free(absolute); return NULL; }
+    out = malloc(((size_t)n + 8) * sizeof(*out));
+    if (out) {
+        if (!wcsncmp(absolute, L"\\\\?\\", 4)) wcscpy(out, absolute);
+        else if (!wcsncmp(absolute, L"\\\\", 2)) { wcscpy(out, L"\\\\?\\UNC\\"); wcscat(out, absolute + 2); }
+        else { wcscpy(out, L"\\\\?\\"); wcscat(out, absolute); }
+    }
+    free(absolute);
+    return out;
+}
+#endif
+
+/* Only this progress file's owned regular temp files are candidates.
  * PID-tagged files from dead writers are stale immediately. Legacy random-only
  * names require 24 hours, so another running instance's fresh file is safe. */
 static void clean_stale_progress(const char *path) {
     char *parent = progress_directory(path);
-    const char *base = strrchr(path, '/');
-    DIR *dir = parent ? opendir(parent) : NULL;
-    struct dirent *entry;
+    const char *base = last_separator(path);
     size_t prefix;
     time_t now = time(NULL);
     base = base ? base + 1 : path; prefix = strlen(base);
-    if (!dir) { free(parent); return; }
-    while ((entry = readdir(dir))) {
-        const char *suffix, *random;
-        char *end;
-        long pid;
-        struct stat st;
-        int stale = 0;
-        size_t i;
-        if (strncmp(entry->d_name, base, prefix) || strncmp(entry->d_name + prefix, ".tmp.", 5)) continue;
-        suffix = entry->d_name + prefix + 5; random = suffix;
-        errno = 0; pid = strtol(suffix, &end, 10);
-        if (end > suffix && *end == '.' && !errno && pid > 0 && pid <= 0x7fffffffL) {
-            random = end + 1;
+    if (!parent) return;
 #ifdef _WIN32
-            HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,(DWORD)pid);
-            DWORD code;
-            stale=process ? (GetExitCodeProcess(process,&code) && code!=STILL_ACTIVE) : GetLastError()==ERROR_INVALID_PARAMETER;
-            if (process) CloseHandle(process);
-#else
-            stale = kill((pid_t)pid, 0) < 0 && errno == ESRCH;
-#endif
-        }
-        if (strlen(random) != 6) continue;
-        for (i = 0; i < 6 && isalnum((unsigned char)random[i]); ++i) {}
-#ifdef _WIN32
-        char candidate[8192];
-        snprintf(candidate,sizeof(candidate),"%s/%s",parent,entry->d_name);
-        if (i!=6 || stat(candidate,&st) || !S_ISREG(st.st_mode)) continue;
-#else
-        if (i != 6 || fstatat(dirfd(dir), entry->d_name, &st, AT_SYMLINK_NOFOLLOW) ||
-            !S_ISREG(st.st_mode) || st.st_uid != geteuid()) continue;
-#endif
-        if (random == suffix && now >= st.st_mtime && now - st.st_mtime >= 86400) stale = 1;
-#ifdef _WIN32
-        if (stale && unlink(candidate))
-#else
-        if (stale && unlinkat(dirfd(dir), entry->d_name, 0))
-#endif
-            fprintf(stderr, "Warning: stale achievement temp cleanup failed: %s\n", entry->d_name);
+    {
+        size_t plen = strlen(parent);
+        int sep = plen > 0 && !host_path_is_sep(parent[plen - 1]);
+        char *pattern = malloc(plen + (size_t)sep + 2);
+        wchar_t *wpattern;
+        WIN32_FIND_DATAW found;
+        HANDLE find;
+        if (!pattern) { free(parent); return; }
+        snprintf(pattern, plen + (size_t)sep + 2, "%s%s*", parent, sep ? "/" : "");
+        wpattern = wide_path(pattern);
+        free(pattern);
+        if (!wpattern) { free(parent); return; }
+        find = FindFirstFileW(wpattern, &found);
+        free(wpattern);
+        if (find == INVALID_HANDLE_VALUE) { free(parent); return; }
+        do {
+            char name[1024];
+            const char *suffix, *random;
+            char *end, *candidate;
+            long pid;
+            struct stat st;
+            int stale = 0;
+            size_t i, clen;
+            if (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+            if (!WideCharToMultiByte(CP_UTF8, 0, found.cFileName, -1, name, (int)sizeof(name), NULL, NULL)) continue;
+            if (strncmp(name, base, prefix) || strncmp(name + prefix, ".tmp.", 5)) continue;
+            suffix = name + prefix + 5; random = suffix;
+            errno = 0; pid = strtol(suffix, &end, 10);
+            if (end > suffix && *end == '.' && !errno && pid > 0 && pid <= 0x7fffffffL) {
+                HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+                DWORD code;
+                random = end + 1;
+                stale = process ? (GetExitCodeProcess(process, &code) && code != STILL_ACTIVE) : GetLastError() == ERROR_INVALID_PARAMETER;
+                if (process) CloseHandle(process);
+            }
+            if (strlen(random) != 6) continue;
+            for (i = 0; i < 6 && isalnum((unsigned char)random[i]); ++i) {}
+            if (i != 6) continue;
+            clen = plen + (size_t)sep + strlen(name) + 1;
+            candidate = malloc(clen);
+            if (!candidate) continue;
+            snprintf(candidate, clen, "%s%s%s", parent, sep ? "/" : "", name);
+            if (!stat(candidate, &st) && S_ISREG(st.st_mode)) {
+                if (random == suffix && now >= st.st_mtime && now - st.st_mtime >= 86400) stale = 1;
+                if (stale && unlink(candidate))
+                    fprintf(stderr, "Warning: stale achievement temp cleanup failed: %s\n", name);
+            }
+            free(candidate);
+        } while (FindNextFileW(find, &found));
+        FindClose(find);
+        free(parent);
     }
-    closedir(dir); free(parent);
+#else
+    {
+        DIR *dir = opendir(parent);
+        struct dirent *entry;
+        if (!dir) { free(parent); return; }
+        while ((entry = readdir(dir))) {
+            const char *suffix, *random;
+            char *end;
+            long pid;
+            struct stat st;
+            int stale = 0;
+            size_t i;
+            if (strncmp(entry->d_name, base, prefix) || strncmp(entry->d_name + prefix, ".tmp.", 5)) continue;
+            suffix = entry->d_name + prefix + 5; random = suffix;
+            errno = 0; pid = strtol(suffix, &end, 10);
+            if (end > suffix && *end == '.' && !errno && pid > 0 && pid <= 0x7fffffffL) {
+                random = end + 1;
+                stale = kill((pid_t)pid, 0) < 0 && errno == ESRCH;
+            }
+            if (strlen(random) != 6) continue;
+            for (i = 0; i < 6 && isalnum((unsigned char)random[i]); ++i) {}
+            if (i != 6 || fstatat(dirfd(dir), entry->d_name, &st, AT_SYMLINK_NOFOLLOW) ||
+                !S_ISREG(st.st_mode) || st.st_uid != geteuid()) continue;
+            if (random == suffix && now >= st.st_mtime && now - st.st_mtime >= 86400) stale = 1;
+            if (stale && unlinkat(dirfd(dir), entry->d_name, 0))
+                fprintf(stderr, "Warning: stale achievement temp cleanup failed: %s\n", entry->d_name);
+        }
+        closedir(dir); free(parent);
+    }
+#endif
 }
 
 static int save_progress(host_achievements_t *a) {
-    size_t n = strlen(a->progress) + 40;
-    char *temp = malloc(n), *parent = progress_directory(a->progress);
+    size_t plen = strlen(a->progress) + 32, n = plen + 8;
+    char *prefix = malloc(plen), *temp = malloc(n), *parent = progress_directory(a->progress);
     FILE *f = NULL;
     struct stat original;
 #ifndef _WIN32
@@ -133,7 +209,7 @@ static int save_progress(host_achievements_t *a) {
 #endif
     uint32_t i;
     int ok = 0, first = 1, fd = -1, directory = -1, renamed = 0, created = 0;
-    if (!temp || !parent) goto done;
+    if (!prefix || !temp || !parent) goto done;
     if (!stat(a->progress, &original)) {
 #ifndef _WIN32
         mode = original.st_mode & 07777;
@@ -144,14 +220,12 @@ static int save_progress(host_achievements_t *a) {
     directory = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (directory < 0) goto done;
 #endif
-    snprintf(temp, n, "%s.tmp.%ld.XXXXXX", a->progress, (long)getpid());
 #ifdef _WIN32
-    /* _mktemp_s chooses a name; O_EXCL makes publication race-safe. */
-    if (_mktemp_s(temp,n)) goto done;
-    fd = open(temp,O_CREAT|O_EXCL|O_RDWR|O_BINARY,0600);
+    snprintf(prefix, plen, "%s.tmp.%ld.", a->progress, (long)_getpid());
 #else
-    fd = mkstemp(temp);
+    snprintf(prefix, plen, "%s.tmp.%ld.", a->progress, (long)getpid());
 #endif
+    fd = host_open_unique_temp(prefix, temp, n, 0600);
     if (fd < 0) goto done;
     created = 1;
     f = fdopen(fd, "w");
@@ -183,7 +257,7 @@ done:
     if (f) fclose(f);
     if (temp && created && !renamed) unlink(temp);
     if (directory >= 0) close(directory);
-    free(temp); free(parent);
+    free(prefix); free(temp); free(parent);
     return ok;
 }
 

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "toolchain.h"
+#include "path_util.h"
 #include "sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +15,7 @@
 #include <direct.h>
 #include <io.h>
 #include <process.h>
-#define mkdir_private(p) _mkdir(p)
+#include <wchar.h>
 #define TC_NULL "NUL"
 #else
 #include <unistd.h>
@@ -23,7 +24,6 @@
 #include <sys/file.h>
 #include <sys/wait.h>
 #include <curl/curl.h>
-#define mkdir_private(p) mkdir(p,0700)
 #define TC_NULL "/dev/null"
 #endif
 #define PATH_CAP 4096
@@ -51,46 +51,86 @@ static int path(char *out, const char *a, const char *b) {
     int n=snprintf(out,PATH_CAP,"%s/%s",a,b);
     return n>0 && n<PATH_CAP;
 }
-static int directory(const char *name) {
-    char copy[PATH_CAP]; struct stat st;
-    if(strlen(name)>=sizeof(copy)) return 0;
-    strcpy(copy,name);
-    for(char *p=copy+1;;++p) if(*p=='/' || !*p) {
 #ifdef _WIN32
-        if(p==copy+2 && copy[1]==':' && *p=='/') continue;
-#endif
-        char save=*p; *p=0;
-        if((mkdir_private(copy) && errno!=EEXIST) || stat(copy,&st) || !S_ISDIR(st.st_mode)) return 0;
-        *p=save; if(!save) break;
+static wchar_t *wide_path(const char *text) {
+    int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text,-1,NULL,0);
+    wchar_t *w=count>0 ? malloc((size_t)count*sizeof(*w)) : NULL, *absolute, *out;
+    DWORD n, got;
+    if(!w) return NULL;
+    if(!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text,-1,w,count)) { free(w); return NULL; }
+    n=GetFullPathNameW(w,0,NULL,NULL);
+    absolute=n ? malloc((size_t)n*sizeof(*absolute)) : NULL;
+    got=absolute ? GetFullPathNameW(w,n,absolute,NULL) : 0;
+    free(w);
+    if(!got || got>=n) { free(absolute); return NULL; }
+    out=malloc(((size_t)n+8)*sizeof(*out));
+    if(out) {
+        if(!wcsncmp(absolute,L"\\\\?\\",4)) wcscpy(out,absolute);
+        else if(!wcsncmp(absolute,L"\\\\",2)) { wcscpy(out,L"\\\\?\\UNC\\"); wcscat(out,absolute+2); }
+        else { wcscpy(out,L"\\\\?\\"); wcscat(out,absolute); }
     }
-    return 1;
+    free(absolute);
+    return out;
+}
+#endif
+static int directory(const char *name) {
+    return host_mkdir_p(name,0700);
 }
 static int parent(const char *name) {
-    char copy[PATH_CAP], *slash;
+    char copy[PATH_CAP], *slash, *back;
     if(strlen(name)>=sizeof(copy)) return 0;
-    strcpy(copy,name); slash=strrchr(copy,'/');
+    strcpy(copy,name);
+    slash=strrchr(copy,'/'); back=strrchr(copy,'\\');
+    if(back && (!slash || back>slash)) slash=back;
     if(!slash) return 0;
     *slash=0; return directory(copy);
 }
 /* Never traverse links left by an interrupted or externally modified stage. */
 static int remove_tree(const char *name) {
 #ifdef _WIN32
-    DWORD attr=GetFileAttributesA(name);
-    if(attr==INVALID_FILE_ATTRIBUTES) return 1;
-    if(attr&FILE_ATTRIBUTE_REPARSE_POINT)
-        return (attr&FILE_ATTRIBUTE_DIRECTORY)?RemoveDirectoryA(name):DeleteFileA(name);
-    if(attr&FILE_ATTRIBUTE_DIRECTORY) {
-        char pattern[PATH_CAP], child[PATH_CAP]; WIN32_FIND_DATAA d;
-        if(!path(pattern,name,"*")) return 0;
-        HANDLE h=FindFirstFileA(pattern,&d);
-        if(h!=INVALID_HANDLE_VALUE) {
-            do { if(!strcmp(d.cFileName,".") || !strcmp(d.cFileName,"..")) continue;
-                if(!path(child,name,d.cFileName) || !remove_tree(child)) { FindClose(h); return 0; }
-            } while(FindNextFileA(h,&d)); FindClose(h);
-        }
-        return RemoveDirectoryA(name)!=0;
+    wchar_t *w=wide_path(name);
+    DWORD attr;
+    int ok;
+    if(!w) return 0;
+    attr=GetFileAttributesW(w);
+    if(attr==INVALID_FILE_ATTRIBUTES) {
+        DWORD err=GetLastError();
+        free(w);
+        return err==ERROR_FILE_NOT_FOUND || err==ERROR_PATH_NOT_FOUND;
     }
-    return DeleteFileA(name)!=0;
+    if(attr&FILE_ATTRIBUTE_REPARSE_POINT) {
+        ok=(attr&FILE_ATTRIBUTE_DIRECTORY) ? RemoveDirectoryW(w)!=0 : DeleteFileW(w)!=0;
+        free(w);
+        return ok;
+    }
+    if(attr&FILE_ATTRIBUTE_DIRECTORY) {
+        char pattern[PATH_CAP], child[PATH_CAP];
+        WIN32_FIND_DATAW d;
+        wchar_t *wp;
+        HANDLE h;
+        if(!path(pattern,name,"*") || !(wp=wide_path(pattern))) { free(w); return 0; }
+        h=FindFirstFileW(wp,&d);
+        free(wp);
+        if(h!=INVALID_HANDLE_VALUE) {
+            do {
+                char entry[PATH_CAP];
+                if(!wcscmp(d.cFileName,L".") || !wcscmp(d.cFileName,L"..")) continue;
+                if(!WideCharToMultiByte(CP_UTF8,0,d.cFileName,-1,entry,(int)sizeof(entry),NULL,NULL) ||
+                   !path(child,name,entry) || !remove_tree(child)) {
+                    FindClose(h); free(w); return 0;
+                }
+            } while(FindNextFileW(h,&d));
+            FindClose(h);
+        } else if(GetLastError()!=ERROR_FILE_NOT_FOUND) {
+            free(w); return 0;
+        }
+        ok=RemoveDirectoryW(w)!=0;
+        free(w);
+        return ok;
+    }
+    ok=DeleteFileW(w)!=0;
+    free(w);
+    return ok;
 #else
     struct stat st;
     if(lstat(name,&st)) return errno==ENOENT;
@@ -132,7 +172,9 @@ static int digest(const char *name, char hex[65], uint64_t *size, install *i) {
 }
 static int regular(const char *name) {
 #ifdef _WIN32
-    DWORD a=GetFileAttributesA(name);
+    wchar_t *w=wide_path(name);
+    DWORD a=w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
+    free(w);
     return a!=INVALID_FILE_ATTRIBUTES && !(a&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT));
 #else
     struct stat st; return !lstat(name,&st) && S_ISREG(st.st_mode);
@@ -530,7 +572,9 @@ int host_tc_install(const char *data,const host_tc_manifest *m,const char *local
     if(!tar && strcmp(m->format,"zip")) return fail(&i,"Unsupported archive format");
     for(size_t j=0;j<m->file_count;++j) if(!safe_name(m->files[j])) return fail(&i,"Invalid retained path");
 #ifdef _WIN32
-    HANDLE guard=CreateFileA(lock,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    wchar_t *wlock=wide_path(lock);
+    HANDLE guard=wlock ? CreateFileW(wlock,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL) : INVALID_HANDLE_VALUE;
+    free(wlock);
     if(guard==INVALID_HANDLE_VALUE) return fail(&i,"Another installer is active; retry");
 #else
     int guard=open(lock,O_CREAT|O_RDWR,0600);

@@ -74,6 +74,11 @@ checkpoints; restore before `--first` to leave a warmup interval. Prove route ex
 from boot separately with `build/devtools/compare`. A checkpoint is specific to its build,
 input script and execution mode.
 
+With smooth motion on (`docs/frame-present.md`), `--present-stats PATH.csv` records every picture the player
+presents in a window: the moment it was for, when it was drawn and handed over, and when the device saw it reach
+the display. Run it in a visible window on a display of the rate you measure; the intervals between the refreshes
+pictures landed on are the pacing, and `--audio-stats` shows whether the guest kept time meanwhile.
+
 For MDEC observation traces, build a separate instrumented host without changing
 the runtime sources:
 

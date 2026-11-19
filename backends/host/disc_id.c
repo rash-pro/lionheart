@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "path_util.h"
 #include "sha1_stream.h"
 #ifdef _WIN32
 #include <windows.h>
@@ -156,19 +157,16 @@ int host_disc_runtime_path(const char *path, host_disc_runtime_t *out, char *err
 #else
     temp = getenv("TMPDIR"); if (!temp || !*temp) temp = "/tmp";
 #endif
-    n = snprintf(directory,sizeof(directory),"%s/lionheart-cue-XXXXXX",temp);
-    if (n < 0 || (size_t)n >= sizeof(directory)-10) {
-        snprintf(error,error_size,"Temporary CUE path exceeds 4095 bytes"); return 0;
+    if (!host_mkdtemp_unique(temp,"lionheart-cue-",directory,sizeof(directory)-9)) {
+        if (errno == ENAMETOOLONG) snprintf(error,error_size,"Temporary CUE path exceeds 4095 bytes");
+        else snprintf(error,error_size,"Cannot create temporary CUE directory: %s",strerror(errno));
+        return 0;
     }
-#ifdef _WIN32
-    if (_mktemp_s(directory,sizeof(directory)) || mkdir(directory,0700)) {
-#else
-    if (!mkdtemp(directory)) {
-#endif
-        snprintf(error,error_size,"Cannot create temporary CUE directory: %s",strerror(errno)); return 0;
+    n = snprintf(out->path,sizeof(out->path),"%s/disc.cue",directory);
+    if (n < 0 || (size_t)n >= sizeof(out->path)) {
+        snprintf(error,error_size,"Temporary CUE path exceeds 4095 bytes");
+        rmdir(directory); out->path[0] = 0; return 0;
     }
-    memcpy(out->path,directory,(size_t)n);
-    strcpy(out->path+n,"/disc.cue");
     fd = open(out->path,O_WRONLY|O_CREAT|O_EXCL,0600);
     if (fd < 0) {
         snprintf(error,error_size,"Cannot create temporary CUE: %s",strerror(errno));
