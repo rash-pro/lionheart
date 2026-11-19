@@ -15,7 +15,7 @@ it runs.
 ## Features
 
 - Vulkan rendering at up to 8× internal resolution, with PGXP precise geometry, MSAA and CRT presets.
-- Opt-in 60 fps smooth motion for fields and the world map (`--smooth-motion`, `smooth-motion=1`, or **Video → Smooth motion**; off by default, preserves PGXP and guest timing).
+- Experimental, opt-in 60 fps smooth motion for fields and the world map (`--smooth-motion`, `smooth-motion=1`, or **Video → Smooth motion**; off by default — preserves PGXP and guest timing, but may show visual artifacts in some scenes).
 - A setup screen and an in-game menu for discs, memory cards, video and controls.
 - Save states, screenshots, and controller hotkeys for both.
 - Optional HD movies from your own files.

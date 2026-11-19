@@ -855,7 +855,12 @@ static void draw_video(void) {
     if (gui_ui_button("video.movies.browse",S("btn.browse"),R(x+width-254,516,160,38),vulkan ? 0 : GUI_DISABLED)) pick(GUI_PICK_MOVIES,0);
     if (gui_ui_button("video.movies.clear",S("btn.clear"),R(x+width-84,516,76,38),vulkan && *gui.options->movies ? 0 : GUI_DISABLED)) changed("movies","");
     value=toggle("video.osd","video.osd",gui.options->osd,590,1,0); if (value!=gui.options->osd) changed_number("osd",(unsigned)value);
-    value=toggle("video.smooth","video.smooth",gui.options->smooth_motion,646,1,0); if (value!=gui.options->smooth_motion) changed_number("smooth-motion",(unsigned)value);
+    gui_ui_control_row(R(x,646,width,58));
+    value=gui_ui_toggle("video.smooth",R(x+width-64,659,46,26),gui.options->smooth_motion,1);
+    control_label("video.smooth","video.smooth",x+18,651,180,GUI_REGULAR,GUI_TEXT);
+    label("tag.experimental",x+200,655,140,GUI_SUB,GUI_WARN);
+    label("video.smooth.sub",x+18,676,width-100,GUI_SUB,GUI_DIM);
+    if (value!=gui.options->smooth_motion) changed_number("smooth-motion",(unsigned)value);
     pane_body_end();
 }
 static const char *pad_name(unsigned bit) {

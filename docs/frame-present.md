@@ -16,7 +16,7 @@ documented in `docs/frame-world.md`.
 | Config | `smooth-motion=1` |
 | Menu | Video, Smooth motion |
 
-Off by default. Off, nothing of this runs: no recording GTE entries are bound (the interpreter's GTE commands and
+Experimental and off by default (covers fields and the world map; some scenes may still show visual artifacts). Off, nothing of this runs: no recording GTE entries are bound (the interpreter's GTE commands and
 the projection entries modules call are the plain ones), nothing observes or taps the guest's GPU, and the
 renderer mirrors the guest's GPU as before. The menu switches it during play, from the next VBlank on. With
 the frame identity developer switches (`--frame-identity` and the others) it stays off.

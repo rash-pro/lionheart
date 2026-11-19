@@ -616,7 +616,7 @@ static void print_usage(FILE *out, const char *program) {
     fprintf(out, "Diagnostic: --screenshot-at FRAME (repeatable, presentation frame starting at zero)\n");
     fprintf(out, "Notifications: --osd 0|1 (default 1)\n");
     fprintf(out, "CRT (Vulkan): --crt off|pvm|tv|arcade (F9 cycles) --dump-presented-frames DIR --present-size WxH\n");
-    fprintf(out, "Smooth motion: --smooth-motion [0|1] (frames between the game's); --present-stats PATH.csv\n");
+    fprintf(out, "Smooth motion (experimental): --smooth-motion [0|1] (60 fps frames between the game's); --present-stats PATH.csv\n");
 #ifdef FF8_PLAYER
     fprintf(out, "Local telemetry: --state-bridge PORT (0 picks a port)\n");
 #else
