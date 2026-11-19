@@ -2,6 +2,7 @@
 #include "identity.h"
 #include "screenshot.h"
 #include "osd.h"
+#include "path_util.h"
 #include <SDL.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -176,20 +177,9 @@ int host_screenshot_directory(char *out, unsigned size) {
     return n>0 && (unsigned)n<size;
 #endif
 }
-static int directory(const char *path) {
-    char copy[4096]; size_t i,n=strlen(path); struct stat st;
-    if (!n || n>=sizeof(copy)) return 0;
-    memcpy(copy,path,n+1);
-    for (i=1;i<=n;++i) if (copy[i]=='/' || !copy[i]) {
-        char saved=copy[i]; copy[i]=0;
-        if ((mkdir(copy,0777) && errno!=EEXIST) || stat(copy,&st) || !S_ISDIR(st.st_mode)) return 0;
-        copy[i]=saved;
-    }
-    return 1;
-}
 static int write_shot(const uint8_t *rgb,int w,int h) {
     char path[8192],stamp[32]; unsigned collision=1; time_t now=time(NULL); struct tm local;
-    if (!directory(shot.directory) || !localtime_r(&now,&local) || !strftime(stamp,sizeof(stamp),HOST_SHOT_PREFIX "%Y%m%d-%H%M%S",&local)) return 0;
+    if (!host_mkdir_p(shot.directory,0777) || !localtime_r(&now,&local) || !strftime(stamp,sizeof(stamp),HOST_SHOT_PREFIX "%Y%m%d-%H%M%S",&local)) return 0;
     for (;;) {
         int fd;
         if (collision==1) snprintf(path,sizeof(path),"%s/%s.png",shot.directory,stamp);

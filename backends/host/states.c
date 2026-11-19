@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "state_build.h"
 #include "state_disc.h"
+#include "path_util.h"
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,18 +28,6 @@ static struct {
 } states;
 static double milliseconds(uint64_t start) {
     return (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
-}
-static int directory(const char *path) {
-    char *copy = strdup(path), *p;
-    struct stat st;
-    int ok = copy && *copy;
-    if (!ok) { free(copy); return 0; }
-    for (p = copy + 1; ; ++p) if (*p == '/' || !*p) {
-        char saved = *p; *p = 0;
-        if ((mkdir(copy,0700) && errno != EEXIST) || stat(copy,&st) || !S_ISDIR(st.st_mode)) ok = 0;
-        *p = saved; if (!saved || !ok) break;
-    }
-    free(copy); return ok;
 }
 static int open_disc(cpu_t *c, unsigned disc, const uint8_t *expected, void *unused, char *error, size_t size) {
     uint8_t hash[20];
@@ -91,7 +80,7 @@ static int boundary(cpu_t *c, void *unused) {
     states.action = 0;
     host_display_state_pending(0);
     path = states.save ? states.save : (allocated = slot_path(states.requested_slot));
-    if (!path || !directory(states.dir)) { fprintf(stderr,"Save state: cannot create state directory\n"); states.failed = 1; host_osd_event(HOST_OSD_SAVE_FAILED,states.requested_slot,"cannot create directory"); free(allocated); return 0; }
+    if (!path || !host_mkdir_p(states.dir,0700)) { fprintf(stderr,"Save state: cannot create state directory\n"); states.failed = 1; host_osd_event(HOST_OSD_SAVE_FAILED,states.requested_slot,"cannot create directory"); free(allocated); return 0; }
     start = SDL_GetPerformanceCounter();
     states.id.disc = states.disc;
     /* Hash the attached image, never the cue pathname or a host FILE handle. */
@@ -168,18 +157,19 @@ void host_states_vblank(cpu_t *c) {
 int host_states_loading(void) { return states.action == 2; }
 static int publish_cards(cpu_t *c) {
     unsigned i;
-    if (!directory(states.dir)) return 0;
+    if (!host_mkdir_p(states.dir,0700)) return 0;
     for (i = 0; i < 2; ++i) if (sio_card(c,i)) {
         size_t n = strlen(states.dir) + 48;
-        char *path = malloc(n);
+        char *prefix = malloc(n), *path = malloc(n);
         int fd, ok;
         FILE *f;
-        if (!path) return 0;
-        snprintf(path,n,"%s/restored-card%u-XXXXXX",states.dir,i+1);
-        fd = mkstemp(path);
+        if (!prefix || !path) { free(prefix); free(path); return 0; }
+        snprintf(prefix,n,"%s/restored-card%u-",states.dir,i+1);
+        fd = host_open_unique_temp(prefix,path,n,0600);
+        free(prefix);
         f = fd < 0 ? NULL : fdopen(fd,"w+b");
         ok = f && ss_card_publish(sio_card(c,i),f);
-        if (!ok) { if (f) fclose(f); else if (fd >= 0) close(fd); unlink(path); free(path); return 0; }
+        if (!ok) { if (f) fclose(f); else if (fd >= 0) close(fd); if (fd >= 0) unlink(path); free(path); return 0; }
         printf("Restored card %u (private copy): %s\n",i+1,path);
         free(path);
     }

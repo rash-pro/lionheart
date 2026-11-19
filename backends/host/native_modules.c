@@ -9,6 +9,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
 #else
 #include <dirent.h>
 #include <dlfcn.h>
@@ -555,17 +556,50 @@ static int is_module_name(const char *name) {
     return length > suffix && !strcmp(name + length - suffix, module_suffix);
 }
 
+#ifdef _WIN32
+static wchar_t *wide_path(const char *text) {
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    wchar_t *w = count > 0 ? malloc((size_t)count * sizeof(*w)) : NULL, *absolute, *out;
+    DWORD n, got;
+    if (!w) return NULL;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, w, count)) { free(w); return NULL; }
+    n = GetFullPathNameW(w, 0, NULL, NULL);
+    absolute = n ? malloc((size_t)n * sizeof(*absolute)) : NULL;
+    got = absolute ? GetFullPathNameW(w, n, absolute, NULL) : 0;
+    free(w);
+    if (!got || got >= n) { free(absolute); return NULL; }
+    out = malloc(((size_t)n + 8) * sizeof(*out));
+    if (out) {
+        if (!wcsncmp(absolute, L"\\\\?\\", 4)) wcscpy(out, absolute);
+        else if (!wcsncmp(absolute, L"\\\\", 2)) { wcscpy(out, L"\\\\?\\UNC\\"); wcscat(out, absolute + 2); }
+        else { wcscpy(out, L"\\\\?\\"); wcscat(out, absolute); }
+    }
+    free(absolute);
+    return out;
+}
+#endif
+
 int native_modules_scan(const char *directory) {
     int ok = 1;
 #ifdef _WIN32
-    char pattern[4096];
-    WIN32_FIND_DATAA found;
+    size_t length = strlen(directory) + sizeof(module_suffix) + 3;
+    char *pattern = malloc(length);
+    wchar_t *wide;
+    WIN32_FIND_DATAW found;
     HANDLE find;
-    snprintf(pattern, sizeof(pattern), "%s/*%s", directory, module_suffix);
-    find = FindFirstFileA(pattern, &found);
+    if (!pattern) return 0;
+    snprintf(pattern, length, "%s/*%s", directory, module_suffix);
+    wide = wide_path(pattern);
+    free(pattern);
+    if (!wide) return 0;
+    find = FindFirstFileW(wide, &found);
+    free(wide);
     if (find == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
-    do ok = is_module_name(found.cFileName) ? add_scan_name(directory, found.cFileName) && ok : ok;
-    while (FindNextFileA(find, &found));
+    do {
+        char name[1024];
+        if (!WideCharToMultiByte(CP_UTF8, 0, found.cFileName, -1, name, (int)sizeof(name), NULL, NULL)) { ok = 0; continue; }
+        if (is_module_name(name)) ok = add_scan_name(directory, name) && ok;
+    } while (FindNextFileW(find, &found));
     FindClose(find);
 #else
     DIR *listing = opendir(directory);

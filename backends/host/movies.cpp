@@ -15,6 +15,7 @@ extern "C" {
 #include <string>
 #include <thread>
 #include <sys/stat.h>
+#include "path_util.h"
 
 namespace {
 struct Mapping { unsigned disc, lba, frames; int offset; const char *name; };
@@ -213,7 +214,7 @@ extern "C" int host_movies_start(const char *directory,unsigned scale,const char
         auto m=std::unique_ptr<Movies>(new Movies);
         m->directory=directory; m->scale=scale;
         if (statistics) {
-            m->statistics=std::fopen(statistics,"w");
+            m->statistics=host_fopen(statistics,"w");
             if (!m->statistics) return 0;
             std::fprintf(m->statistics,"vblank,disc,lba,guest_frame,hd_seconds,status\n");
         }

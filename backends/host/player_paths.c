@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "player_paths.h"
+#include "path_util.h"
 #include <SDL.h>
 #include <errno.h>
 #include <stdio.h>
@@ -38,22 +39,6 @@ int host_player_data(char *path, size_t size) {
 static char directory_failure[4352];
 const char *host_player_directory_failure(void) { return directory_failure; }
 int host_player_directory(const char *path) {
-    char *copy = strdup(path), *p; struct stat st; int ok;
     directory_failure[0] = 0;
-    if (!copy || !*copy) { free(copy); snprintf(directory_failure,sizeof(directory_failure),"no path"); return 0; }
-    ok = 1;
-    for (p = copy + 1; ; ++p) if (*p == '/' || !*p) {
-        char saved = *p; const char *step = NULL; *p = 0;
-        /* Creating a folder that exists reports different errors on different
-         * systems (a drive root, for one), so what decides is what is there. */
-        int made = !mkdir(copy,0700), why = errno;
-        if (stat(copy,&st)) { if (!made) { step = "create"; errno = why; } else step = "read"; }
-        else if (!S_ISDIR(st.st_mode)) { step = "use"; errno = ENOTDIR; }
-        if (step) {
-            snprintf(directory_failure,sizeof(directory_failure),"cannot %s %.4000s: %s",step,copy,strerror(errno));
-            ok = 0;
-        }
-        *p = saved; if (!saved || !ok) break;
-    }
-    free(copy); return ok;
+    return host_mkdir_p_detail(path, 0700, directory_failure, sizeof(directory_failure));
 }

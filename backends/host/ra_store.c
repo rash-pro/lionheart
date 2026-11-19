@@ -1,15 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include "ra_store.h"
 #include "ra_http.h"
+#include "path_util.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 char *host_ra_file_read(const char *path,size_t *size,size_t limit,int private_file) {
     int fd; struct stat st; char *data=NULL;
@@ -38,17 +36,14 @@ done:
     close(fd); return data;
 }
 int host_ra_file_write(const char *path,const void *data,size_t size) {
-    size_t length=strlen(path)+16,at=0;
-    char *temp=malloc(length); int fd=-1,ok=0;
-    if (!temp) return 0;
-    snprintf(temp,length,"%s.XXXXXX",path);
-#ifdef _WIN32
-    if (_mktemp_s(temp,length)) goto done;
-    fd=open(temp,O_WRONLY|O_CREAT|O_EXCL|O_BINARY,0600);
-#else
-    fd=mkstemp(temp);
-#endif
+    size_t plen=strlen(path)+2,length=plen+8,at=0;
+    char *prefix=malloc(plen),*temp=malloc(length); int fd=-1,ok=0,created=0;
+    if (!prefix || !temp) { free(prefix); free(temp); return 0; }
+    snprintf(prefix,plen,"%s.",path);
+    fd=host_open_unique_temp(prefix,temp,length,0600);
+    free(prefix);
     if (fd<0) goto done;
+    created=1;
     while (at<size) {
         int wrote=(int)write(fd,(const char *)data+at,(unsigned)(size-at));
         if (wrote<=0) goto done;
@@ -61,18 +56,23 @@ int host_ra_file_write(const char *path,const void *data,size_t size) {
 #endif
     if (close(fd)) { fd=-1; goto done; }
     fd=-1;
-#ifdef _WIN32
-    ok=MoveFileExA(temp,path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
-#else
     ok=rename(temp,path)==0;
+#ifndef _WIN32
     if (ok) {
-        char *slash=strrchr(temp,'/');
-        if (slash) { *slash=0; int dir=open(temp,O_RDONLY|O_DIRECTORY|O_CLOEXEC); if (dir>=0) { ok=fsync(dir)==0; close(dir); } else ok=0; *slash='/'; }
+        char *slash=strrchr(temp,'/'), *back=strrchr(temp,'\\');
+        if (back && (!slash || back>slash)) slash=back;
+        if (slash) {
+            char saved=*slash; int dir;
+            if (slash==temp) dir=open("/",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
+            else { *slash=0; dir=open(temp,O_RDONLY|O_DIRECTORY|O_CLOEXEC); *slash=saved; }
+            if (dir>=0) { ok=fsync(dir)==0; close(dir); }
+            else ok=0;
+        }
     }
 #endif
 done:
     if (fd>=0) close(fd);
-    if (!ok) unlink(temp);
+    if (!ok && created) unlink(temp);
     free(temp); return ok;
 }
 static int field(const char *s,size_t cap) {

@@ -8,6 +8,7 @@
 #include "viewport.h"
 #include "osd.h"
 #include "screenshot.h"
+#include "path_util.h"
 #include "hotkey_bindings.h"
 #ifdef FF8_GUI
 #include "gui_internal.h"
@@ -392,21 +393,7 @@ int host_vram_dump(gpu_t *g, const char *path) {
 }
 
 static int make_directory(const char *path) {
-    size_t i, n = strlen(path);
-    char *copy = malloc(n + 1);
-    struct stat status;
-    int ok = 1;
-    if (!copy || !n) { free(copy); return 0; }
-    memcpy(copy, path, n + 1);
-    for (i = 1; i <= n; ++i) if (copy[i] == '/' || !copy[i]) {
-        char saved = copy[i]; copy[i] = 0;
-        if (mkdir(copy, 0777) && errno != EEXIST) ok = 0;
-        if (stat(copy, &status) || !S_ISDIR(status.st_mode)) ok = 0;
-        copy[i] = saved;
-        if (!ok) break;
-    }
-    free(copy);
-    return ok;
+    return host_mkdir_p(path, 0777);
 }
 
 static void fail(const char *message) {
