@@ -49,6 +49,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Build the AppImage
         run: nice -n 10 cmake -DJOBS=4 -P tools/build_appimage.cmake
       - name: Build the release scanner and its synthetic input
@@ -84,6 +86,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Cross-build and stage the player
         run: nice -n 10 cmake -DJOBS=4 -P tools/build_windows.cmake
       - name: Pack the zip
