@@ -61,11 +61,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/native-modules.md](docs/native-
 
 ## Install
 
-Once releases are published, download packages from the [releases page](https://github.com/rash-pro/lionheart/releases), with a `SHA256SUMS` file to check them against (`sha256sum -c SHA256SUMS --ignore-missing`). They are not code-signed. Neither contains game code or a compiler.
+Download packages from the [releases page](https://github.com/rash-pro/lionheart/releases), with a `SHA256SUMS` file to check them against (`sha256sum -c SHA256SUMS --ignore-missing`). They are not code-signed. Neither contains game code or a compiler.
 
 ### Linux
 
-Download `Lionheart-VERSION-x86_64.AppImage` from the releases page once available. Run `chmod +x Lionheart-*-x86_64.AppImage`, then `./Lionheart-*-x86_64.AppImage`. Use `./Lionheart-*-x86_64.AppImage --version` to check its version.
+Download `Lionheart-VERSION-x86_64.AppImage` from the releases page. Run `chmod +x Lionheart-*-x86_64.AppImage`, then `./Lionheart-*-x86_64.AppImage`. Use `./Lionheart-*-x86_64.AppImage --version` to check its version.
 
 It runs on x86-64 distributions with glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36 and newer). It brings SDL2, FFmpeg, libcurl and zlib, and uses these from the system: the C and C++ runtimes, OpenSSL 3, D-Bus, your audio and display libraries, and your GPU's Vulkan driver. The launcher bundles libfuse, so no FUSE library has to be installed; it does use the `fusermount3` or `fusermount` program, which desktop installations have (package `fuse3`). Without it, or where mounting is not allowed, run it with `--appimage-extract-and-run`.
 
@@ -85,7 +85,7 @@ Your discs, memory cards, settings and save states live in your data folder (see
 - **Linux:** replace the AppImage with the new file. To roll back, run the older one.
 - **Windows:** unzip the new zip where you unzipped the old one, so that its `Lionheart` folder lands on yours, and replace the files when asked. A portable folder keeps its data: the zip holds only program files, none named like your data. To roll back, do the same with the older zip.
 
-Save states load only in the build that made them, as before; in-game memory card saves always carry over. The native code Lionheart compiled is reused when the new version would compile the same code, and otherwise built again in the background while you play, as on the first run; the old copy is removed once no Lionheart uses it.
+Save states load only in the build that made them, as before; in-game memory card saves always carry over. The native code Lionheart compiled is reused when the new version would compile the same code, and otherwise built again on the loading screen before play starts, as on the first run; the old copy is removed once no Lionheart uses it.
 
 ---
 
@@ -126,7 +126,7 @@ Set `-DDEPS=/path/to/dependencies`, `-DBUILD=/path/to/build` or `-DJOBS=4` befor
 
 ### Release packages
 
-The AppImage and the Windows zip will be built from a version tag by [`.github/workflows/release.yml`](.github/workflows/release.yml). [docs/releasing.md](docs/releasing.md) says how to cut a release and how to rebuild either package byte for byte.
+The AppImage and the Windows zip are built from a version tag by [`.github/workflows/release.yml`](.github/workflows/release.yml). [docs/releasing.md](docs/releasing.md) says how to cut a release and how to rebuild either package byte for byte.
 
 ---
 
