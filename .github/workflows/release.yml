@@ -123,8 +123,9 @@ jobs:
       - name: Start the unpacked zip without discs
         shell: pwsh
         run: |
-          cmake -E chdir package cmake -E tar xf Lionheart-${{ needs.version.outputs.version }}-windows-x86_64.zip
-          cmake -DPLAYER=package/Lionheart/Lionheart.exe -P tools/smoke_package.cmake
+          Expand-Archive -Path "package/Lionheart-${{ needs.version.outputs.version }}-windows-x86_64.zip" -DestinationPath package -Force
+          $player = (Resolve-Path "package/Lionheart/Lionheart.exe").Path.Replace('\', '/')
+          cmake "-DPLAYER=$player" -P tools/smoke_package.cmake
   draft:
     needs: [version, appimage, windows, windows-start]
     runs-on: ubuntu-24.04

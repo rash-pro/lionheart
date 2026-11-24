@@ -3,10 +3,13 @@
 # disc 1, exit code 2.
 #   cmake -DPLAYER=Lionheart/Lionheart.exe [-DEMULATOR=wine] -P tools/smoke_package.cmake
 cmake_minimum_required(VERSION 3.21)
-if(NOT DEFINED PLAYER OR NOT EXISTS "${PLAYER}")
+if(NOT DEFINED PLAYER OR PLAYER STREQUAL "")
   message(FATAL_ERROR "Specify -DPLAYER=path to the packaged player")
 endif()
 get_filename_component(PLAYER "${PLAYER}" ABSOLUTE)
+if(NOT EXISTS "${PLAYER}")
+  message(FATAL_ERROR "Packaged player not found: ${PLAYER}")
+endif()
 get_filename_component(folder "${PLAYER}" DIRECTORY)
 if(NOT DEFINED WORK)
   set(WORK "${folder}/../smoke")
