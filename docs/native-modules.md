@@ -45,9 +45,12 @@ entries at the copy registered first, as the linked build shares one body betwee
 ## The player's own build
 
 With a compiler, the release player starts a build service (`backends/host/native_build.h`) right after it boots
-the executable. The game starts on the interpreter as before; each module is registered at a dispatch boundary as
-it arrives, and the first registration switches the guest off interpreter-only mode. Without a compiler nothing
-starts and the player behaves as it always did.
+the executable. If the cache already holds every set for the configured discs, the player commits them and enters
+the game immediately. Otherwise it opens a pre-game loading screen (`host_gui_loading`) showing progress, the
+currently compiling sets, an estimate and a **Play anyway** option; waiting for it to finish enters the game with
+all modules compiled and no compilers running, while **Play anyway** starts on the interpreter and hot-swaps each
+module at a dispatch boundary as it arrives. Closing during the loading screen stops the compilers cleanly and
+resumes on the next launch. Without a compiler nothing starts and the player behaves as it always did.
 
 ### Which compiler
 

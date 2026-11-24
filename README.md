@@ -27,7 +27,7 @@ You need your own discs. Lionheart contains no game code or data: it reads the g
 ## Why Lionheart?
 
 - **No retail BIOS required:** Ships with a built-in HLE BIOS — just bring your own USA discs.
-- **Instant start + background native compilation:** Boots immediately on the built-in interpreter and hot-swaps compiled C99 native modules for the executable and overlays as they finish building in the background (using Clang, GCC, or an auto-installed Zig C compiler). Compiled modules are cached locally for instant reuse on later launches.
+- **One-time local native compilation (with loading screen):** On first launch (or after adding discs), Lionheart compiles C99 native modules for your PC ahead of time behind a progress screen (using Clang, GCC, or an auto-installed Zig C compiler) so compilation never competes with gameplay. Closing saves progress and resumes on the next launch, and an optional **Play anyway** button lets you jump in immediately while the rest finishes in the background. Compiled modules are cached locally for instant subsequent launches.
 - **Modern Vulkan presentation (`parallel-psx`) + deterministic software reference:** Defaults to the original 1× software reference renderer, with optional Vulkan rendering up to 8× internal resolution, PGXP (`vertex` and `perspective` precise geometry), MSAA, true color, and CRT presets (`pvm`, `tv`, `arcade`).
 - **Experimental 60 fps Smooth Motion (opt-in, off by default):** Presentation-only frame interpolation using GTE vertex-identity tracking and polar-decomposition motion estimation that preserves PGXP and exact guest timing. Currently **experimental**, **off by default**, covers **fields and the world map only** (not battles yet), and **may show visual artifacts in some scenes** (`--smooth-motion`, `smooth-motion=1`, or **Video → Smooth motion**).
 - **Quality of life & preservation:**
@@ -45,14 +45,14 @@ You need your own discs. Lionheart contains no game code or data: it reads the g
 flowchart TD
     discs["Your USA Discs (.cue / .bin)"] --> gen["lionheart-gen (MIPS to C99)"]
     discs --> runtime["Portable PS1 Runtime + HLE BIOS"]
-    gen --> mods["Native C99 Modules (hot-swapped while interpreter runs)"]
+    gen --> mods["Native C99 Modules (compiled once, cached locally)"]
     mods --> runtime
     runtime --> present["Presentation: 1x Software Reference (default) or Vulkan (parallel-psx)"]
     present -. "experimental, opt-in (off by default)" .-> smooth["60 fps Smooth Motion (fields and world map only)"]
 ```
 
 1. **Clean-room static recompilation:** `lionheart-gen` verifies your discs against clean-room catalog metadata, decodes the MIPS executable and overlays, and emits portable C99 translation units locally on your machine.
-2. **Seamless background hot-swap:** The player boots immediately on its exact-timing interpreter, compiles native modules in the background, and registers each finished module at a dispatch boundary without interrupting play.
+2. **One-time pre-game build with resumable cache:** On first run, a loading screen builds the native modules for your discs before gameplay starts so compilers never contend with frame pacing (with an optional **Play anyway** button to start immediately while remaining modules finish and hot-swap in the background). Later launches reuse the cache immediately.
 3. **Strict separation of guest & presentation:** The portable PS1 runtime and HLE BIOS run with exact guest timing; Vulkan scaling, PGXP, CRT shaders, and the optional experimental Smooth Motion presenter never alter guest state or software reference output.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/native-modules.md](docs/native-modules.md) for the full design.
@@ -134,7 +134,7 @@ The AppImage and the Windows zip will be built from a version tag by [`.github/w
 
 Start Lionheart with no arguments. The setup screen asks for your discs and a memory card; you can create a new card or import a copy of an existing one. Then press **Play**.
 
-Lionheart compiles the game from your discs into native code for your PC while you play: what a disc needs first takes a few minutes, and all four discs between 20 and 45 minutes on a 16-thread PC, longer on a smaller one. The result takes about 600 MB and later launches use it at once. On Linux it uses Clang or GCC when one is installed and works, and asks nothing more. Otherwise the third setup step installs the Zig C compiler from ziglang.org, a download made once: 55 MB on Linux, 96 MB on Windows. You can skip the step and install the compiler later from the menu; the game runs without it, more slowly. On a PC without a connection, download Zig 0.17.1 for your system (`zig-x86_64-linux-0.17.1.tar.xz` or `zig-x86_64-windows-0.17.1.zip`) from [Zig's download page](https://ziglang.org/download/) and choose it in that step.
+Lionheart compiles the game from your discs into native code for your PC on a loading screen before play starts (all four discs take roughly 20 to 45 minutes on a 16-thread PC, longer on a smaller one; closing saves progress and resumes next launch, or you can click **Play anyway** to start immediately while the rest finishes in the background). The result takes about 600 MB and later launches start at once. On Linux it uses Clang or GCC when one is installed and works, and asks nothing more. Otherwise the third setup step installs the Zig C compiler from ziglang.org, a download made once: 55 MB on Linux, 96 MB on Windows. You can skip the step and install the compiler later from the menu; the game runs without it, more slowly. On a PC without a connection, download Zig 0.17.1 for your system (`zig-x86_64-linux-0.17.1.tar.xz` or `zig-x86_64-windows-0.17.1.zip`) from [Zig's download page](https://ziglang.org/download/) and choose it in that step.
 
 During the game, **Esc** or the controller's **Guide** button opens the menu. A renderer change made there applies at the next launch.
 

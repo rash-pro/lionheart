@@ -201,6 +201,11 @@ LH_TEST(test_no_copy_offers_the_interpreter) {
     LH_NOT_CONTAINS(header,"interpret");
 }
 
+LH_TEST(test_loading_screen_tracks_progress_auto_starts_and_handles_actions) {
+    if (lh::internal::build_info().windows_paths) lh::skip("the GUI harness links partial ELF objects");
+    LH_TEXT_EQ(strip(t.ok(lh::dummy(t.harness("loading"))).out), "loading-ok");
+}
+
 LH_TEST(test_download_shows_progress_resumes_after_cancel_and_reaches_the_game) {
     Setup s(t);
     Archive server(s.bytes, Serve::stall);

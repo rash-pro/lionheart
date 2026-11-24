@@ -16,3 +16,9 @@ lh_harness(gui FLAGS -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror -DFF8_PLAYER 
   backends/host/gui_browser.c backends/host/options.c backends/host/player_paths.c backends/host/disc_id.c
   backends/host/disc_iso.c runtime/memcard.c runtime/cpu.c LINK_FLAGS -Wl,--gc-sections ${LH_SDL_LINK})
 target_include_directories(test_native_setup.gui PRIVATE "${LH_SYNTHETIC_DIR}")
+lh_harness(loading FLAGS -std=c99 -O1 -Wall -Wextra -Wpedantic -Werror -DFF8_PLAYER -DFF8_GUI
+  -ffunction-sections -fdata-sections ${LH_SDL_FLAGS} INCLUDES runtime backends/host
+  SOURCES tests/gui_loading_harness.c backends/host/gui.c backends/host/gui_ini.c backends/host/gui_media.c
+  backends/host/gui_browser.c backends/host/options.c backends/host/player_paths.c backends/host/disc_id.c
+  backends/host/disc_iso.c runtime/memcard.c runtime/cpu.c LINK_FLAGS -Wl,--gc-sections ${LH_SDL_LINK})
+target_include_directories(test_native_setup.loading PRIVATE "${LH_SYNTHETIC_DIR}")

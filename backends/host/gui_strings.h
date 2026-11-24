@@ -369,7 +369,7 @@ static const gui_string_t gui_strings[] = {
     {"browser.disc.result", "%s · %s"},
     {"setup.step3", "3 Compiler"},
     {"setup.native.title", "Compiler"},
-    {"setup.native.sub", "Installed once. The game is compiled for this PC while you play."},
+    {"setup.native.sub", "Installed once. Lionheart compiles the game for this PC before you play."},
     {"setup.native.download", "Download"},
     {"setup.native.archive", "Use a downloaded archive"},
     {"native.size", "%u MB"},
@@ -412,6 +412,13 @@ static const gui_string_t gui_strings[] = {
     {"browser.archives.tar.xz", "tar.xz archives"},
     {"osd.native", "Native code"},
     {"osd.native.value", "now running"},
+    {"loading.title", "Preparing native code"},
+    {"loading.checking", "Checking native code cache…"},
+    {"loading.waiting", "Waiting for another Lionheart build…"},
+    {"loading.sub", "Runs once for your discs. Closing saves progress and resumes on your next launch."},
+    {"loading.progress", "%u of %u ready · %u%%"},
+    {"loading.compiling", "Compiling %s"},
+    {"btn.play_anyway", "Play anyway"},
     {"card.summary.result", "%u of 15 blocks used · %u Final Fantasy VIII saves"},
 };
 static const size_t gui_string_count=sizeof(gui_strings)/sizeof(gui_strings[0]);

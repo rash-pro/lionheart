@@ -190,8 +190,11 @@ static void gui_native(void *context, host_gui_native_t *out) {
         native_build_status(&status);
         out->build = status.state==NATIVE_BUILD_DONE ? HOST_GUI_BUILD_DONE : status.state==NATIVE_BUILD_STOPPED ? HOST_GUI_BUILD_STOPPED :
             status.state==NATIVE_BUILD_OFF ? HOST_GUI_BUILD_OFF : HOST_GUI_BUILD_RUNNING;
+        out->loading = status.state==NATIVE_BUILD_LOADING;
+        out->waiting = status.state==NATIVE_BUILD_WAITING;
         out->sets = status.sets; out->ready = status.ready; out->failed = status.failed;
         out->seconds_left = status.seconds_left;
+        snprintf(out->compiling,sizeof(out->compiling),"%s",status.compiling);
         snprintf(out->error,sizeof(out->error),"%s",status.error);
     }
 }
@@ -297,7 +300,8 @@ static void native_poll(void) {
     if (status.first_tier_seconds <= status.cached_seconds) return;
     fprintf(stderr, "native: first tier native after %.1f s\n", status.first_tier_seconds);
 #ifdef FF8_GUI
-    host_osd_post(host_gui_string("osd.native"), host_gui_string("osd.native.value"), 0);
+    if (host_gui_mode() != HOST_GUI_LOADING)
+        host_osd_post(host_gui_string("osd.native"), host_gui_string("osd.native.value"), 0);
 #endif
 }
 #endif
@@ -1243,6 +1247,29 @@ int main(int argc, char **argv) {
         sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); host_states_shutdown(); HOST_GUI_CLEANUP(); return 2;
     }
     }
+#if defined(FF8_PLAYER) && defined(FF8_GUI)
+    if (!headless && !native_only && gui_allowed && gui_configured && host_native_running()) {
+        native_build_status_t status;
+        uint64_t wait_until = SDL_GetTicks64() + 250;
+        native_build_status(&status);
+        while (status.state == NATIVE_BUILD_LOADING && SDL_GetTicks64() < wait_until) {
+            SDL_Delay(5);
+            native_build_status(&status);
+        }
+        if (status.state != NATIVE_BUILD_DONE && status.state != NATIVE_BUILD_STOPPED && status.state != NATIVE_BUILD_OFF) {
+            host_gui_result_t load = host_gui_loading();
+            if (load != HOST_GUI_PLAY) {
+                result = load == HOST_GUI_QUIT && !host_gui_test_failed() ? 0 : 2;
+                host_native_stop(c, 0);
+                host_state_bridge_close(state_bridge); host_achievements_close(achievements);
+                host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
+                sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c);
+                host_states_shutdown(); HOST_GUI_CLEANUP(); return result;
+            }
+        }
+        native_modules_commit(c);
+    }
+#endif
 #ifdef FF8_GUI
     if (gui_allowed) { gui_session.playing = 1; host_gui_attach_game(); }
 #endif

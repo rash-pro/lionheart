@@ -152,6 +152,13 @@ host_gui_result_t host_gui_shell(void) {
     if (gui.services.loop) gui.result=gui.services.loop(gui.services.context,1);
     return gui.result;
 }
+host_gui_result_t host_gui_loading(void) {
+    gui.mode=HOST_GUI_LOADING; gui.result=HOST_GUI_RUNNING; gui.modal=MODAL_NONE;
+    gui.reset_scroll=1; request_focus();
+    if (gui.services.loop) gui.result=gui.services.loop(gui.services.context,1);
+    gui.mode=HOST_GUI_HIDDEN;
+    return gui.result;
+}
 void host_gui_open(void) {
     if (!gui.configured) return;
     gui.mode=HOST_GUI_OVERLAY; gui.result=HOST_GUI_RUNNING; gui.want_open=0;
@@ -187,6 +194,7 @@ static void back(int controller) {
     if (gui.modal!=MODAL_NONE) { gui.modal=MODAL_NONE; request_focus(); return; }
     if (gui.pane==HOST_GUI_ACHIEVEMENTS && gui_achievements_back()) return;
     if (gui.ra_form) { close_form(); request_focus(); return; }
+    if (gui.mode==HOST_GUI_LOADING) { set_result(HOST_GUI_QUIT); return; }
     if (gui.mode==HOST_GUI_SETUP && gui.setup_step) {
         if (gui.native_only) finish_setup();
         else { --gui.setup_step; request_focus(); }
@@ -288,7 +296,7 @@ void host_gui_event(const SDL_Event *event) {
         if (event->type==SDL_KEYDOWN && !event->key.repeat) {
             SDL_Keycode key=event->key.keysym.sym;
             if (key==SDLK_ESCAPE && !keyboard_was_open) back(0);
-            if (!gui.modal && !gui.keyboard && !gui_ui_wants_text() && (key==SDLK_q || key==SDLK_e)) section(key==SDLK_e ? 1 : -1);
+            if (gui.mode!=HOST_GUI_LOADING && !gui.modal && !gui.keyboard && !gui_ui_wants_text() && (key==SDLK_q || key==SDLK_e)) section(key==SDLK_e ? 1 : -1);
         }
     }
     if (event->type==SDL_MOUSEBUTTONDOWN || event->type==SDL_MOUSEMOTION || event->type==SDL_MOUSEWHEEL) gui.input=HOST_GUI_MOUSE;
@@ -302,21 +310,23 @@ void host_gui_event(const SDL_Event *event) {
             }
             if (!gui.keyboard && button==SDL_CONTROLLER_BUTTON_Y) {
                 if (gui.modal==MODAL_BROWSER) gui_ui_focus("browser.place.0");
-                else if (!gui.modal && gui.pane==HOST_GUI_DISCS) {
+                else if (gui.mode!=HOST_GUI_LOADING && !gui.modal && gui.pane==HOST_GUI_DISCS) {
                     unsigned slot=0; if (sscanf(gui_ui_focused(),"disc.%u.",&slot)==1 && slot) remove_disc(slot-1);
                 }
             }
-            if (!gui.modal && !gui.keyboard && (button==SDL_CONTROLLER_BUTTON_LEFTSHOULDER || button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) section(button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ? 1 : -1);
-            if (button==SDL_CONTROLLER_BUTTON_START && !gui.modal) {
+            if (gui.mode!=HOST_GUI_LOADING && !gui.modal && !gui.keyboard && (button==SDL_CONTROLLER_BUTTON_LEFTSHOULDER || button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) section(button==SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ? 1 : -1);
+            if (button==SDL_CONTROLLER_BUTTON_START && !gui.modal && gui.mode!=HOST_GUI_LOADING) {
                 if (gui.mode==HOST_GUI_SETUP) setup_next();
                 else play();
             }
         }
         if (event->type==SDL_CONTROLLERBUTTONUP && event->cbutton.button==SDL_CONTROLLER_BUTTON_GUIDE && overlay()) host_gui_close();
     }
-    if (event->type==SDL_DROPBEGIN) gui.drop_active=1;
-    if (event->type==SDL_DROPCOMPLETE) gui.drop_active=0;
-    if (event->type==SDL_DROPFILE && event->drop.file) { gui.drop_active=0; drop(event->drop.file); }
+    if (gui.mode!=HOST_GUI_LOADING) {
+        if (event->type==SDL_DROPBEGIN) gui.drop_active=1;
+        if (event->type==SDL_DROPCOMPLETE) gui.drop_active=0;
+        if (event->type==SDL_DROPFILE && event->drop.file) { gui.drop_active=0; drop(event->drop.file); }
+    }
     if (event->type==SDL_QUIT) set_result(HOST_GUI_QUIT);
 }
 static void apply_results(void) {
@@ -431,11 +441,16 @@ static void hints(void) {
         gui_ui_keycap("hint.shift",S(secondary),S("hint.shift"),R(510,gui.height-40,200,24));
         gui_ui_keycap("hint.done",S(back_key),S("hint.done"),R(730,gui.height-40,200,24));
     } else {
-        if (gui.pane==HOST_GUI_ACHIEVEMENTS) gui_ui_keycap("hint.filter",S(gui.input==HOST_GUI_PAD ? "hint.pad.filter" : "hint.key.filter"),S("hint.filter"),R(48,gui.height-40,230,24));
-        else gui_ui_keycap("hint.select",S(select),S("hint.select"),R(48,gui.height-40,230,24));
-        gui_ui_keycap("hint.back",S(back_key),S(gui.modal==MODAL_BROWSER && gui.input==HOST_GUI_PAD ? "hint.up" : "hint.back"),R(310,gui.height-40,300,24));
-        if (gui.input==HOST_GUI_PAD && gui.modal==MODAL_BROWSER) gui_ui_keycap("hint.places",S(secondary),S("hint.places"),R(gui.width-310,gui.height-40,260,24));
-        else if (gui.mode!=HOST_GUI_SETUP && !gui.modal) gui_ui_keycap("hint.section",S(section),S("hint.section"),R(gui.width-350,gui.height-40,300,24));
+        if (gui.mode==HOST_GUI_LOADING) {
+            gui_ui_keycap("hint.select",S(select),S("hint.select"),R(48,gui.height-40,230,24));
+            gui_ui_keycap("hint.back",S(back_key),S("hint.quit"),R(310,gui.height-40,300,24));
+        } else {
+            if (gui.pane==HOST_GUI_ACHIEVEMENTS) gui_ui_keycap("hint.filter",S(gui.input==HOST_GUI_PAD ? "hint.pad.filter" : "hint.key.filter"),S("hint.filter"),R(48,gui.height-40,230,24));
+            else gui_ui_keycap("hint.select",S(select),S("hint.select"),R(48,gui.height-40,230,24));
+            gui_ui_keycap("hint.back",S(back_key),S(gui.modal==MODAL_BROWSER && gui.input==HOST_GUI_PAD ? "hint.up" : "hint.back"),R(310,gui.height-40,300,24));
+            if (gui.input==HOST_GUI_PAD && gui.modal==MODAL_BROWSER) gui_ui_keycap("hint.places",S(secondary),S("hint.places"),R(gui.width-310,gui.height-40,260,24));
+            else if (gui.mode!=HOST_GUI_SETUP && !gui.modal) gui_ui_keycap("hint.section",S(section),S("hint.section"),R(gui.width-350,gui.height-40,300,24));
+        }
     }
 }
 
@@ -662,6 +677,73 @@ static void open_log(void) {
     /* A scripted run must not start the desktop's viewer. */
     if (host_gui_test_active()) fprintf(stderr,"GUI test: open %s\n",url);
     else SDL_OpenURL(url);
+}
+static void draw_loading(void) {
+    const host_gui_native_t *n=&gui.native;
+    if (n->build==HOST_GUI_BUILD_DONE || n->build==HOST_GUI_BUILD_STOPPED || n->build==HOST_GUI_BUILD_OFF) {
+        set_result(HOST_GUI_PLAY);
+        return;
+    }
+    float bar_w=680.0f;
+    if (bar_w>gui.width-96.0f) bar_w=gui.width-96.0f;
+    float x=(gui.width-bar_w)*0.5f;
+    float emblem=96.0f;
+    float phase=(float)((SDL_GetTicks64()%1800u))/1800.0f;
+    gui_ui_emblem(R((gui.width-emblem)*0.5f,124.0f,emblem,emblem));
+    gui_ui_text_centred("app.name",S("app.name"),R(x,232.0f,bar_w,36.0f),GUI_TITLE,GUI_TEXT);
+    const char *heading=n->waiting ? S("loading.waiting") : (n->loading && !n->sets) ? S("loading.checking") : S("loading.title");
+    gui_ui_text_centred("loading.title",heading,R(x,278.0f,bar_w,28.0f),GUI_REGULAR,GUI_DIM);
+    /* Progress track + determinate fill (or sweeping loader while waiting on
+     * the cache/first module), with a subtle moving highlight so live work stays
+     * visible while a large unit compiles. */
+    float bar_y=334.0f,bar_h=10.0f;
+    gui_ui_panel(R(x,bar_y,bar_w,bar_h),0x1e1e26ff,5.0f);
+    unsigned settled=n->ready+n->failed;
+    if (n->sets && settled>n->sets) settled=n->sets;
+    if (n->sets && settled>0) {
+        float share=(float)settled/(float)n->sets;
+        float fill_w=bar_w*share;
+        if (fill_w<bar_h) fill_w=bar_h;
+        gui_ui_panel(R(x,bar_y,fill_w,bar_h),0x9fb4d8ff,5.0f);
+        if (fill_w>36.0f && settled<n->sets) {
+            float glow_w=fill_w*0.28f;
+            if (glow_w>110.0f) glow_w=110.0f;
+            if (glow_w<28.0f) glow_w=28.0f;
+            float glow_x=x+(fill_w-glow_w)*phase;
+            gui_ui_panel(R(glow_x,bar_y,glow_w,bar_h),0xdbe6f855,5.0f);
+        }
+    } else {
+        float sweep_w=bar_w*0.24f;
+        float t=phase<0.5f ? phase*2.0f : (1.0f-phase)*2.0f;
+        float ease=t*t*(3.0f-2.0f*t);
+        gui_ui_panel(R(x+(bar_w-sweep_w)*ease,bar_y,sweep_w,bar_h),0x9fb4d8ff,5.0f);
+    }
+    char status[256]={0},part[128];
+    if (n->sets) {
+        unsigned pct=(unsigned)((settled*100u)/n->sets);
+        snprintf(status,sizeof(status),S("loading.progress"),n->ready,n->sets,pct);
+        if (n->failed) { snprintf(part,sizeof(part),S("native.part.failed"),n->failed); native_append(status,sizeof(status),part); }
+        if (n->seconds_left>=0) {
+            char left[64]; native_left(n->seconds_left,left,sizeof(left));
+            snprintf(part,sizeof(part),S("native.part.left"),left); native_append(status,sizeof(status),part);
+        }
+    } else if (n->system) {
+        snprintf(status,sizeof(status),S(n->system==HOST_GUI_SYSTEM_GCC ? "native.gcc" : "native.clang"),n->version);
+    } else {
+        snprintf(status,sizeof(status),"%s",S("loading.checking"));
+    }
+    gui_ui_text_centred("loading.status",status,R(x,362.0f,bar_w,28.0f),GUI_REGULAR,GUI_TEXT);
+    if (*n->compiling) {
+        char line[160];
+        snprintf(line,sizeof(line),S("loading.compiling"),n->compiling);
+        gui_ui_text_centred("loading.compiling",line,R(x,396.0f,bar_w,24.0f),GUI_MONO,GUI_DIM);
+    }
+    gui_ui_text_centred("loading.sub",S("loading.sub"),R(x,438.0f,bar_w,28.0f),GUI_SUB,GUI_MUTED);
+    float play_w=172.0f,quit_w=132.0f,gap=16.0f;
+    float bx=(gui.width-(play_w+gap+quit_w))*0.5f,by=502.0f;
+    if (button("btn.play_anyway",bx,by,play_w,0)) set_result(HOST_GUI_PLAY);
+    if (button("btn.quit",bx+play_w+gap,by,quit_w,GUI_GHOST)) set_result(HOST_GUI_QUIT);
+    if (gui.first_focus) gui_ui_focus("btn.play_anyway");
 }
 static void draw_setup(void) {
     float x=(gui.width-800)/2;
@@ -1105,6 +1187,7 @@ void host_gui_frame(unsigned width,unsigned height) {
     gui_ui_begin(width,height,overlay());
     gui_ui_panel(R(0,0,gui.width,gui.height),overlay() ? 0x00000000 : 0x0b0b10ff,0);
     if (gui.mode==HOST_GUI_SETUP) draw_setup();
+    else if (gui.mode==HOST_GUI_LOADING) draw_loading();
     else {
         gui_ui_panel(R(0,0,gui.rail,gui.height-56),0x101016ff,0);
         gui_ui_panel(R(gui.rail,0,gui.width-gui.rail,gui.height-56),overlay() ? 0x101014c7 : 0x0b0b10ff,0);

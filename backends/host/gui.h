@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-typedef enum { HOST_GUI_HIDDEN, HOST_GUI_SETUP, HOST_GUI_HUB, HOST_GUI_OVERLAY } host_gui_mode_t;
+typedef enum { HOST_GUI_HIDDEN, HOST_GUI_SETUP, HOST_GUI_HUB, HOST_GUI_OVERLAY, HOST_GUI_LOADING } host_gui_mode_t;
 typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_CONTROLS, HOST_GUI_RA, HOST_GUI_ACHIEVEMENTS } host_gui_pane_t;
 typedef enum { HOST_GUI_RUNNING, HOST_GUI_PLAY, HOST_GUI_QUIT, HOST_GUI_RECREATE, HOST_GUI_ERROR } host_gui_result_t;
 typedef enum { HOST_GUI_KEYBOARD, HOST_GUI_MOUSE, HOST_GUI_PAD } host_gui_input_t;
@@ -30,9 +30,11 @@ typedef struct {
     int downloadable;
     char format[16],archive[128],reason[256];
     host_gui_build_t build;
+    int loading,waiting;
     unsigned sets,ready,failed;
     /* -1 while there is no estimate worth showing. */
     int seconds_left;
+    char compiling[96];
     char error[256];
 } host_gui_native_t;
 typedef struct { char name[32],words[512]; } host_gui_failure_t;
@@ -66,6 +68,9 @@ void host_gui_previous_crash(const char *log);
  * installation that finished setup without it, or a crash. */
 int host_gui_wants_shell(void);
 host_gui_result_t host_gui_shell(void);
+/* Pre-game native compilation screen: waits until every set is ready, or
+ * until the player chooses Play anyway or Quit. */
+host_gui_result_t host_gui_loading(void);
 void host_gui_request(host_gui_pane_t);
 int host_gui_requested(void);
 void host_gui_open(void);
