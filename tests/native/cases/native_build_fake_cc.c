@@ -45,11 +45,34 @@ static void pause_ms(unsigned ms) {
 
 static void note(const char *what, const char *name) {
     const char *log = getenv("FAKE_CC_LOG");
-    FILE *f = log ? fopen(log, "ab") : NULL;
     const char *base = strrchr(name, '/');
+#ifdef _WIN32
+    const char *back = strrchr(name, '\\');
+    char line[512];
+    int n, attempt;
+    if (back && (!base || back > base)) base = back;
+    if (!log) return;
+    n = snprintf(line, sizeof(line), "%s %s\n", what, base ? base + 1 : name);
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof(line)) n = (int)sizeof(line) - 1;
+    for (attempt = 0; attempt < 20; ++attempt) {
+        HANDLE h = CreateFileA(log, FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(h, line, (DWORD)n, &written, NULL);
+            CloseHandle(h);
+            return;
+        }
+        Sleep(5);
+    }
+#else
+    FILE *f = log ? fopen(log, "ab") : NULL;
     if (!f) return;
     fprintf(f, "%s %s\n", what, base ? base + 1 : name);
     fclose(f);
+#endif
 }
 
 int main(int argc, char **argv) {
