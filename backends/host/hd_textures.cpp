@@ -533,7 +533,7 @@ PSX::HdTextureHandle TextureProvider::push_handle(const PSX::Rect &vram_rect, co
 PSX::HdTextureHandle TextureProvider::font_handle(const FontSheet &sheet, const PSX::Rect &vram_rect,
                                                   const PSX::UsedMode &mode, uint64_t clut_hash,
                                                   bool &cache_hit) {
-    const unsigned scale = cfg_.internal_scale >= 8 ? 8u : (cfg_.internal_scale >= 4 ? 4u : 2u);
+    const unsigned scale = cfg_.internal_scale > 4 ? 8u : (cfg_.internal_scale > 2 ? 4u : 2u);
     PSX::Rect hd_rect = sheet.rect;
     uint64_t tex_hash = sheet.tex_hash;
     uint64_t generation = font_.generation();
