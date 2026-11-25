@@ -212,7 +212,8 @@ cpu_t *savestate_read(const cpu_t *old, const char *path, savestate_identity_t *
     if (memcmp(hash,actual,20)) goto fail;
     identity(io,&id);
     if (io->failed) goto fail;
-    if (memcmp(id.build,wanted->build,64) || id.exe != wanted->exe || id.modes != wanted->modes) {
+    if (memcmp(id.build,wanted->build,64) || id.exe != wanted->exe ||
+        (id.modes & ~SAVESTATE_MODE_BOOSTERS_TAINTED) != (wanted->modes & ~SAVESTATE_MODE_BOOSTERS_TAINTED)) {
         snprintf(error,error_size,"save state belongs to a different build, EXE, or feature mode"); goto fail;
     }
     if (id.disc > 4) goto fail;

@@ -75,7 +75,7 @@ static void reset(gpu_t *g) {
     g->raster.mode = g->raster.window = g->raster.mask = 0;
     g->raster.left = g->raster.top = g->raster.right = g->raster.bottom = 0;
     g->draw_start = g->draw_end = g->draw_offset = 0;
-    g->offset_x = g->offset_y = 0;
+    g->offset_x = g->offset_y = g->raster.offset_x = g->raster.offset_y = 0;
     g->display_start = g->display_mode = g->dma = g->irq = g->field = g->read_latch = 0;
     g->horizontal = 0x200 | ((0x200 + 256 * 10) << 12);
     g->vertical = 0x10 | ((0x10 + 240) << 10);
@@ -231,7 +231,8 @@ static void execute(gpu_t *g) {
         s->right = w[0] & 1023; s->bottom = (w[0] >> 10) & 511; break;
     case 0xe5:
         g->draw_offset = w[0] & 0x3fffff;
-        g->offset_x = signed11(w[0]); g->offset_y = signed11(w[0] >> 11); break;
+        g->offset_x = signed11(w[0]); g->offset_y = signed11(w[0] >> 11);
+        s->offset_x = g->offset_x; s->offset_y = g->offset_y; break;
     case 0xe6: s->mask = w[0] & 3; break;
     default: break; /* NOP and cache clear: this backend has no texture/CLUT cache. */
     }

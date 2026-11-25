@@ -8,7 +8,7 @@
 
 namespace {
 constexpr int OFF = 0, SIGNED_OUT = 1, SIGNING_IN = 2, CONNECTED = 3, OFFLINE = 4, REJECTED = 5,
-              UNAVAILABLE = 6;
+              UNAVAILABLE = 6, LOCKED = 7;
 struct Client {
     lh::RaService service;
     lh::Env host, timeout;
@@ -407,4 +407,23 @@ LH_TEST(test_worker_start_failure_can_sign_out_and_reconfigure) {
     c.configure();
     c.login();
     LH_EQ(c.state(), CONNECTED);
+}
+LH_TEST(test_booster_lockout_signs_out_and_blocks_reenable) {
+    Client c(t);
+    c.load(t);
+    LH_EQ(c.state(), CONNECTED);
+    LH_CHECK(lh::fs::exists(c.token()));
+    c.call("host_ra_lockout");
+    LH_EQ(c.state(), LOCKED);
+    LH_CHECK(c.lib.fn<int()>("host_ra_locked")() != 0);
+    LH_CHECK(!lh::fs::exists(c.token()));
+    /* Attempting to re-enable or log in after lockout must stay permanently blocked. */
+    c.lib.fn<void(int)>("host_ra_enable")(1);
+    LH_EQ(c.state(), LOCKED);
+    c.lib.fn<void(const char *, const char *)>("host_ra_login")("TestUser", "test-password");
+    c.idle();
+    LH_EQ(c.state(), LOCKED);
+    c.frame(7);
+    c.idle();
+    LH_CHECK(!c.requested("awardachievement"));
 }

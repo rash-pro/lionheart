@@ -11,6 +11,8 @@ int host_states_apply(cpu_t **, host_input_t *);
 int host_states_failed(void);
 void host_states_shutdown(void);
 void host_states_recovery(void (*callback)(cpu_t *, unsigned));
+void host_states_taint(void);
+int host_states_tainted(void);
 unsigned host_states_slot(void);
 void host_states_slot_step(int direction);
 int host_states_slot_available(unsigned, char *date, size_t);

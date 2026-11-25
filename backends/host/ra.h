@@ -9,7 +9,7 @@ extern "C" {
 #endif
 typedef enum {
     HOST_RA_OFF, HOST_RA_SIGNED_OUT, HOST_RA_SIGNING_IN, HOST_RA_CONNECTED,
-    HOST_RA_OFFLINE, HOST_RA_REJECTED, HOST_RA_UNAVAILABLE
+    HOST_RA_OFFLINE, HOST_RA_REJECTED, HOST_RA_UNAVAILABLE, HOST_RA_LOCKED
 } host_ra_state_t;
 typedef struct {
     host_ra_state_t state;
@@ -33,6 +33,8 @@ void host_ra_enable(int);
 void host_ra_notify(int);
 void host_ra_login(const char *,const char *);
 void host_ra_signout(void);
+void host_ra_lockout(void);
+int host_ra_locked(void);
 void host_ra_disc(const char *);
 void host_ra_retry(void);
 void host_ra_frame(const struct cpu *);
@@ -48,6 +50,8 @@ static inline void host_ra_enable(int e) { (void)e; }
 static inline void host_ra_notify(int n) { (void)n; }
 static inline void host_ra_login(const char *u,const char *p) { (void)u;(void)p; }
 static inline void host_ra_signout(void) {}
+static inline void host_ra_lockout(void) {}
+static inline int host_ra_locked(void) { return 0; }
 static inline void host_ra_disc(const char *p) { (void)p; }
 static inline void host_ra_retry(void) {}
 static inline void host_ra_frame(const struct cpu *c) { (void)c; }

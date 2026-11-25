@@ -6,8 +6,8 @@ source, the Linux AppImage or the Windows distribution. Vendored sources retain 
 
 | Component | Licence and shipped notice |
 | --- | --- |
-| JSON for Modern C++ 3.12.0 (metadata tool only) | MIT: [LICENSE.MIT](third_party/nlohmann/LICENSE.MIT) |
-| stb_image 2.30 (host build only) | MIT: [stb_image.h](third_party/stb/stb_image.h); standalone zlib decoder |
+| JSON for Modern C++ 3.12.0 | MIT: [LICENSE.MIT](third_party/nlohmann/LICENSE.MIT); HD model manifests and metadata tools |
+| stb_image 2.30 | MIT: [stb_image.h](third_party/stb/stb_image.h); HD fonts, textures, models and mod import |
 | parallel-psx | ISC: [COPYING](third_party/parallel-psx/COPYING) |
 | Vulkan/util helpers in parallel-psx | MIT notices in the individual source headers |
 | volk | MIT: [volk.h](third_party/parallel-psx/volk/volk.h) |
@@ -18,6 +18,7 @@ source, the Linux AppImage or the Windows distribution. Vendored sources retain 
 | Dear ImGui 1.91.9b | MIT: [LICENSE.txt](third_party/imgui/LICENSE.txt) |
 | nativefiledialog-extended 1.2.1 | zlib: [LICENSE](third_party/nativefiledialog-extended/LICENSE) |
 | Chakra Petch | OFL-1.1: [licence text](third_party/chakra-petch/OFL.txt); GUI fonts and logo typography |
+| Barlow | OFL-1.1: [licence text](third_party/barlow/OFL.txt); optional built-in HD game font |
 | SDL2 2.30.9 | zlib: [SDL2-zlib.txt](licenses/SDL2-zlib.txt) |
 | FFmpeg 7.1.1 | LGPL-2.1-or-later: [FFmpeg-LGPL-2.1.txt](licenses/FFmpeg-LGPL-2.1.txt) |
 | zlib 1.3.1 | zlib: [zlib.txt](licenses/zlib.txt) |

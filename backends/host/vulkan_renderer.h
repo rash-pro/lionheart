@@ -68,6 +68,18 @@ const char *host_gpu_scaled_frames(void);
 /* CRT presets (P): 0 off, 1 pvm, 2 tv, 3 arcade; changeable at runtime. */
 void host_gpu_crt(int preset);
 int host_gpu_crt_preset(void);
+/* Presentation-only HD font & HD texture replacement (Vulkan only; live update). */
+void host_gpu_hd_assets(int font_mode, const char *font_path, int hd_textures,
+                        const char *textures_dir, const char *dump_textures);
+/* Names the game can show for the battle party: size bytes of zero-terminated
+ * strings in the game's text encoding. The HD font only uses them to tell the
+ * name strips the game renders on the CPU apart, and checks them against VRAM. */
+void host_gpu_hd_names(const char *names, size_t size);
+/* Presentation-only external HD 3D model pack registry (glTF 2.0 .glb). */
+void host_gpu_hd_models(int enabled, const char *models_dir);
+void host_gpu_hd_models_rebind(void);
+void host_gpu_hd_reload(void);
+unsigned host_gpu_hd_model_count(void);
 /* Diagnostics: present every frame into an offscreen WxH target as well, and
  * read the last presented image back as tightly packed RGB. */
 void host_gpu_present_capture(const char *dir, unsigned width, unsigned height);

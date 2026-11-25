@@ -29,9 +29,11 @@ int gui_browser_accept(const gui_browser_t *browser,const char *path) {
     int directory; uint64_t bytes; size_t n=strlen(path);
     if (!info(path,&directory,&bytes)) return 0;
     if (directory) return 1;
-    if (browser->kind==GUI_PICK_MOVIES || browser->kind==GUI_PICK_SCREENSHOTS) return 0;
+    if (browser->kind==GUI_PICK_MOVIES || browser->kind==GUI_PICK_SCREENSHOTS || browser->kind==GUI_PICK_TEXTURES || browser->kind==GUI_PICK_MODELS) return 0;
     if (browser->show_all) return 1;
+    if (browser->kind==GUI_PICK_MOD_IMPORT) return (n>=4 && !strcasecmp(path+n-4,".iro")) || (n>=5 && !strcasecmp(path+n-5,".iroj"));
     if (browser->kind==GUI_PICK_DISC) return n>=4 && (!strcasecmp(path+n-4,".cue") || !strcasecmp(path+n-4,".bin"));
+    if (browser->kind==GUI_PICK_FONT) return n>=4 && (!strcasecmp(path+n-4,".ttf") || !strcasecmp(path+n-4,".otf") || !strcasecmp(path+n-4,".png"));
     if (browser->kind==GUI_PICK_ARCHIVE) {
         const char *format=gui_archive_format(); size_t k=strlen(format);
         return n>k+1 && path[n-k-1]=='.' && !strcasecmp(path+n-k,format);

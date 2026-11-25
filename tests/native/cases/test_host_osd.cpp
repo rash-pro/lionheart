@@ -23,6 +23,14 @@ public:
         if(!p) return {};
         return {true,*p,std::string(reinterpret_cast<const char *>(p->rgba),size_t(p->w)*p->h*4)};
     }
+    void boosters(int speed,int no_enc,int assist) {lib.fn<void(int,int,int)>("host_osd_boosters")(speed,no_enc,assist);}
+    const char *showing() {return lib.fn<const char *()>("host_osd_showing")();}
+    Snapshot booster_panel(int width=1920,int height=1080,lh::Rect frame={0,0,0,0}) {
+        if(!frame.w && !frame.h) frame={0,0,width,height};
+        const auto *p=lib.fn<const Panel *(int,int,lh::Rect)>("host_osd_booster_panel")(width,height,frame);
+        if(!p) return {};
+        return {true,*p,std::string(reinterpret_cast<const char *>(p->rgba),size_t(p->w)*p->h*4)};
+    }
 };
 static std::set<std::array<unsigned,4>> colors(const std::string &pixels) {
     std::set<std::array<unsigned,4>> result;
@@ -126,6 +134,37 @@ LH_TEST_P(test_soft_vulkan_composition,compositions) {
     const auto a=lh::read_file(vk),b=lh::read_file(soft);const int difference=lh::oracle::max_difference(a,b);
 
     LH_CHECK_MSG(difference<=2,"maximum RGB difference="+std::to_string(difference));
+}
+LH_TEST(test_booster_hud_badges) {
+    Osd osd(t);osd.reset();
+    LH_CHECK(!osd.booster_panel().exists);
+    osd.boosters(1,0,0);
+    auto a=osd.booster_panel(1920,1080,{240,36,1440,1008});
+    LH_CHECK(a.exists);
+    LH_EQ(a.panel.x,240+int(1008*0.03+0.5));
+    LH_EQ(a.panel.y,36+1008-int(1008*0.03+0.5)-a.panel.h);
+    LH_EQ(unsigned(a.panel.opacity),255u);
+    LH_EQ(std::string(osd.showing()),std::string(""));
+    LH_CHECK(!osd.panel().exists);
+    auto a2=osd.booster_panel(1920,1080,{100,20,1440,1008});
+    LH_CHECK(a2.exists);
+    LH_EQ(a2.panel.revision,a.panel.revision);
+    LH_EQ(a2.panel.x,100+int(1008*0.03+0.5));
+    LH_BYTES_EQ(a.pixels,a2.pixels);
+    osd.boosters(1,1,1);
+    auto all=osd.booster_panel(1920,1080,{240,36,1440,1008});
+    LH_CHECK(all.exists);
+    LH_CHECK(all.panel.revision>a.panel.revision);
+    LH_CHECK(all.panel.w>a.panel.w);
+    auto cs=colors(all.pixels);
+    LH_CHECK(cs.count({244,246,250,255}));
+    osd.boosters(0,0,0);
+    LH_CHECK(!osd.booster_panel().exists);
+    osd.boosters(0,1,0);
+    LH_CHECK(osd.booster_panel().exists);
+    osd.configure(0);
+    osd.boosters(1,1,1);
+    LH_CHECK(!osd.booster_panel().exists);
 }
 LH_TEST(test_osd_shader_matches_prebuilt) {lh::shader_contract(t,"osd.frag");}
 LH_TEST(test_sdl_osd_event_hooks) {t.ok(lh::dummy(t.harness("input")).timeout(30));}

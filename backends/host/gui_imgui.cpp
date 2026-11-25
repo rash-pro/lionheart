@@ -679,14 +679,19 @@ extern "C" int gui_ui_native_pick(gui_pick_t kind,char *path,size_t capacity) {
     Uint32 flags=SDL_GetWindowFlags(ui.window);
     if ((flags & SDL_WINDOW_FULLSCREEN_DESKTOP)==SDL_WINDOW_FULLSCREEN) return -1;
     nfdu8char_t *selected=nullptr;nfdresult_t result;
-    if (kind==GUI_PICK_MOVIES || kind==GUI_PICK_SCREENSHOTS) {
+    if (kind==GUI_PICK_MOVIES || kind==GUI_PICK_SCREENSHOTS || kind==GUI_PICK_TEXTURES || kind==GUI_PICK_MODELS || kind==GUI_PICK_MOD_IMPORT) {
         nfdpickfolderu8args_t args={};NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_PickFolderU8_With(&selected,&args);
     } else {
         const bool tar=!std::strcmp(gui_archive_format(),"tar.xz");
-        nfdu8filteritem_t filter={host_gui_string(kind==GUI_PICK_DISC ? "nav.discs" : kind!=GUI_PICK_ARCHIVE ? "nav.card" :
-                                                  tar ? "browser.archives.tar.xz" : "browser.archives.zip"),
-            kind==GUI_PICK_DISC ? "cue,bin" : kind==GUI_PICK_ARCHIVE ? gui_archive_format() : "mcr,mcd,srm"};
+        const char *label_id = kind==GUI_PICK_DISC ? "nav.discs" :
+            kind==GUI_PICK_FONT ? "enh.hd_font" :
+            kind!=GUI_PICK_ARCHIVE ? "nav.card" :
+            tar ? "browser.archives.tar.xz" : "browser.archives.zip";
+        const char *spec = kind==GUI_PICK_DISC ? "cue,bin" :
+            kind==GUI_PICK_FONT ? "ttf,otf,png" :
+            kind==GUI_PICK_ARCHIVE ? gui_archive_format() : "mcr,mcd,srm";
+        nfdu8filteritem_t filter={host_gui_string(label_id), spec};
         nfdopendialogu8args_t args={};args.filterList=&filter;args.filterCount=1;
         NFD_GetNativeWindowFromSDLWindow(ui.window,&args.parentWindow);
         result=NFD_OpenDialogU8_With(&selected,&args);

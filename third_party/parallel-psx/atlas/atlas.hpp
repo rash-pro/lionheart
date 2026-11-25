@@ -195,6 +195,7 @@ public:
 	bool texture_rendered(const Rect &rect);
 
 	void write_fragment(Domain domain, const Rect &rect);
+	void write_external_scaled(const Rect &rect);
 	void clear_rect(const Rect &rect, FBColor color);
 	void set_draw_rect(const Rect &rect);
 	void set_texture_window(const Rect &rect);

@@ -19,7 +19,7 @@ LH_GAME_TEST(test_shell_recreates_both_renderers_and_keeps_text_input) {
     lh::write_file(config,"disc1="+disc.string()+"\n");
     auto r=shell(t,"wait 20\nsection next\nsection next\nsection next\nsection next\nwait 3\n"
       "assert-focus video.renderer\ndrop \""+movies.string()+"\"\nnav right\nwait 15\nassert-text video.renderer \"Vulkan\"\n"
-      "nav right\nwait 15\nassert-text video.renderer \"Soft\"\nsection next\nsection next\nwait 3\nselect\nwait 2\n"
+      "nav right\nwait 15\nassert-text video.renderer \"Soft\"\nsection next\nsection next\nsection next\nwait 3\nselect\nwait 2\n"
       "nav right\nselect\nwait 3\nassert-focus ra.user\nselect\nwait 2\ntext \"sample-user\"\nwait 2\n"
       "assert-text ra.user \"sample-user\"\nquit\n",true,true);
     LH_CONTAINS(r.err,"GUI test complete:"); LH_CONTAINS(r.err,"Vulkan: llvmpipe");

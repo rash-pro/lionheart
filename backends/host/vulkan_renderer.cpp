@@ -11,7 +11,12 @@
 #endif
 #include "vulkan_wsi.hpp"
 #include "movies.h"
+#include "hd_textures.hpp"
+#include "hd_models.hpp"
+#include "hd_model_renderer.hpp"
+#include "ff8_ram_layout.h"
 extern "C" {
+#include "cpu.h"
 #include "gpu_raster.h"
 #ifdef FF8_PGXP
 #include "pgxp.h"
@@ -58,6 +63,45 @@ struct Options {
 } options;
 // Smooth motion paces presents itself (host_gpu_paced).
 bool paced_wanted=false;
+HostHD::TextureConfig hd_config;
+std::vector<std::string> hd_names;
+HostHD::ModelRegistry hd_models_registry;
+HostHD::HdSceneTracker hd_scene;
+#ifdef FF8_PGXP
+void hd_models_gte_sink(void *, const cpu_t *c, uint32_t packed_sxy, int64_t x_q16, int64_t y_q16, uint32_t z) {
+    if (!c || !hd_models_registry.has_any_active()) return;
+    uint32_t rot[5] = {
+        c->gte_ctrl[0], c->gte_ctrl[1], c->gte_ctrl[2], c->gte_ctrl[3], c->gte_ctrl[4]
+    };
+    int32_t tr[3] = {
+        int32_t(c->gte_ctrl[5]), int32_t(c->gte_ctrl[6]), int32_t(c->gte_ctrl[7])
+    };
+    int32_t ofx = int32_t(c->gte_ctrl[24]);
+    int32_t ofy = int32_t(c->gte_ctrl[25]);
+    uint32_t h = c->gte_ctrl[26] & 0xffffu;
+    int16_t in_v[3] = {
+        int16_t(uint16_t(c->gte_data[0] & 0xffffu)),
+        int16_t(uint16_t((c->gte_data[0] >> 16) & 0xffffu)),
+        int16_t(uint16_t(c->gte_data[1] & 0xffffu))
+    };
+    HostHD::SceneContext ctx{};
+    uint16_t mode_w = uint16_t(c->ram[FF8_MODE]) | uint16_t(uint16_t(c->ram[FF8_MODE + 1]) << 8);
+    ctx.mode = static_cast<HostHD::SceneMode>(mode_w);
+    ctx.field_id = uint16_t(c->ram[FF8_FIELD_ID]) | uint16_t(uint16_t(c->ram[FF8_FIELD_ID + 1]) << 8);
+    ctx.party[0] = c->ram[FF8_SAVEMAP + FF8_PARTY + 0];
+    ctx.party[1] = c->ram[FF8_SAVEMAP + FF8_PARTY + 1];
+    ctx.party[2] = c->ram[FF8_SAVEMAP + FF8_PARTY + 2];
+    hd_scene.record_gte_projection(rot, tr, ofx, ofy, h, in_v, packed_sxy,
+                                   float(double(x_q16) / 65536.0),
+                                   float(double(y_q16) / 65536.0),
+                                   z, ctx);
+}
+void sync_hd_models_sink() {
+    pgxp_record_sink(hd_models_registry.has_any_active() ? hd_models_gte_sink : nullptr, nullptr);
+}
+#else
+void sync_hd_models_sink() {}
+#endif
 struct Backend {
     gpu_raster_t *raster=nullptr;
     VkInstance instance=VK_NULL_HANDLE;
@@ -74,6 +118,8 @@ struct Backend {
     std::unique_ptr<Context> context;
     std::unique_ptr<Device> device;
     std::unique_ptr<Renderer> renderer;
+    std::unique_ptr<HostHD::TextureProvider> hd_textures;
+    std::unique_ptr<HostHD::HdModelRenderer> hd_model_renderer;
     // Native VRAM is authoritative. Upscaled pixels never reach the guest.
     std::vector<uint8_t> rgb;
     unsigned output_width=1, output_height=1;
@@ -91,6 +137,7 @@ struct Backend {
     // the pictures of a game frame share. What it left out is stale until
     // taken back from the GPU (fresh()).
     bool between=false;
+    bool hd_frame_ended=false;
     // VRAM in blocks of 16x16 pixels: a palette next to the picture must not
     // share a block with it.
     struct Blocks {
@@ -157,21 +204,24 @@ struct Backend {
         }
     }
     bool effect_source(unsigned x,unsigned y,unsigned w,unsigned h) const {
-        if (!effect_pages) return false;
-        for (unsigned row=0;row<h;) {
-            unsigned yy=(y+row)&511;
-            for (unsigned col=0;col<w;) {
-                unsigned xx=(x+col)&1023;
-                if (effect_pages&(uint32_t(1)<<((yy/256)*16+xx/64))) return true;
-                col+=std::min(w-col,64-xx%64);
+        if (!effect_pages || !w || !h) return false;
+        for (unsigned row=0;row<h;++row) {
+            unsigned yy=(y+row)&511, xx=x, left=w;
+            while (left) {
+                xx&=1023;
+                unsigned count=std::min({left,1024-xx,64-(xx&63)});
+                uint64_t mask=count==64 ? ~uint64_t(0) : ((uint64_t(1)<<count)-1)<<(xx&63);
+                if (effect_pixels[yy][xx/64] & mask) return true;
+                xx+=count; left-=count;
             }
-            row+=std::min(h-row,256-yy%256);
         }
         return false;
     }
-    bool effect_texture(const gpu_raster_t *s,gpu_paint_t p) const {
-        return p.textured && ((s->mode>>7)&3)>=2 &&
-            effect_source((s->mode&15)*64,((s->mode>>4)&1)*256,256,256);
+    bool effect_texture(const gpu_raster_t *s,gpu_paint_t p,unsigned u0,unsigned v0,unsigned w,unsigned h) const {
+        if (!effect_pages || !p.textured || ((s->mode>>7)&3)<2) return false;
+        unsigned tx=(s->mode&15)*64, ty=((s->mode>>4)&1)*256;
+        if ((s->window&0x3ff)!=0) return effect_source(tx,ty,256,256);
+        return effect_source(tx+u0,ty+v0,w ? w : 1u,h ? h : 1u);
     }
     std::vector<HostMovies::Patch> movie_patches;
     std::shared_ptr<const HostMovies::Frame> movie_frame;
@@ -272,8 +322,8 @@ struct Backend {
     bool gui_backdrop_valid=false;
 #endif
     std::vector<uint8_t> presented;
-    ImageHandle osd_image;
-    unsigned osd_revision=0;
+    ImageHandle osd_image, booster_osd_image;
+    unsigned osd_revision=0, booster_osd_revision=0;
     Backend() = default;
     ~Backend() {
         if (renderer && failed) renderer->abandon();
@@ -296,9 +346,10 @@ struct Backend {
 #ifdef FF8_GUI
         gui_backdrop.reset(); gui_backdrop_valid=false;
 #endif
-        osd_image.reset();
+        osd_image.reset(); booster_osd_image.reset();
         movie_buffer.reset(); movie_frame.reset(); movie_patches.clear();
         first.reset(); last.reset(); present_first.reset(); present_last.reset(); osd_first.reset(); osd_last.reset();
+        hd_model_renderer.reset();
         image.reset(); renderer.reset(); device.reset(); context.reset();
         if (surface) vkDestroySurfaceKHR(instance,surface,nullptr);
         if (instance) vkDestroyInstance(instance,nullptr);
@@ -345,6 +396,9 @@ struct Backend {
         for (unsigned y=0;y<rect.height;++y)
             std::memcpy(p+y*rect.width,raster->vram+(rect.y+y)*1024+rect.x,rect.width*2);
         renderer->end_copy(b);
+        renderer->notify_texture_upload(rect, raster->vram);
+        if (hd_models_registry.has_any_active())
+            hd_scene.record_vram_upload(rect.x, rect.y, rect.width, rect.height, raster->vram);
     }
     void uploads() {
         if (!dirty) return;
@@ -443,6 +497,9 @@ struct SoftTimer {
     ~SoftTimer() { if (start) backend->soft_ms+=thread_ms()-start; }
 };
 bool active(gpu_raster_t *s) { return backend && !backend->failed && backend->raster==s; }
+// Textures are being replaced (HD font or a texture pack): primitives then
+// report the texels they cover exactly. Otherwise nothing here changes.
+bool hd_replacing() { return hd_config.font_mode!=HostHD::FontMode::Off || hd_config.textures_enabled; }
 Vertex vertex(gpu_vertex_t v) {
     return {float(v.x),float(v.y),1.0f,unsigned(v.r)|(unsigned(v.g)<<8)|(unsigned(v.b)<<16),
             uint16_t(v.u),uint16_t(v.v)};
@@ -572,6 +629,13 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
         if (b->renderer->get_scaling()!=options.scale) throw std::runtime_error("Requested scale is unsupported");
         b->renderer->set_adaptive_smoothing(false); b->renderer->set_track_textures(false);
         b->renderer->set_dump_textures(false); b->renderer->set_replace_textures(false);
+        b->hd_textures.reset(new HostHD::TextureProvider);
+        b->renderer->set_hd_provider(b->hd_textures.get());
+        hd_config.internal_scale=options.scale;
+        b->hd_textures->configure(hd_config);
+        b->hd_textures->set_names(hd_names);
+        b->hd_model_renderer.reset(new HostHD::HdModelRenderer(*b->device, options.scale, b->renderer->get_msaa()));
+        sync_hd_models_sink();
         auto warm_start=Clock::now();
         b->renderer->warmup();
         std::fprintf(stderr,"Vulkan: pipeline warmup %.3f ms\n",
@@ -636,9 +700,71 @@ extern "C" int host_gpu_start(gpu_t *g,SDL_Window *window) {
     catch (...) { degrade("initialization","unknown exception"); backend.reset(); return 1; }
 }
 extern "C" void host_gpu_stop(void) {
-    if (backend) host_screenshot_flush();
+#ifdef FF8_PGXP
+    pgxp_record_sink(nullptr, nullptr);
+#endif
+    hd_scene.reset();
+    if (backend) {
+        host_screenshot_flush();
+        if (backend->renderer) backend->renderer->set_hd_provider(nullptr);
+        backend->hd_model_renderer.reset();
+        backend->hd_textures.reset();
+    }
     try { backend.reset(); } catch (...) { std::fprintf(stderr,"Vulkan cleanup failed\n"); }
     options={};
+}
+extern "C" void host_gpu_hd_assets(int font_mode, const char *font_path, int hd_textures,
+                                   const char *textures_dir, const char *dump_textures) {
+    hd_config.font_mode = font_mode == 1 ? HostHD::FontMode::Builtin :
+                          font_mode == 2 ? HostHD::FontMode::Custom : HostHD::FontMode::Off;
+    hd_config.font_path = font_path ? font_path : "";
+    hd_config.textures_enabled = hd_textures != 0;
+    hd_config.textures_dir = textures_dir ? textures_dir : "";
+    hd_config.dump_dir = dump_textures ? dump_textures : "";
+    hd_config.internal_scale = options.scale ? options.scale : 1u;
+    if (backend && backend->hd_textures) {
+        backend->hd_textures->configure(hd_config);
+        // Font sheets loaded before the setting changed are found in the mirror.
+        if (backend->raster) backend->hd_textures->resync(backend->raster->vram);
+    }
+}
+extern "C" void host_gpu_hd_names(const char *names, size_t size) {
+    std::vector<std::string> list;
+    for (size_t at = 0; names && at < size;) {
+        size_t len = 0;
+        while (at + len < size && names[at + len]) ++len;
+        if (len) list.emplace_back(names + at, len);
+        at += len + 1;
+    }
+    if (list == hd_names) return;
+    hd_names = std::move(list);
+    if (backend && backend->hd_textures) backend->hd_textures->set_names(hd_names);
+}
+extern "C" void host_gpu_hd_models(int enabled, const char *models_dir) {
+    uint64_t prev_gen = hd_models_registry.generation();
+    hd_models_registry.configure(enabled != 0, models_dir ? models_dir : "");
+    if (hd_models_registry.generation() != prev_gen) {
+        hd_scene.reset();
+        if (backend && backend->hd_model_renderer) backend->hd_model_renderer->clear_cache();
+    }
+    sync_hd_models_sink();
+}
+extern "C" void host_gpu_hd_models_rebind(void) {
+    hd_scene.reset();
+    sync_hd_models_sink();
+}
+extern "C" void host_gpu_hd_reload(void) {
+    if (backend && backend->hd_textures) {
+        backend->hd_textures->reload_pack();
+        if (backend->raster) backend->hd_textures->resync(backend->raster->vram);
+    }
+    hd_models_registry.reload();
+    hd_scene.reset();
+    if (backend && backend->hd_model_renderer) backend->hd_model_renderer->clear_cache();
+    sync_hd_models_sink();
+}
+extern "C" unsigned host_gpu_hd_model_count(void) {
+    return unsigned(hd_models_registry.discovered_count());
 }
 static int presentation_mode, presentation_linear;
 static bool checkpoints_wanted;
@@ -649,6 +775,8 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     if (!backend || !g) return 0;
     backend->movie_patches.clear();
     backend->movie_frame.reset(); backend->movie_buffer.reset();
+    hd_scene.reset();
+    backend->hd_frame_ended=false;
     backend->dirty=false;
     ++backend->scanout_revision;
 #ifdef FF8_GUI
@@ -697,6 +825,7 @@ extern "C" void host_gpu_checkpoint(gpu_t *g,int restore) try {
         b.kept_effect_pages=b.effect_pages;
     } else {
         b.stale.clear();
+        hd_scene.begin_replay_pass();
         // What the drawing since left for upload lies in tiles put back now.
         b.dirty=false;
         for (auto &row:b.dirty_rows) row.fill(0);
@@ -729,7 +858,18 @@ void __real_gpu_raster_store_span(gpu_raster_t *,unsigned,unsigned,const uint8_t
 }
 namespace {
 bool native_pixels() {
-    return options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active();
+    return options.scale==1 && !options.true_color && options.msaa==1 && !host_movies_active() &&
+           !hd_models_registry.has_any_active();
+}
+
+void flush_pending_hd_models(Backend &b) {
+    if (!hd_scene.has_pending_draws()) return;
+    auto draws = hd_scene.take_pending_draws();
+    if (!draws.empty() && b.hd_model_renderer && b.renderer) {
+        b.begin();
+        b.uploads();
+        b.hd_model_renderer->render_batch(*b.renderer, draws);
+    }
 }
 
 void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
@@ -780,7 +920,9 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
     bool precise_draw=false;
 #endif
     CpuTimer timer;
-    if (backend->effect_texture(s,p)) {
+    unsigned u0=unsigned(std::min({a.u,b.u,c.u})), u1=unsigned(std::max({a.u,b.u,c.u}));
+    unsigned v0=unsigned(std::min({a.v,b.v,c.v})), v1=unsigned(std::max({a.v,b.v,c.v}));
+    if (backend->effect_texture(s,p,u0,v0,u1-u0,v1-v0)) {
         fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_triangle(s,a,b,c,p); }
         dirty_bounds(s,std::min({a.x,b.x,c.x}),std::min({a.y,b.y,c.y}),
@@ -816,7 +958,39 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
             && !precise_draw
 #endif
         ) return;
+        if (hd_models_registry.has_any_active()) {
+            HostHD::TriangleObservation obs{};
+            obs.x[0]=a.x; obs.x[1]=b.x; obs.x[2]=c.x;
+            obs.y[0]=a.y; obs.y[1]=b.y; obs.y[2]=c.y;
+            obs.r[0]=a.r; obs.r[1]=b.r; obs.r[2]=c.r;
+            obs.g[0]=a.g; obs.g[1]=b.g; obs.g[2]=c.g;
+            obs.b[0]=a.b; obs.b[1]=b.b; obs.b[2]=c.b;
+            obs.u[0]=a.u; obs.u[1]=b.u; obs.u[2]=c.u;
+            obs.v[0]=a.v; obs.v[1]=b.v; obs.v[2]=c.v;
+            obs.textured = p.textured != 0;
+            obs.raw = p.raw != 0;
+            obs.semi = p.semi != 0;
+            obs.tex_page_x = (s->mode & 15u) * 64u;
+            obs.tex_page_y = ((s->mode >> 4) & 1u) * 256u;
+            obs.tex_depth = (s->mode >> 7) & 3u;
+            obs.clip_left = s->left; obs.clip_top = s->top;
+            obs.clip_right = s->right; obs.clip_bottom = s->bottom;
+            obs.draw_offset_x = s->offset_x; obs.draw_offset_y = s->offset_y;
+            obs.has_draw_offset = true;
+            auto decision = hd_scene.observe_triangle(obs, hd_models_registry);
+            if (decision.suppress_ps1_triangle) return;
+            if (decision.flush_pending_hd_models) flush_pending_hd_models(*backend);
+        }
         state(s,p,PrimitiveType::Polygon);
+        // A replaced texture is found by, and its filter taps are kept on, the
+        // texels this polygon covers: battle text is drawn as polygons, and the
+        // whole page would name no glyph and let taps reach a neighbouring one.
+        if (p.textured && hd_replacing()) {
+            int u0=std::min({a.u,b.u,c.u}), u1=std::max({a.u,b.u,c.u});
+            int v0=std::min({a.v,b.v,c.v}), v1=std::max({a.v,b.v,c.v});
+            if (u0>=0 && v0>=0 && u1<=255 && v1<=255)
+                backend->renderer->set_UV_limits(uint16_t(u0),uint16_t(v0),uint16_t(u1),uint16_t(v1));
+        }
         clipped(s,[&] { backend->renderer->draw_triangle(v); });
     }
     });
@@ -835,15 +1009,22 @@ extern "C" void __wrap_gpu_raster_triangle(gpu_raster_t *s,gpu_vertex_t a,gpu_ve
 extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w,int h,gpu_paint_t p) {
     if (!active(s)) { __real_gpu_raster_rectangle(s,a,w,h,p); return; }
     CpuTimer timer;
-    if (backend->effect_texture(s,p)) {
+    if (w>0 && h>0 && backend->effect_texture(s,p,unsigned(a.u),unsigned(a.v),unsigned(w),unsigned(h))) {
         fresh_texture(s,p);
         { SoftTimer soft; __real_gpu_raster_rectangle(s,a,w,h,p); }
         dirty_bounds(s,a.x,a.y,w,h,true);
         return;
     }
+    if (backend->effect_pages && !p.textured && !p.semi && !(s->mask&2) && w>0 && h>0) {
+        int l=std::max(a.x,s->left), r=std::min(a.x+w,s->right+1);
+        int t=std::max(a.y,s->top), b=std::min(a.y+h,s->bottom+1);
+        if (r>l && b>t) backend->effect(unsigned(l),unsigned(t),unsigned(r-l),unsigned(b-t),false);
+    }
     gpu_work("rectangle",[&] {
     if (native_pixels()) return;
     if (w>0 && h>0) {
+        if (hd_models_registry.has_any_active() && hd_scene.should_flush_for_rect(a.x,a.y,w,h))
+            flush_pending_hd_models(*backend);
         state(s,p,PrimitiveType::Sprite);
         Vertex v[4]={vertex(a),vertex(a),vertex(a),vertex(a)};
         v[1].x+=w; v[2].y+=h; v[3].x+=w; v[3].y+=h;
@@ -864,8 +1045,13 @@ extern "C" void __wrap_gpu_raster_rectangle(gpu_raster_t *s,gpu_vertex_t a,int w
         for (auto &vert:v) { vert.u=uint16_t(u); vert.v=uint16_t(tex_v); }
         v[1].u=uint16_t(u+du); v[3].u=v[1].u;
         v[2].v=uint16_t(tex_v+dv); v[3].v=v[2].v;
+        int u_end=std::max(u,u+du), v_end=std::max(tex_v,tex_v+dv);
+        // A sprite that ends on the page edge does not wrap. Past 255 the
+        // renderer takes the whole page for its texture, which names no one
+        // glyph of a replaced sheet (':' and the stat labels end on the edge).
+        if (hd_replacing()) { if (u_end==256) u_end=255; if (v_end==256) v_end=255; }
         backend->renderer->set_UV_limits(uint16_t(std::min(u,u+du)),uint16_t(std::min(tex_v,tex_v+dv)),
-                                         uint16_t(std::max(u,u+du)),uint16_t(std::max(tex_v,tex_v+dv)));
+                                         uint16_t(u_end),uint16_t(v_end));
         clipped(s,[&] { backend->renderer->draw_quad(v); });
     }
     });
@@ -919,7 +1105,13 @@ extern "C" void __wrap_gpu_raster_fill(gpu_raster_t *s,int x,int y,int w,int h,u
     if (!active(s)) { __real_gpu_raster_fill(s,x,y,w,h,color); return; }
     CpuTimer timer;
     backend->effect(unsigned(x),unsigned(y),unsigned(w),unsigned(h),false);
-    gpu_work("fill uploads",[&] { backend->begin(); backend->uploads(); });
+    gpu_work("fill uploads",[&] {
+        backend->begin(); backend->uploads();
+        if (hd_models_registry.has_any_active()) {
+            if (hd_scene.should_flush_for_rect(x,y,w,h)) flush_pending_hd_models(*backend);
+            hd_scene.clear_vram_region(unsigned(x),unsigned(y),unsigned(w),unsigned(h));
+        }
+    });
     // Clear ignores masks, field parity and the drawing area.
     gpu_work("fill field",[&] { backend->renderer->set_draw_field(-1); });
     { SoftTimer soft; __real_gpu_raster_fill(s,x,y,w,h,color); }
@@ -949,6 +1141,9 @@ extern "C" void __wrap_gpu_raster_copy(gpu_raster_t *s,int sx,int sy,int dx,int 
     gpu_work("copy",[&] {
     if (!native) {
         backend->begin(); backend->uploads();
+        if (hd_models_registry.has_any_active() &&
+            (hd_scene.should_flush_for_rect(sx,sy,w,h) || hd_scene.should_flush_for_rect(dx,dy,w,h)))
+            flush_pending_hd_models(*backend);
         backend->renderer->set_mask_test(s->mask&2); backend->renderer->set_force_mask_bit(s->mask&1);
         backend->touch(unsigned(dx),unsigned(dy),unsigned(w),unsigned(h));
         backend->renderer->blit_vram({unsigned(dx),unsigned(dy),unsigned(w),unsigned(h)},
@@ -972,6 +1167,12 @@ extern "C" int host_gpu_scanout(gpu_t *g) try {
     gpu_display(g,&x,&y,&nw,&nh,&depth,&enabled);
     backend->scanout_timing=gpu_scanout(g); backend->native_width=nw; backend->native_height=nh;
     backend->begin(); backend->uploads();
+    if (hd_models_registry.has_any_active()) {
+        flush_pending_hd_models(*backend);
+        hd_scene.end_frame();
+        backend->hd_frame_ended=true;
+    }
+    if (backend->hd_textures) backend->hd_textures->end_frame();
     auto &target=backend->scanouts[backend->device->get_current_frame_context()];
     target=backend->renderer->host_scanout({unsigned(x),unsigned(y),unsigned(std::max(nw,1)),unsigned(std::max(nh,1))},
         depth!=0,options.true_color,enabled && nw && nh,target);
@@ -1040,6 +1241,11 @@ extern "C" int host_gpu_frame(gpu_t *g) try {
     inject(2);
     double cpu_start=thread_ms();
     b.begin(); b.uploads();
+    if (hd_models_registry.has_any_active() && !b.hd_frame_ended) {
+        flush_pending_hd_models(b);
+        hd_scene.end_frame();
+    }
+    b.hd_frame_ended=false;
     if (b.timings) b.last=b.renderer->command_buffer_hack_fixme()->write_timestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
     b.renderer->flush(false);
     uint64_t pressure=b.device->frame_backpressure;
@@ -1303,11 +1509,18 @@ const host_osd_panel_t *osd_panel(Backend &b,VkExtent2D extent) {
     auto view=host_viewport(b.scanout_timing,b.native_width,b.native_height,int(extent.width),int(extent.height),presentation_mode);
     return host_osd_panel(int(extent.width),int(extent.height),host_osd_area(view));
 }
-void osd_present(Backend &b,Image &target,const host_osd_panel_t &panel) {
-    if (!b.osd_image || b.osd_revision!=panel.revision) {
+const host_osd_panel_t *osd_booster_panel(Backend &b,VkExtent2D extent) {
+#ifdef FF8_GUI
+    if (host_gui_visible()) return nullptr;
+#endif
+    auto view=host_viewport(b.scanout_timing,b.native_width,b.native_height,int(extent.width),int(extent.height),presentation_mode);
+    return host_osd_booster_panel(int(extent.width),int(extent.height),host_osd_area(view));
+}
+void osd_present(Backend &b,Image &target,const host_osd_panel_t &panel,ImageHandle &image,unsigned &revision) {
+    if (!image || revision!=panel.revision) {
         auto info=ImageCreateInfo::immutable_2d_image(unsigned(panel.w),unsigned(panel.h),VK_FORMAT_R8G8B8A8_UNORM);
         ImageInitialData initial={panel.rgba,0,0};
-        b.osd_image=b.device->create_image(info,&initial); b.osd_revision=panel.revision;
+        image=b.device->create_image(info,&initial); revision=panel.revision;
     }
     auto &cmd=*b.renderer->command_buffer_hack_fixme();
     if (b.timings && !b.osd_first
@@ -1322,7 +1535,7 @@ void osd_present(Backend &b,Image &target,const host_osd_panel_t &panel) {
     rp.color_attachments[0]=&target.get_view(); rp.num_color_attachments=1; rp.store_attachments=rp.load_attachments=1;
     cmd.begin_render_pass(rp); cmd.set_quad_state();
     cmd.set_program(program(*b.device,osd_frag));
-    cmd.set_texture(0,0,b.osd_image->get_view(),StockSampler::NearestClamp);
+    cmd.set_texture(0,0,image->get_view(),StockSampler::NearestClamp);
     VkViewport viewport={float(panel.x),float(panel.y),float(panel.w),float(panel.h),0,1};
     cmd.set_viewport(viewport);
     cmd.set_blend_enable(true);
@@ -1473,7 +1686,8 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
         }
     }
 #endif
-    if (auto *panel=osd_panel(b,extent)) osd_present(b,*target,*panel);
+    if (auto *panel=osd_panel(b,extent)) osd_present(b,*target,*panel,b.osd_image,b.osd_revision);
+    if (auto *bpanel=osd_booster_panel(b,extent)) osd_present(b,*target,*bpanel,b.booster_osd_image,b.booster_osd_revision);
 }
 // Offscreen presentation for --dump-presented-frames and the preview tool. It
 // has its own target, so a window presenting the same frame is unaffected.
@@ -1557,7 +1771,7 @@ extern "C" int host_gpu_present(void) {
             b.acquire_wait.reset();
         }
         b.filled=true;
-        if (!preset && !osd_panel(b,b.wsi->extent) && !host_screenshot_pending()
+        if (!preset && !osd_panel(b,b.wsi->extent) && !osd_booster_panel(b,b.wsi->extent) && !host_screenshot_pending()
 #ifdef FF8_GUI
             && !host_gui_visible() && !host_gui_toast_visible()
 #endif

@@ -21,7 +21,7 @@ LH_TEST(test_defaults_and_classification) {
     auto rows=lh::lines(r.out);
     for(size_t i=1;i<rows.size();++i) { std::istringstream in(rows[i]); std::string k,v; in>>k>>v; classes[k]=v; }
     for(auto key:{"renderer","pgxp","movies","state-bridge","achievements","load-state","save-at"}) LH_CHECK(classes.count(key));
-    for(auto &kv:classes) LH_EQ(kv.second,(kv.first=="pad" || kv.first=="savestate-cards" ? "L":"P"));
+    for(auto &kv:classes) LH_EQ(kv.second,(kv.first=="pad" || kv.first=="savestate-cards" || kv.first=="no-encounters" || kv.first=="battle-assist" ? "L":"P"));
 }
 LH_TEST(test_config_and_cli_precedence) {
     auto path=t.temp()/"custom.ini";

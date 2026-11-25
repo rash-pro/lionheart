@@ -2,6 +2,8 @@
 #include "display.h"
 #include "osd.h"
 void host_states_recovery(void (*callback)(cpu_t *, unsigned)) { (void)callback; }
+void host_states_taint(void) {}
+int host_states_tainted(void) { return 0; }
 #include <stdio.h>
 int host_states_init(cpu_t *c, const char *dir, const char *card, const char *load, const char *save,
                      uint64_t at, const char **discs, unsigned count, uint32_t exe, unsigned modes, int full_disc, int cards) {

@@ -73,6 +73,21 @@ int main(void){
         pgxp_bind(g,PGXP_VERTEX);seed();
         assert(pgxp_packet(g,flat,out)==7&&out[0].w==0&&out[1].x==19.75f);
     }
+    /* Depth collision disambiguation: when a foreground vertex (z=7750) and a far
+     * mountain vertex (z=25600) share one screen pixel, each polygon recovers its own
+     * depth-consistent subpixel position and W without warping the terrain. */
+    {
+        pgxp_bind(g,PGXP_PERSPECTIVE);
+        /* Far mountain quad at z=25600 sharing (-10,-20) with a foreground quad at z=7750. */
+        pgxp_record(NULL,xy(-10,-20),-10*INT64_C(65536)+16384,-20*INT64_C(65536)+32768,25600);
+        pgxp_record(NULL,xy(20,-20),20*INT64_C(65536)+16384,-20*INT64_C(65536)+32768,25620);
+        pgxp_record(NULL,xy(-10,30),-10*INT64_C(65536)+16384,30*INT64_C(65536)+32768,25580);
+        /* Foreground object overwrites (-10,-20) with z=7750 and shifted subpixel x. */
+        pgxp_record(NULL,xy(-10,-20),-10*INT64_C(65536)+57344,-20*INT64_C(65536)+32768,7750);
+        draw(g,0,1);
+        assert(captured[0][0].w==25600&&captured[0][0].x==29.75f);
+        assert(captured[0][1].w==25620&&captured[0][2].w==25580);
+    }
     pgxp_bind(g,PGXP_OFF);seed();draw(g,0,0);assert(pgxp_stats().projections==0);
     pgxp_bind(NULL,PGXP_OFF);free(g);free(other);puts("PGXP cache/parser contracts passed");return 0;
 }

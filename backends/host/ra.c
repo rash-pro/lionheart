@@ -50,7 +50,7 @@ static struct {
     const cpu_t *cpu;
     SDL_Thread *worker; SDL_mutex *mutex; SDL_cond *wake;
     job_t *queue,*done,*active;
-    int stop,ack,enabled,notify,blocked,token_login,network_error,configured;
+    int stop,ack,enabled,notify,blocked,locked,token_login,network_error,configured;
     unsigned epoch,media,timeout;
     uint64_t retry_at;
     char directory[4096],credentials[4096],disc[4096],agent[256],test_host[128],token[256];
@@ -250,7 +250,7 @@ static void login_token(void) {
     rc_client_begin_login_with_token(ra.client,ra.status.username,ra.token,login_done,NULL);
 }
 void host_ra_login(const char *user,const char *password) {
-    if (!ra.enabled || !ra.worker || !user || !*user || !password || !*password) return;
+    if (!ra.enabled || ra.locked || !ra.worker || !user || !*user || !password || !*password) return;
     cancel_session(); ra.blocked=0; ra.token_login=0; ra.network_error=0;
     ra.status.error_id=NULL; ra.status.load_failed=ra.status.unknown_game=0;
     if (!create_client()) { ra.status.state=HOST_RA_UNAVAILABLE; return; }
@@ -373,7 +373,7 @@ void host_ra_idle(void) {
 void host_ra_frame(const cpu_t *cpu) {
     ra.cpu=cpu;
     host_ra_idle();
-    if (!ra.client || ra.blocked || ra.status.loading || ra.status.load_failed || ra.status.unknown_game) return;
+    if (!ra.client || ra.blocked || ra.locked || ra.status.loading || ra.status.load_failed || ra.status.unknown_game) return;
     rc_client_do_frame(ra.client);
     if (ra.blocked) cancel_session();
 }
@@ -383,12 +383,24 @@ void host_ra_notify(int enabled) {
     if (!enabled) { ra.toast_at=ra.toast_count=0; ra.toast_started=-1; }
 }
 void host_ra_signout(void) {
-    cancel_session(); ra.enabled=0; ra.blocked=0; ra.status.state=HOST_RA_OFF;
-    ra.status.error_id=NULL; ra.status.username[0]=0; ra.status.load_failed=ra.status.unknown_game=0;
+    cancel_session(); ra.enabled=0; ra.blocked=0; ra.status.state=ra.locked ? HOST_RA_LOCKED : HOST_RA_OFF;
+    ra.status.error_id=ra.locked ? "ra.locked.sub" : NULL; ra.status.username[0]=0; ra.status.load_failed=ra.status.unknown_game=0;
     host_ra_erase(ra.token,sizeof(ra.token));
     if (*ra.credentials && unlink(ra.credentials) && errno!=ENOENT) ra.status.storage_failed=1;
 }
+void host_ra_lockout(void) {
+    ra.locked=1;
+    host_ra_signout();
+    ra.status.state=HOST_RA_LOCKED;
+    ra.status.error_id="ra.locked.sub";
+}
+int host_ra_locked(void) { return ra.locked; }
 void host_ra_enable(int enabled) {
+    if (ra.locked) {
+        if (!enabled) host_ra_signout();
+        else { ra.enabled=0; ra.status.state=HOST_RA_LOCKED; ra.status.error_id="ra.locked.sub"; }
+        return;
+    }
     if (!enabled) { host_ra_signout(); return; }
     if (!ra.worker) return;
     ra.enabled=1;

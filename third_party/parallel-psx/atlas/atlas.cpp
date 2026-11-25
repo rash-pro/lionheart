@@ -139,6 +139,22 @@ void FBAtlas::write_transfer(Domain domain, const Rect &rect)
 	write_domain(domain, Stage::Transfer, rect);
 }
 
+void FBAtlas::write_external_scaled(const Rect &rect)
+{
+	if (!rect.width || !rect.height)
+		return;
+	flush_render_pass();
+	sync_domain(Domain::Scaled, rect);
+	write_domain(Domain::Scaled, Stage::Fragment, rect);
+	unsigned xbegin = rect.x / BLOCK_WIDTH;
+	unsigned xend = (rect.x + rect.width - 1) / BLOCK_WIDTH;
+	unsigned ybegin = rect.y / BLOCK_HEIGHT;
+	unsigned yend = (rect.y + rect.height - 1) / BLOCK_HEIGHT;
+	for (unsigned y = ybegin; y <= yend; y++)
+		for (unsigned x = xbegin; x <= xend; x++)
+			info(x, y) |= STATUS_TEXTURE_RENDERED;
+}
+
 void FBAtlas::read_texture(Domain domain)
 {
 	Rect shifted = renderpass.texture_window;

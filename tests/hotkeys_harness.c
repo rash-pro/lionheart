@@ -85,12 +85,22 @@ int main(int argc,char **argv) {
         button(p,SDL_CONTROLLER_BUTTON_GUIDE,0); guest(p,PAD_CROSS);
         button(p,SDL_CONTROLLER_BUTTON_B,0); button(p,SDL_CONTROLLER_BUTTON_A,0); guest(p,0);
         button(p,SDL_CONTROLLER_BUTTON_GUIDE,1);
-        /* Every unused button is swallowed, including L2. */
-        const unsigned unused[]={SDL_CONTROLLER_BUTTON_A,SDL_CONTROLLER_BUTTON_B,SDL_CONTROLLER_BUTTON_LEFTSTICK,
-            SDL_CONTROLLER_BUTTON_RIGHTSTICK,SDL_CONTROLLER_BUTTON_DPAD_UP,SDL_CONTROLLER_BUTTON_DPAD_DOWN};
+        /* Unused buttons are swallowed; booster chords toggle cleanly and stay off the guest wire. */
+        const unsigned unused[]={SDL_CONTROLLER_BUTTON_A,SDL_CONTROLLER_BUTTON_B,
+            SDL_CONTROLLER_BUTTON_DPAD_UP,SDL_CONTROLLER_BUTTON_DPAD_DOWN};
         for (unsigned n=0;n<sizeof(unused)/sizeof(*unused);++n) { button(p,unused[n],1); guest(p,0); button(p,unused[n],0); }
+        button(p,SDL_CONTROLLER_BUTTON_RIGHTSTICK,1); guest(p,0);
+        assert(host_input_no_encounters_toggle()==1 && host_input_no_encounters_toggle()==0);
+        button(p,SDL_CONTROLLER_BUTTON_RIGHTSTICK,0);
+        button(p,SDL_CONTROLLER_BUTTON_LEFTSTICK,1); guest(p,0);
+        assert(host_input_battle_assist_toggle()==1 && host_input_battle_assist_toggle()==0);
+        button(p,SDL_CONTROLLER_BUTTON_LEFTSTICK,0);
         axis(p,SDL_CONTROLLER_AXIS_TRIGGERLEFT,16001); guest(p,0);
+        assert(host_input_speed_toggle()==1 && host_input_speed_toggle()==0);
         axis(p,SDL_CONTROLLER_AXIS_TRIGGERLEFT,16000); guest(p,0);
+        key(SDL_SCANCODE_Y,1); assert(host_input_no_encounters_toggle()==1 && host_input_no_encounters_toggle()==0); key(SDL_SCANCODE_Y,0);
+        key(SDL_SCANCODE_U,1); assert(host_input_battle_assist_toggle()==1 && host_input_battle_assist_toggle()==0); key(SDL_SCANCODE_U,0);
+        key(SDL_SCANCODE_T,1); assert(host_input_speed_toggle()==1 && host_input_speed_toggle()==0); key(SDL_SCANCODE_T,0);
         axis(p,SDL_CONTROLLER_AXIS_TRIGGERRIGHT,16000); assert(!host_input_fast());
         axis(p,SDL_CONTROLLER_AXIS_TRIGGERRIGHT,16001); assert(host_input_fast() && last==HOST_OSD_FAST); guest(p,0);
         button(p,SDL_CONTROLLER_BUTTON_GUIDE,0); assert(host_input_fast()); guest(p,0);
@@ -156,7 +166,7 @@ int main(int argc,char **argv) {
     for (unsigned n=0;n<sizeof(pass_buttons)/sizeof(*pass_buttons);++n) {
         button(0,pass_buttons[n],1); guest(0,pass_bits[n]); button(0,pass_buttons[n],0); guest(0,0);
     }
-    assert(!host_input_state() && !host_input_disc());
+    assert(!host_input_state() && !host_input_disc() && !host_input_speed_toggle() && !host_input_no_encounters_toggle() && !host_input_battle_assist_toggle());
     button(0,SDL_CONTROLLER_BUTTON_GUIDE,0);
     /* Script port 1 stays digital and still permits physical host hotkeys. */
     char error[256],script[4096]; snprintf(script,sizeof(script),"%s/script.txt",argv[1]);

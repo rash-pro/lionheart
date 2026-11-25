@@ -6,18 +6,22 @@ if(CMAKE_CROSSCOMPILING)
   if(CMAKE_HOST_WIN32)
     set(assetgen_suffix ".exe")
   endif()
-  set(ASSETGEN_COMMAND "${CMAKE_CURRENT_BINARY_DIR}/host-assetgen/assetgen${assetgen_suffix}")
-  ExternalProject_Add(lh_host_assetgen
-    SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}"
-    BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/host-assetgen"
-    CMAKE_ARGS "-DCMAKE_C_COMPILER=${LH_HOST_C_COMPILER}" -DCMAKE_BUILD_TYPE=Release
-      "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${CMAKE_CURRENT_BINARY_DIR}/host-assetgen"
-    BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release --parallel 4
-    BUILD_BYPRODUCTS "${ASSETGEN_COMMAND}"
-    BUILD_ALWAYS TRUE INSTALL_COMMAND "")
+  set(ASSETGEN_COMMAND "${CMAKE_BINARY_DIR}/host-assetgen/assetgen${assetgen_suffix}")
+  if(NOT TARGET lh_host_assetgen)
+    ExternalProject_Add(lh_host_assetgen
+      SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}"
+      BINARY_DIR "${CMAKE_BINARY_DIR}/host-assetgen"
+      CMAKE_ARGS "-DCMAKE_C_COMPILER=${LH_HOST_C_COMPILER}" -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${CMAKE_BINARY_DIR}/host-assetgen"
+      BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release --parallel 4
+      BUILD_BYPRODUCTS "${ASSETGEN_COMMAND}"
+      BUILD_ALWAYS TRUE INSTALL_COMMAND "")
+  endif()
   set(ASSETGEN_DEPENDENCY lh_host_assetgen)
 else()
-  add_subdirectory("${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/host-assetgen")
+  if(NOT TARGET assetgen)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_BINARY_DIR}/host-assetgen")
+  endif()
   set(ASSETGEN_COMMAND "$<TARGET_FILE:assetgen>")
   set(ASSETGEN_DEPENDENCY assetgen)
 endif()

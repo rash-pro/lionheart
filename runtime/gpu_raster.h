@@ -18,6 +18,7 @@ typedef struct {
     int left, top, right, bottom;
     int display_x, display_y, display_w, display_h, display_enabled;
     int interlaced, field;
+    int offset_x, offset_y;
     /* Presentation only, never saved (gpu_subpixel): what to add, in pixels, to
      * the vertices of the primitive being drawn. shift applies to everything;
      * corner to the triangle being drawn when cornered is set. corner_w is

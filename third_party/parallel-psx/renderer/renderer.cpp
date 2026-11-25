@@ -2146,9 +2146,15 @@ void Renderer::render_opaque_primitives()
 }
 
 void Renderer::hd_texture_uniforms(HdTextureHandle hd_texture_index) {
-	(void)hd_texture_index;
 	HdTexture hd;
-	hd.texture = dither_lut; // Valid dummy binding; replacement sampling is disabled.
+	if (hd_texture_index != HdTextureHandle::make_none()) {
+		hd = tracker.get_hd_texture(hd_texture_index);
+	}
+	if (!hd.texture) {
+		hd.texture = dither_lut; // Valid dummy binding; replacement sampling is disabled.
+		hd.vram_rect = { 0, 0, 1, 1 };
+		hd.texel_rect = { 0, 0, 1, 1 };
+	}
 	cmd->set_texture(0, 4, hd.texture->get_view(), StockSampler::TrilinearClamp); // Type of sampler only matters for the fast path
 	// ivec4, ivec4
 	struct HDPush {
@@ -2501,6 +2507,101 @@ void Renderer::set_dump_textures(bool enable) {
 }
 void Renderer::set_replace_textures(bool enable) {
 	tracker.hd_textures_enabled = enable;
+}
+void Renderer::set_hd_provider(HdTextureProvider *provider) {
+	tracker.set_provider(provider);
+}
+Vulkan::ImageHandle Renderer::create_hd_texture(unsigned width, unsigned height, const uint8_t *rgba, bool generate_mips) {
+	if (!width || !height || !rgba) return {};
+	if (!generate_mips || (width == 1 && height == 1)) {
+		ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8G8B8A8_UNORM, false);
+		ImageInitialData initial = { rgba };
+		return device.create_image(info, &initial);
+	}
+	/* Build alpha-aware coverage-thresholded mipmaps so transparent (0,0,0,0) cutouts
+	 * never average with opaque edge pixels into semi-transparent dark fringes (which
+	 * hdtextures.h's `texel != vec4(0.0)` test would treat as opaque black). */
+	std::vector<std::vector<uint8_t>> mips;
+	std::vector<ImageInitialData> initial;
+	unsigned w = width, h = height;
+	initial.push_back({ rgba, 0, 0 });
+	const uint8_t *prev = rgba;
+	while (w > 1 || h > 1) {
+		unsigned nw = std::max(1u, w >> 1);
+		unsigned nh = std::max(1u, h >> 1);
+		std::vector<uint8_t> next(size_t(nw) * size_t(nh) * 4u, 0);
+		for (unsigned y = 0; y < nh; ++y) {
+			unsigned sy0 = std::min(h - 1, y * 2);
+			unsigned sy1 = std::min(h - 1, y * 2 + 1);
+			for (unsigned x = 0; x < nw; ++x) {
+				unsigned sx0 = std::min(w - 1, x * 2);
+				unsigned sx1 = std::min(w - 1, x * 2 + 1);
+				const uint8_t *samples[4] = {
+					prev + (size_t(sy0) * w + sx0) * 4u,
+					prev + (size_t(sy0) * w + sx1) * 4u,
+					prev + (size_t(sy1) * w + sx0) * 4u,
+					prev + (size_t(sy1) * w + sx1) * 4u,
+				};
+				unsigned rsum = 0, gsum = 0, bsum = 0;
+				unsigned opaque = 0, sentinel = 0, trans = 0;
+				for (int s = 0; s < 4; ++s) {
+					const uint8_t *p = samples[s];
+					if (p[3] == 255 && p[0] == 0 && p[1] == 0 && p[2] == 0) {
+						++sentinel;
+					} else if (p[3] >= 128) {
+						rsum += p[0]; gsum += p[1]; bsum += p[2];
+						++opaque;
+					} else {
+						++trans;
+					}
+				}
+				uint8_t *dst = next.data() + (size_t(y) * nw + x) * 4u;
+				if (sentinel > 0 && opaque == 0) {
+					dst[0] = dst[1] = dst[2] = 0; dst[3] = 255;
+				} else if (opaque >= 2 || (opaque > 0 && trans == 0)) {
+					unsigned r = (rsum + opaque / 2) / opaque;
+					unsigned g = (gsum + opaque / 2) / opaque;
+					unsigned b = (bsum + opaque / 2) / opaque;
+					if (r == 0 && g == 0 && b == 0) r = g = b = 1;
+					dst[0] = uint8_t(r); dst[1] = uint8_t(g); dst[2] = uint8_t(b); dst[3] = 255;
+				} else {
+					dst[0] = dst[1] = dst[2] = dst[3] = 0;
+				}
+			}
+		}
+		mips.push_back(std::move(next));
+		prev = mips.back().data();
+		initial.push_back({ prev, 0, 0 });
+		w = nw; h = nh;
+	}
+	ImageCreateInfo info = ImageCreateInfo::immutable_2d_image(width, height, VK_FORMAT_R8G8B8A8_UNORM, false);
+	info.levels = unsigned(initial.size());
+	return device.create_image(info, initial.data());
+}
+
+Vulkan::ImageView &Renderer::begin_hd_model_pass(const Rect &rect) {
+	last_scanout.reset();
+	atlas.write_external_scaled(rect);
+	flush_blits();
+	flush_resolves();
+	ensure_command_buffer();
+	cmd->image_barrier(msaa > 1 ? *scaled_framebuffer_msaa : *scaled_framebuffer,
+	                   VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+	                   VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+	                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+	                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	                   VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+	return msaa > 1 ? scaled_framebuffer_msaa->get_view() : *scaled_views.front();
+}
+
+void Renderer::end_hd_model_pass() {
+	ensure_command_buffer();
+	cmd->image_barrier(msaa > 1 ? *scaled_framebuffer_msaa : *scaled_framebuffer,
+	                   VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+	                   VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+	                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+	                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+	                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT);
 }
 
 uint16_t *Renderer::begin_copy(BufferHandle handle)

@@ -49,6 +49,16 @@ const host_option_t host_options[] = {
     PRESENT("msaa", "1|2|4|8", msaa, HOST_VALUE_NUMBER),
     OPTION("pgxp", "off|vertex|perspective", pgxp, HOST_OPTION_PRESENTATION),
     OPTION("smooth-motion", "0|1", smooth_motion, HOST_OPTION_PRESENTATION),
+    OPTION("speed-boost", "0|1", speed_boost, HOST_OPTION_PRESENTATION),
+    OPTION("no-encounters", "0|1", no_encounters, HOST_OPTION_LOGIC),
+    OPTION("battle-assist", "0|1", battle_assist, HOST_OPTION_LOGIC),
+    OPTION("hd-font", "off|builtin|custom", hd_font, HOST_OPTION_PRESENTATION),
+    PRESENT("hd-font-path", "PATH", hd_font_path, HOST_VALUE_PATH),
+    OPTION("hd-textures", "0|1", hd_textures, HOST_OPTION_PRESENTATION),
+    PRESENT("textures-dir", "PATH", textures_dir, HOST_VALUE_PATH),
+    PRESENT("dump-textures", "PATH", dump_textures, HOST_VALUE_PATH),
+    OPTION("hd-models", "0|1", hd_models, HOST_OPTION_PRESENTATION),
+    PRESENT("models-dir", "PATH", models_dir, HOST_VALUE_PATH),
     PRESENT("movies", "PATH", movies, HOST_VALUE_PATH),
     PRESENT("movie-stats", "PATH", movie_stats, HOST_VALUE_PATH),
     PRESENT("dump-scaled-frames", "PATH", scaled_frames, HOST_VALUE_PATH),
@@ -302,7 +312,9 @@ int host_options_cli(host_options_t *o, int argc, char **argv, int *i) {
     }
     if (!strcmp(arg, "--config")) { if (*i + 1 >= argc) return -1; ++*i; return 1; }
     if (!strcmp(arg, "--windowed")) { o->fullscreen = 0; return 1; }
-    if (!strcmp(arg, "--fullscreen") || !strcmp(arg, "--true-color") || !strcmp(arg, "--smooth-motion")) {
+    if (!strcmp(arg, "--fullscreen") || !strcmp(arg, "--true-color") || !strcmp(arg, "--smooth-motion") ||
+        !strcmp(arg, "--speed-boost") || !strcmp(arg, "--no-encounters") || !strcmp(arg, "--battle-assist") ||
+        !strcmp(arg, "--hd-textures") || !strcmp(arg, "--hd-models")) {
         if (*i + 1 < argc && strncmp(argv[*i + 1], "--", 2))
             return set(o, option(arg+2), argv[++*i]) ? 1 : -1;
         return set(o, option(arg+2), "1") ? 1 : -1;

@@ -10,7 +10,8 @@ enum {
     HOST_OSD_SAVE_FAILED, HOST_OSD_LOADING, HOST_OSD_LOADED, HOST_OSD_NO_STATE,
     HOST_OSD_LOAD_FAILED, HOST_OSD_CARD, HOST_OSD_RA_LOAD, HOST_OSD_RA_FAST,
     HOST_OSD_FAST, HOST_OSD_DISC, HOST_OSD_CONNECTED, HOST_OSD_DISCONNECTED,
-    HOST_OSD_UNAVAILABLE, HOST_OSD_SCREENSHOT, HOST_OSD_SCREENSHOT_FAILED
+    HOST_OSD_UNAVAILABLE, HOST_OSD_SCREENSHOT, HOST_OSD_SCREENSHOT_FAILED,
+    HOST_OSD_SPEED, HOST_OSD_NO_ENCOUNTERS, HOST_OSD_BATTLE_ASSIST
 };
 typedef struct {
     const uint8_t *rgba;
@@ -35,6 +36,9 @@ const char *host_osd_showing(void);
 /* The visible picture: the scanout clipped to the TV aperture (frame when empty). */
 host_rect_t host_osd_area(host_viewport_t view);
 const host_osd_panel_t *host_osd_panel(int width, int height, host_rect_t area);
+/* Persistent Remaster-style booster HUD badges (bottom-left of visible area). */
+void host_osd_boosters(int speed_3x, int no_encounters, int battle_assist);
+const host_osd_panel_t *host_osd_booster_panel(int width, int height, host_rect_t area);
 /* Holds the OSD still (on) or lets it go: for a renderer on another thread
  * while it uses the panel host_osd_panel gave it. */
 void host_osd_hold(int on);

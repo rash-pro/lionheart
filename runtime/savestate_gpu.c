@@ -10,6 +10,7 @@ void ss_gpu(ss_io *io, gpu_t *g) {
     S32(r->display_enabled); S32(r->interlaced); S32(r->field);
     S32(g->packet); S32(g->read_latch); S32(g->draw_start); S32(g->draw_end); S32(g->draw_offset);
     S32(g->count); S32(g->needed); S32(g->opcode); S32(g->offset_x); S32(g->offset_y);
+    r->offset_x = g->offset_x; r->offset_y = g->offset_y;
     S32(g->transfer); S32(g->tx); S32(g->ty); S32(g->tw); S32(g->th); S32(g->cursor);
     S32(g->polyline); S32(g->poly_color_pending); S32(g->poly_color);
     S32(g->poly_last.x); S32(g->poly_last.y); S32(g->poly_last.r); S32(g->poly_last.g); S32(g->poly_last.b);

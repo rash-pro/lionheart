@@ -22,10 +22,15 @@ void host_states_recovery(void (*callback)(cpu_t *, unsigned)) { recovery=callba
 static struct {
     char *dir;
     const char *load, *save, **discs;
-    unsigned count, disc, slot, requested_slot, action, failed, supported, full_disc, cards;
+    unsigned count, disc, slot, requested_slot, action, failed, supported, full_disc, cards, tainted;
     uint64_t at, request_cycle;
     savestate_identity_t id;
 } states;
+void host_states_taint(void) {
+    states.tainted = 1;
+    states.id.modes |= SAVESTATE_MODE_BOOSTERS_TAINTED;
+}
+int host_states_tainted(void) { return (int)states.tainted; }
 static double milliseconds(uint64_t start) {
     return (SDL_GetPerformanceCounter() - start) * 1000.0 / SDL_GetPerformanceFrequency();
 }
@@ -222,6 +227,7 @@ int host_states_apply(cpu_t **current, host_input_t *input) {
         if (states.cards == HOST_CARDS_LIVE) live_cards(next,*current);
         host_audio_recover();
         savestate_dispose(*current); *current = next; states.disc = id.disc;
+        if (id.modes & SAVESTATE_MODE_BOOSTERS_TAINTED) host_states_taint();
         if (recovery) recovery(next,id.disc);
         host_display_recover(next->hw->gpu,next->hw->vblanks);
         if (input) {

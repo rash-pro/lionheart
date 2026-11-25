@@ -150,3 +150,23 @@ LH_TEST(test_wrong_password_and_load_failure) {
             "could not be loaded\"\ncapture {shots}-dialog.png\nquit\n",
             "load-failure", "soft", 1280, 720, true);
 }
+LH_TEST(test_gameplay_booster_warns_signs_out_and_permanently_locks_ra) {
+    lh::RaService s;
+    auto steps =
+        "open\nwait 15\n"
+        "section next\nsection next\nsection next\nsection next\nsection next\nwait 5\n"
+        "assert-focus enh.speed\n"
+        "nav down\nselect\nwait 5\n"
+        "assert-text enh.ra_warn.title \"Disable RetroAchievements?\"\n"
+        "assert-focus btn.cancel\n"
+        "nav right\nselect\nwait 10\n"
+        "assert-text enh.no_encounters \"On\"\n"
+        "assert-text enh.ra_locked_note \"RetroAchievements is permanently disabled for this session because boosters were used.\"\n"
+        "nav down\nselect\nwait 5\n"
+        "assert-text enh.no_encounters \"Off\"\n"
+        "section next\nsection next\nwait 5\n"
+        "assert-text ra.locked \"Disabled by boosters\"\n"
+        "quit\n";
+    auto out = run_gui(t, t.temp(), s, steps, "booster-lockout", "soft", 1280, 720, true, 0);
+    LH_CHECK(!lh::fs::exists(out.data / "ra/credentials"));
+}

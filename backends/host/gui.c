@@ -16,12 +16,13 @@
 #define FF8_VERSION "dev"
 #endif
 
-enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE,MODAL_NATIVE };
+enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE,MODAL_NATIVE,MODAL_BOOSTER_RA_LOCKOUT };
 static struct {
     host_options_t *options; host_gui_services_t services;
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
     host_gui_result_t result; host_gui_input_t input;
-    int configured,game,want_open,modal,setup_step,ra_form,ra_error,ra_seen;
+    int configured,game,want_open,modal,setup_step,ra_form,ra_error,ra_seen,ra_locked;
+    char pending_booster[32];
     int force_hub,first_focus,focus_rail,reset_scroll,keyboard,keyboard_first,shift,symbols,pick_slot,drop_active;
     int card_imported[2];
     unsigned focus_epoch;
@@ -42,6 +43,7 @@ static struct {
     /* Setup has a compiler step: no compiler was there when the player started. */
     int native_step;
     char crash_log[512],native_archive[512];
+    int mod_import_seen_done;
 } gui;
 
 const char *host_gui_string(const char *id) {
@@ -94,10 +96,42 @@ static void changed(const char *key,const char *value) {
     if (gui.services.changed) gui.services.changed(gui.services.context,key,overlay());
 }
 static void changed_number(const char *key,unsigned value) { char number[32]; snprintf(number,sizeof(number),"%u",value); changed(key,number); }
-static void change_pane(host_gui_pane_t pane) { gui.pane=pane; gui.focus_rail=0; gui.reset_scroll=1; request_focus(); gui.keyboard=0; gui.edit=NULL; }
+static int ra_is_locked(void) { return gui.ra_locked || host_ra_locked(); }
+static void change_pane(host_gui_pane_t pane) {
+    if (pane==HOST_GUI_ACHIEVEMENTS && ra_is_locked()) pane=HOST_GUI_RA;
+    gui.pane=pane; gui.focus_rail=0; gui.reset_scroll=1; request_focus(); gui.keyboard=0; gui.edit=NULL;
+}
+static void lock_ra_for_boosters(void) {
+    gui.ra_locked=1;
+    host_ra_lockout();
+    close_form();
+    if (gui.options && gui.options->ra) changed_number("ra",0);
+    if (gui.pane==HOST_GUI_ACHIEVEMENTS) change_pane(HOST_GUI_ENHANCEMENTS);
+}
+static void request_gameplay_booster(const char *key,int next) {
+    if (!next) { changed_number(key,0); return; }
+    const host_ra_status_t *st=host_ra_status();
+    int ra_active=!ra_is_locked() && ((gui.options && gui.options->ra) ||
+        st->state==HOST_RA_CONNECTED || st->state==HOST_RA_OFFLINE || st->state==HOST_RA_SIGNING_IN);
+    if (ra_active) {
+        snprintf(gui.pending_booster,sizeof(gui.pending_booster),"%s",key);
+        gui.modal=MODAL_BOOSTER_RA_LOCKOUT; request_focus();
+        return;
+    }
+    lock_ra_for_boosters();
+    changed_number(key,1);
+}
 static void section(int direction) {
-    static const host_gui_pane_t panes[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
-    for (unsigned i=0;i<7;++i) if (gui.pane==panes[i]) { change_pane(panes[(i+(direction>0 ? 1 : 6))%7]); return; }
+    static const host_gui_pane_t panes[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_ENHANCEMENTS,HOST_GUI_CONTROLS,HOST_GUI_RA};
+    const unsigned count=8;
+    for (unsigned i=0;i<count;++i) if (gui.pane==panes[i]) {
+        unsigned next=i;
+        for (unsigned step=0;step<count;++step) {
+            next=(next+(direction>0 ? 1 : count-1))%count;
+            if (panes[next]==HOST_GUI_ACHIEVEMENTS && ra_is_locked()) continue;
+            change_pane(panes[next]); return;
+        }
+    }
 }
 int host_gui_enabled(void) { return gui.configured; }
 int host_gui_visible(void) { return gui.configured && gui.mode!=HOST_GUI_HIDDEN; }
@@ -106,10 +140,23 @@ host_gui_pane_t host_gui_pane(void) { return gui.pane; }
 host_gui_input_t host_gui_last_input(void) { return gui.input; }
 host_gui_result_t host_gui_result(void) { return gui.result; }
 int host_gui_requested(void) { return gui.want_open; }
-void host_gui_request(host_gui_pane_t pane) { if (gui.configured) { gui.requested=pane; gui.want_open=1; } }
+void host_gui_request(host_gui_pane_t pane) {
+    if (gui.configured) {
+        gui.requested=(pane==HOST_GUI_ACHIEVEMENTS && ra_is_locked()) ? HOST_GUI_RA : pane;
+        gui.want_open=1;
+    }
+}
+void host_gui_request_booster_lockout(const char *key) {
+    if (!gui.configured || !key || !*key) return;
+    snprintf(gui.pending_booster,sizeof(gui.pending_booster),"%s",key);
+    gui.requested=HOST_GUI_ENHANCEMENTS;
+    gui.modal=MODAL_BOOSTER_RA_LOCKOUT;
+    gui.want_open=1;
+}
 void host_gui_close(void) {
     gui.result=overlay() ? HOST_GUI_PLAY : HOST_GUI_QUIT;
     gui.mode=HOST_GUI_HIDDEN; gui.want_open=0; gui.modal=MODAL_NONE;
+    gui.pending_booster[0]=0;
     close_form(); persist_ui();
 }
 void host_gui_edit_focus(char *edit,size_t capacity,int password) {
@@ -127,6 +174,7 @@ int host_gui_configure(host_options_t *options,const char *data,const host_gui_s
     if (data) snprintf(gui.data,sizeof(gui.data),"%s",data);
     gui.input=HOST_GUI_KEYBOARD; gui.mode=HOST_GUI_HIDDEN; gui.result=HOST_GUI_RUNNING;
     gui.generation=1; gui.started=SDL_GetTicks64();
+    if (host_ra_locked() || (options && (options->no_encounters || options->battle_assist))) gui.ra_locked=1;
     { int last=gui.input; gui_state_load(gui.data,gui.last_folder,sizeof(gui.last_folder),&last,&gui.native_offered); gui.input=(host_gui_input_t)last; }
     if (gui.services.native) gui.services.native(gui.services.context,&gui.native);
     gui.native_seen=(int)gui.native.compiler;
@@ -191,7 +239,7 @@ static void back(int controller) {
         if (controller && gui_browser_up(&gui.browser)) return;
         close_browser(); return;
     }
-    if (gui.modal!=MODAL_NONE) { gui.modal=MODAL_NONE; request_focus(); return; }
+    if (gui.modal!=MODAL_NONE) { gui.modal=MODAL_NONE; gui.pending_booster[0]=0; request_focus(); return; }
     if (gui.pane==HOST_GUI_ACHIEVEMENTS && gui_achievements_back()) return;
     if (gui.ra_form) { close_form(); request_focus(); return; }
     if (gui.mode==HOST_GUI_LOADING) { set_result(HOST_GUI_QUIT); return; }
@@ -227,7 +275,24 @@ static void selected(const char *path,gui_pick_t kind,unsigned slot) {
         snprintf(gui.native_archive,sizeof(gui.native_archive),"%s",path); gui.native_local=1;
         if (gui.services.native_install) gui.services.native_install(gui.services.context,path);
         request_focus();
-    } else changed(kind==GUI_PICK_MOVIES ? "movies" : "screenshot-dir",path);
+    } else if (kind==GUI_PICK_FONT) changed("hd-font-path",path);
+    else if (kind==GUI_PICK_TEXTURES) changed("textures-dir",path);
+    else if (kind==GUI_PICK_MODELS) changed("models-dir",path);
+    else if (kind==GUI_PICK_MOD_IMPORT) {
+        const char *discs[4];
+        unsigned dc=0;
+        char default_tex[4128]={0}, default_mod[4128]={0};
+        const char *tex_out=*gui.options->textures_dir ? gui.options->textures_dir : NULL;
+        const char *mod_out=*gui.options->models_dir ? gui.options->models_dir : NULL;
+        const char *mov_out=*gui.options->movies ? gui.options->movies : NULL;
+        for (unsigned i=0;i<4;++i) if (*gui.options->discs[i]) discs[dc++]=gui.options->discs[i];
+        if (!tex_out && *gui.data) { snprintf(default_tex,sizeof(default_tex),"%s/textures-hd",gui.data); tex_out=default_tex; }
+        if (!mod_out && *gui.data) { snprintf(default_mod,sizeof(default_mod),"%s/models-hd",gui.data); mod_out=default_mod; }
+        gui.mod_import_seen_done=0;
+        if (gui.services.mod_import_start)
+            gui.services.mod_import_start(gui.services.context,discs,dc,path,tex_out,mod_out,mov_out);
+    }
+    else changed(kind==GUI_PICK_MOVIES ? "movies" : "screenshot-dir",path);
 }
 static void pick(gui_pick_t kind,unsigned slot) {
     char path[512]; int result=-1;
@@ -264,8 +329,25 @@ static void remove_disc(unsigned slot) {
 }
 static void drop(const char *path) {
     struct stat st; size_t length=strlen(path);
+    int is_iro=(length>=4 && !strcasecmp(path+length-4,".iro")) || (length>=5 && !strcasecmp(path+length-5,".iroj"));
     if (stat(path,&st)) { snprintf(gui.error,sizeof(gui.error),S("disc.err.missing"),path); return; }
-    if (S_ISDIR(st.st_mode)) { if (gui.pane==HOST_GUI_VIDEO) changed("movies",path); return; }
+    if (S_ISDIR(st.st_mode)) {
+        if (gui.pane==HOST_GUI_VIDEO) changed("movies",path);
+        else if (gui.pane==HOST_GUI_ENHANCEMENTS && gui.services.mod_import_start) {
+            if (gui.options->renderer && *gui.options->discs[0]) {
+                gui.error[0]=0; selected(path,GUI_PICK_MOD_IMPORT,0);
+            } else snprintf(gui.error,sizeof(gui.error),"%s",S("enh.mod_import.need_setup"));
+        }
+        return;
+    }
+    if (is_iro && gui.services.mod_import_start) {
+        if (gui.options->renderer && *gui.options->discs[0]) {
+            gui.error[0]=0;
+            if (gui.mode!=HOST_GUI_SETUP) { gui.pane=HOST_GUI_ENHANCEMENTS; gui.focus_rail=0; }
+            selected(path,GUI_PICK_MOD_IMPORT,0);
+        } else snprintf(gui.error,sizeof(gui.error),"%s",S("enh.mod_import.need_setup"));
+        return;
+    }
     if (length>=4 && !strcasecmp(path+length-4,".zip")) {
         int asked=(gui.mode==HOST_GUI_SETUP && gui.setup_step==2) || gui.modal==MODAL_NATIVE;
         if (asked && gui.native.compiler!=HOST_GUI_COMPILER_READY && gui.native.compiler!=HOST_GUI_COMPILER_INSTALLING) selected(path,GUI_PICK_ARCHIVE,0);
@@ -408,8 +490,8 @@ static void setup_next(void) {
     } else finish_setup();
 }
 static void rail(void) {
-    static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.controls","nav.ra","nav.achievements"};
-    static const unsigned order[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_CONTROLS,HOST_GUI_RA};
+    static const char *const ids[]={"nav.play","nav.discs","nav.card","nav.video","nav.enhancements","nav.controls","nav.ra","nav.achievements"};
+    static const unsigned order[]={HOST_GUI_GAME,HOST_GUI_ACHIEVEMENTS,HOST_GUI_DISCS,HOST_GUI_CARD,HOST_GUI_VIDEO,HOST_GUI_ENHANCEMENTS,HOST_GUI_CONTROLS,HOST_GUI_RA};
     gui_ui_emblem(R(28,26,48,48)); label("app.name",86,32,gui.rail-98,GUI_TITLE,GUI_TEXT);
 #ifdef _WIN32
     const char *platform=S("platform.windows");
@@ -417,12 +499,15 @@ static void rail(void) {
     const char *platform=S("platform.linux");
 #endif
     char version[128]; snprintf(version,sizeof(version),S("app.version"),FF8_VERSION,platform); text("app.version",version,32,88,gui.rail-48,GUI_SUB,GUI_MUTED);
-    for (unsigned row=0;row<7;++row) {
+    unsigned shown=0;
+    for (unsigned row=0;row<8;++row) {
         unsigned i=order[row];
+        if (i==HOST_GUI_ACHIEVEMENTS && ra_is_locked()) continue;
         const char *id=i==0 && overlay() ? "nav.game" : ids[i];
-        if (gui_ui_row(id,S(id),NULL,R(0,142+(float)row*46,gui.rail,44),gui.pane==(host_gui_pane_t)i ? GUI_SELECTED : 0)) change_pane((host_gui_pane_t)i);
+        if (gui_ui_row(id,S(id),NULL,R(0,142+(float)shown*46,gui.rail,44),gui.pane==(host_gui_pane_t)i ? GUI_SELECTED : 0)) change_pane((host_gui_pane_t)i);
+        ++shown;
     }
-    if (gui_ui_row("nav.quit",S("nav.quit"),NULL,R(0,492,gui.rail,44),0)) { gui.modal=MODAL_QUIT; request_focus(); }
+    if (gui_ui_row("nav.quit",S("nav.quit"),NULL,R(0,142+(float)shown*46+20,gui.rail,44),0)) { gui.modal=MODAL_QUIT; request_focus(); }
 }
 static void hints(void) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_XBOXONE;
@@ -815,8 +900,12 @@ static void draw_game(void) {
         if (gui_ui_row("game.save",S("game.save"),NULL,R(x,316,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F5); }
         if (gui_ui_row("game.load",S("game.load"),available ? NULL : S("game.load.empty"),R(x,378,width,64),available ? 0 : GUI_DISABLED)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F7); }
         if (gui_ui_row("game.shot",S("game.shot"),NULL,R(x,446,width,58),0)) { host_gui_close(); if (gui.services.action) gui.services.action(gui.services.context,SDL_SCANCODE_F12); }
-        if (gui_ui_row("btn.view_ach",S("btn.view_ach"),NULL,R(x,514,width,58),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
-        native_row(x,582,width,58);
+        if (!ra_is_locked()) {
+            if (gui_ui_row("btn.view_ach",S("btn.view_ach"),NULL,R(x,514,width,58),0)) change_pane(HOST_GUI_ACHIEVEMENTS);
+            native_row(x,582,width,58);
+        } else {
+            native_row(x,514,width,58);
+        }
         pane_body_end();
     } else {
         pane_header("nav.play",S("hub.subtitle"));
@@ -840,7 +929,7 @@ static void draw_game(void) {
         snprintf(sub,sizeof(sub),S("hub.video"),S(gui.options->renderer ? "val.vulkan" : "val.soft"),(unsigned)gui.options->internal_scale,S(gui.options->crt==0 ? "val.off" : gui.options->crt==1 ? "val.pvm" : gui.options->crt==2 ? "val.tv" : "val.arcade"));
         if (gui_ui_row("hub.video",S("nav.video"),sub,R(x,top+2*step,width,tall),0)) change_pane(HOST_GUI_VIDEO);
         if (gui_ui_row("hub.controls",S("nav.controls"),S(gui.options->dualshock ? "val.dualshock" : "val.digital"),R(x,top+3*step,width,tall),0)) change_pane(HOST_GUI_CONTROLS);
-        if (gui_ui_row("hub.ra",S("nav.ra"),S(gui.options->ra ? "tag.casual" : "ra.off"),R(x,top+4*step,width,tall),0)) change_pane(HOST_GUI_RA);
+        if (gui_ui_row("hub.ra",S("nav.ra"),S(ra_is_locked() ? "ra.locked" : gui.options->ra ? "tag.casual" : "ra.off"),R(x,top+4*step,width,tall),0)) change_pane(HOST_GUI_RA);
         native_row(x,top+5*step,width,tall);
         label("app.wip",x,has_native() ? 618 : 606,width,GUI_SUB,GUI_MUTED);
         pane_body_end();
@@ -945,6 +1034,109 @@ static void draw_video(void) {
     if (value!=gui.options->smooth_motion) changed_number("smooth-motion",(unsigned)value);
     pane_body_end();
 }
+static void draw_enhancements(void) {
+    float x=gui.rail+48,width=gui.width-gui.rail-96; int value;
+    pane_header("nav.enhancements",S("enh.subtitle"));
+    pane_body_begin();
+    label("enh.boosters",x+18,120,width-36,GUI_SUB,GUI_MUTED);
+    gui_ui_control_row(R(x,154,width,62));
+    value=gui_ui_toggle("enh.speed",R(x+width-64,172,46,26),gui.options->speed_boost,1);
+    control_label("enh.speed","enh.speed",x+18,160,width-100,GUI_REGULAR,GUI_TEXT);
+    label("enh.speed.sub",x+18,187,width-100,GUI_SUB,GUI_DIM);
+    if (gui.first_focus) gui_ui_focus("enh.speed");
+    if (value!=gui.options->speed_boost) changed_number("speed-boost",(unsigned)value);
+
+    gui_ui_control_row(R(x,226,width,62));
+    value=gui_ui_toggle("enh.no_encounters",R(x+width-64,244,46,26),gui.options->no_encounters,1);
+    control_label("enh.no_encounters","enh.no_encounters",x+18,232,width-100,GUI_REGULAR,GUI_TEXT);
+    label("enh.no_encounters.sub",x+18,259,width-100,GUI_SUB,GUI_DIM);
+    if (value!=gui.options->no_encounters) request_gameplay_booster("no-encounters",value);
+
+    gui_ui_control_row(R(x,298,width,62));
+    value=gui_ui_toggle("enh.battle_assist",R(x+width-64,316,46,26),gui.options->battle_assist,1);
+    control_label("enh.battle_assist","enh.battle_assist",x+18,304,width-100,GUI_REGULAR,GUI_TEXT);
+    label("enh.battle_assist.sub",x+18,331,width-100,GUI_SUB,GUI_DIM);
+    if (value!=gui.options->battle_assist) request_gameplay_booster("battle-assist",value);
+
+    label(ra_is_locked() ? "enh.ra_locked_note" : "enh.ra_note",x+18,382,width-36,GUI_SUB,ra_is_locked() ? GUI_WARN : GUI_DIM);
+
+    int vulkan=gui.options->renderer;
+    static const char *const fonts[]={"val.off","val.builtin","val.custom"};
+    label("enh.visuals",x+18,430,width-36,GUI_SUB,GUI_MUTED);
+    value=segments("enh.hd_font","enh.hd_font",fonts,3,gui.options->hd_font,460,vulkan,0);
+    if (value!=gui.options->hd_font) changed("hd-font",value==0 ? "off" : value==1 ? "builtin" : "custom");
+
+    int custom_font=vulkan && gui.options->hd_font==2;
+    label("enh.hd_font_path",x+18,528,240,GUI_REGULAR,custom_font ? GUI_TEXT : GUI_MUTED);
+    text("enh.hd_font_path.val",*gui.options->hd_font_path ? base_name(gui.options->hd_font_path) : S("video.none"),x+18,558,width-260,GUI_MONO,GUI_DIM);
+    if (gui_ui_button("enh.hd_font_path.browse",S("btn.browse"),R(x+width-254,522,160,38),custom_font ? 0 : GUI_DISABLED)) pick(GUI_PICK_FONT,0);
+    if (gui_ui_button("enh.hd_font_path.clear",S("btn.clear"),R(x+width-84,522,76,38),custom_font && *gui.options->hd_font_path ? 0 : GUI_DISABLED)) changed("hd-font-path","");
+
+    gui_ui_control_row(R(x,596,width,62));
+    value=gui_ui_toggle("enh.hd_textures",R(x+width-64,614,46,26),gui.options->hd_textures,vulkan);
+    control_label("enh.hd_textures","enh.hd_textures",x+18,602,width-100,GUI_REGULAR,vulkan ? GUI_TEXT : GUI_MUTED);
+    label("enh.hd_textures.sub",x+18,629,width-100,GUI_SUB,GUI_DIM);
+    if (value!=gui.options->hd_textures) changed_number("hd-textures",(unsigned)value);
+
+    label("enh.textures_dir",x+18,674,240,GUI_REGULAR,vulkan ? GUI_TEXT : GUI_MUTED);
+    text("enh.textures_dir.val",*gui.options->textures_dir ? base_name(gui.options->textures_dir) : S("video.none"),x+18,704,width-260,GUI_MONO,GUI_DIM);
+    if (gui_ui_button("enh.textures_dir.browse",S("btn.browse"),R(x+width-254,668,160,38),vulkan ? 0 : GUI_DISABLED)) pick(GUI_PICK_TEXTURES,0);
+    if (gui_ui_button("enh.textures_dir.clear",S("btn.clear"),R(x+width-84,668,76,38),vulkan && *gui.options->textures_dir ? 0 : GUI_DISABLED)) changed("textures-dir","");
+
+    gui_ui_control_row(R(x,744,width,62));
+    value=gui_ui_toggle("enh.hd_models",R(x+width-64,762,46,26),gui.options->hd_models,vulkan);
+    control_label("enh.hd_models","enh.hd_models",x+18,750,width-100,GUI_REGULAR,vulkan ? GUI_TEXT : GUI_MUTED);
+    label("enh.hd_models.sub",x+18,777,width-100,GUI_SUB,GUI_DIM);
+    if (value!=gui.options->hd_models) changed_number("hd-models",(unsigned)value);
+
+    label("enh.models_dir",x+18,822,240,GUI_REGULAR,vulkan ? GUI_TEXT : GUI_MUTED);
+    text("enh.models_dir.val",*gui.options->models_dir ? base_name(gui.options->models_dir) : S("video.none"),x+18,852,width-260,GUI_MONO,GUI_DIM);
+    if (gui_ui_button("enh.models_dir.browse",S("btn.browse"),R(x+width-254,816,160,38),vulkan ? 0 : GUI_DISABLED)) pick(GUI_PICK_MODELS,0);
+    if (gui_ui_button("enh.models_dir.clear",S("btn.clear"),R(x+width-84,816,76,38),vulkan && *gui.options->models_dir ? 0 : GUI_DISABLED)) changed("models-dir","");
+
+    if (gui.services.mod_import_start && gui.services.mod_import_poll) {
+        host_mod_import_status_t imp={0};
+        char status_line[320];
+        int has_disc=*gui.options->discs[0]!=0;
+        gui.services.mod_import_poll(gui.services.context,&imp);
+        if (imp.finished && !gui.mod_import_seen_done) {
+            gui.mod_import_seen_done=1;
+            if (imp.ok) {
+                char default_tex[4128]={0}, default_mod[4128]={0};
+                if (!*gui.options->textures_dir && *gui.data) {
+                    snprintf(default_tex,sizeof(default_tex),"%s/textures-hd",gui.data);
+                    changed("textures-dir",default_tex);
+                }
+                if (!*gui.options->models_dir && *gui.data) {
+                    snprintf(default_mod,sizeof(default_mod),"%s/models-hd",gui.data);
+                    changed("models-dir",default_mod);
+                }
+                if (imp.textures_written>0 && !gui.options->hd_textures) changed_number("hd-textures",1);
+                if (imp.models_written>0 && !gui.options->hd_models) changed_number("hd-models",1);
+                if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
+            }
+        }
+        gui_ui_control_row(R(x,892,width,66));
+        label("enh.mod_import",x+18,899,width-220,GUI_REGULAR,(vulkan && has_disc) ? GUI_TEXT : GUI_MUTED);
+        if (imp.running) {
+            if (imp.total>0) snprintf(status_line,sizeof(status_line),S("enh.mod_import.progress"),imp.stage,imp.done,imp.total);
+            else snprintf(status_line,sizeof(status_line),"%s",*imp.stage ? imp.stage : S("enh.mod_import.running"));
+            text("enh.mod_import.status",status_line,x+18,927,width-220,GUI_SUB,GUI_ACCENT);
+        } else if (imp.finished && imp.ok) {
+            snprintf(status_line,sizeof(status_line),S("enh.mod_import.done"),imp.textures_written,imp.models_written);
+            text("enh.mod_import.status",status_line,x+18,927,width-220,GUI_SUB,GUI_OK);
+        } else if (imp.finished && *imp.error) {
+            text("enh.mod_import.status",imp.error,x+18,927,width-220,GUI_SUB,GUI_ERROR);
+        } else {
+            label("enh.mod_import.sub",x+18,927,width-220,GUI_SUB,GUI_DIM);
+        }
+        if (gui_ui_button("enh.mod_import.btn",imp.running ? S("enh.mod_import.running") : S("enh.mod_import.btn"),
+                          R(x+width-186,906,168,38),(vulkan && has_disc && !imp.running) ? GUI_PRIMARY : GUI_DISABLED)) {
+            pick(GUI_PICK_MOD_IMPORT,0);
+        }
+    }
+    pane_body_end();
+}
 static const char *pad_name(unsigned bit) {
     int type=gui.services.controller_type ? gui.services.controller_type(gui.services.context) : SDL_CONTROLLER_TYPE_UNKNOWN;
     int ps=type==SDL_CONTROLLER_TYPE_PS3 || type==SDL_CONTROLLER_TYPE_PS4 || type==SDL_CONTROLLER_TYPE_PS5;
@@ -954,6 +1146,9 @@ static const char *pad_name(unsigned bit) {
     case PAD_R1:return S(ps ? "controls.r1" : nintendo ? "controls.nintendo.r" : "controls.xbox.rb");
     case PAD_L1:return S(ps ? "controls.l1" : nintendo ? "controls.nintendo.l" : "controls.xbox.lb");
     case PAD_R2:return S(ps ? "controls.r2" : nintendo ? "controls.nintendo.zr" : "controls.xbox.rt");
+    case PAD_L2:return S(ps ? "controls.l2" : nintendo ? "controls.nintendo.zl" : "controls.xbox.lt");
+    case PAD_L3:return S(ps ? "controls.l3" : nintendo ? "controls.nintendo.ls" : "controls.xbox.ls");
+    case PAD_R3:return S(ps ? "controls.r3" : nintendo ? "controls.nintendo.rs" : "controls.xbox.rs");
     case PAD_TRIANGLE:return S(ps ? "controls.triangle" : nintendo ? "hint.pad.nintendo.secondary" : "hint.pad.xbox.secondary");
     case PAD_SQUARE:return S(ps ? "controls.square" : nintendo ? "hint.pad.nintendo.backspace" : "hint.pad.xbox.backspace");
     case PAD_SELECT:return S(ps ? "controls.select" : nintendo ? "controls.nintendo.minus" : "controls.xbox.view");
@@ -992,6 +1187,15 @@ static void draw_controls(void) {
 static void draw_ra(void) {
     float x=gui.rail+48,width=gui.width-gui.rail-96;
     const host_ra_status_t *status=host_ra_status();
+    if (ra_is_locked()) {
+        close_form(); pane_header("ra.title",S("ra.site"));
+        pane_body_begin();
+        label("ra.locked",x+18,148,width-36,GUI_TITLE,GUI_WARN);
+        label("ra.locked.sub",x+18,194,width-36,GUI_REGULAR,GUI_TEXT);
+        label("ra.locked.hint",x+18,236,width-36,GUI_SUB,GUI_DIM);
+        pane_body_end();
+        return;
+    }
     if (gui.ra_seen!=(int)status->state) {
         if (status->state==HOST_RA_REJECTED) close_form();
         request_focus();
@@ -1108,20 +1312,33 @@ static void draw_browser(void) {
     }
     gui_ui_scroll_end();
     if (*gui.browser.error) text("browser.error",gui.browser.error,list_x,gui.height-140,gui.width-list_x-48,GUI_SUB,GUI_ERROR);
-    if (gui.browser.kind==GUI_PICK_MOVIES || gui.browser.kind==GUI_PICK_SCREENSHOTS) {
+    if (gui.browser.kind==GUI_PICK_MOVIES || gui.browser.kind==GUI_PICK_SCREENSHOTS || gui.browser.kind==GUI_PICK_TEXTURES || gui.browser.kind==GUI_PICK_MODELS || gui.browser.kind==GUI_PICK_MOD_IMPORT) {
         if (gui_ui_button("browser.choose_folder",S("btn.continue"),R(gui.width-230,gui.height-120,182,42),GUI_PRIMARY)) { selected(gui.browser.folder,gui.pick_kind,(unsigned)gui.pick_slot); close_browser(); }
     }
     if (gui_ui_button("browser.cancel",S("btn.cancel"),R(48,gui.height-120,132,42),0)) close_browser();
     gui_ui_modal_end();
 }
 static void draw_dialog(void) {
-    float height=gui.modal==MODAL_RA_WARNING ? 346 : gui.modal==MODAL_NATIVE ? 470 : 236,width=gui.modal==MODAL_NATIVE ? 864 : 600;
+    float height=gui.modal==MODAL_RA_WARNING ? 346 : gui.modal==MODAL_BOOSTER_RA_LOCKOUT ? 304 : gui.modal==MODAL_NATIVE ? 470 : 236,width=gui.modal==MODAL_NATIVE ? 864 : 620;
     float x=(gui.width-width)/2,y=(gui.height-height)/2;
     gui_ui_modal_begin("dialog",R(x,y,width,height));
     if (gui.modal==MODAL_NATIVE) {
         if (gui.native.compiler!=HOST_GUI_COMPILER_READY) draw_native_install(x+32,y+28,width-64);
         else draw_native_details(x+32,y+28,width-64);
         if (button("btn.close",x+width-166,y+height-72,134,0)) { gui.modal=MODAL_NONE; request_focus(); }
+    } else if (gui.modal==MODAL_BOOSTER_RA_LOCKOUT) {
+        label("enh.ra_warn.title",x+32,y+28,width-64,GUI_TITLE,GUI_WARN);
+        static const char *const lines[]={"enh.ra_warn.1","enh.ra_warn.2","enh.ra_warn.3"};
+        for (unsigned i=0;i<3;++i) label(lines[i],x+32,y+84+(float)i*36,width-64,GUI_SUB,GUI_TEXT);
+        if (button("btn.cancel",x+width-376,y+height-72,130,0)) { gui.pending_booster[0]=0; gui.modal=MODAL_NONE; request_focus(); }
+        if (gui.first_focus) gui_ui_focus("btn.cancel");
+        if (button("btn.enable_booster",x+width-232,y+height-72,200,GUI_DANGER)) {
+            char key[32]; snprintf(key,sizeof(key),"%s",gui.pending_booster);
+            gui.pending_booster[0]=0; gui.modal=MODAL_NONE;
+            lock_ra_for_boosters();
+            if (*key) changed_number(key,1);
+            request_focus();
+        }
     } else if (gui.modal==MODAL_RA_WARNING) {
         label("ra.warn.title",x+32,y+28,width-64,GUI_TITLE,GUI_TEXT);
         static const char *const lines[]={"ra.warn.1","ra.warn.2","ra.warn.3","ra.warn.4","ra.warn.5"};
@@ -1195,9 +1412,11 @@ void host_gui_frame(unsigned width,unsigned height) {
         rail();
         gui_ui_scroll_end();
         gui_ui_region_begin("pane",R(gui.rail,0,gui.width-gui.rail,gui.height-56));
+        if (ra_is_locked() && gui.pane==HOST_GUI_ACHIEVEMENTS) gui.pane=HOST_GUI_RA;
         switch (gui.pane) {
         case HOST_GUI_GAME:draw_game();break; case HOST_GUI_DISCS:draw_discs();break;
         case HOST_GUI_CARD:draw_cards();break; case HOST_GUI_VIDEO:draw_video();break;
+        case HOST_GUI_ENHANCEMENTS:draw_enhancements();break;
         case HOST_GUI_CONTROLS:draw_controls();break; case HOST_GUI_RA:draw_ra();break;
         case HOST_GUI_ACHIEVEMENTS:gui_achievements_draw(gui.rail+48,gui.width-gui.rail-96,gui.height,gui.first_focus);break;
         }

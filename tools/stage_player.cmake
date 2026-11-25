@@ -10,6 +10,9 @@ function(player_licences dist)
     third_party/imgui/LICENSE.txt Dear-ImGui-MIT.txt
     third_party/nativefiledialog-extended/LICENSE nativefiledialog-zlib.txt
     third_party/chakra-petch/OFL.txt Chakra-Petch-OFL.txt
+    third_party/barlow/OFL.txt Barlow-OFL.txt
+    third_party/nlohmann/LICENSE.MIT nlohmann-json-MIT.txt
+    third_party/stb/stb_image.h stb_image-MIT.h
     third_party/xz-embedded/COPYING xz-embedded-0BSD.txt
     LICENSE Lionheart-MIT.txt
     THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md

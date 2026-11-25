@@ -812,6 +812,7 @@ tests/test_host_osd.py::test_soft_vulkan_composition[size5-120]	standard	pass
 tests/test_host_osd.py::test_osd_shader_matches_prebuilt	standard	pass	
 tests/test_host_osd.py::test_sdl_osd_event_hooks	standard	pass	
 tests/test_host_osd.py::test_vulkan_sdl_osd_events	standard	pass	
+tests/test_host_osd.py::test_booster_hud_badges	standard	pass	
 tests/test_host_pad_verification.py::test_facing_changes_do_not_count_as_walking	standard	pass	
 tests/test_host_pad_verification.py::test_walking_requires_corresponding_samples	standard	pass	
 tests/test_host_pad_verification.py::test_translation_and_field_transitions_count_as_walking	standard	pass	
@@ -1153,6 +1154,7 @@ tests/test_ra_client.py::test_idle_does_not_evaluate_changed_memory	standard	pas
 tests/test_ra_client.py::test_pending_unlock_survives_disc_change	standard	pass	
 tests/test_ra_client.py::test_reset_clears_measured_display_and_toast_handles_clock_restart	standard	pass	
 tests/test_ra_client.py::test_worker_start_failure_can_sign_out_and_reconfigure	standard	pass	
+tests/test_ra_client.py::test_booster_lockout_signs_out_and_blocks_reenable	standard	pass	
 tests/test_ra_gui.py::test_signin_view_search_filters_unlock_and_signout[soft-size0]	standard	pass	
 tests/test_ra_gui.py::test_signin_view_search_filters_unlock_and_signout[soft-size1]	standard	pass	
 tests/test_ra_gui.py::test_signin_view_search_filters_unlock_and_signout[vulkan-size2]	standard	pass	
@@ -1161,6 +1163,7 @@ tests/test_ra_gui.py::test_stored_token_failure_panes[blocked]	standard	pass
 tests/test_ra_gui.py::test_stored_token_failure_panes[expired]	standard	pass	
 tests/test_ra_gui.py::test_stored_token_failure_panes[offline]	standard	pass	
 tests/test_ra_gui.py::test_wrong_password_and_load_failure	standard	pass	
+tests/test_ra_gui.py::test_gameplay_booster_warns_signs_out_and_permanently_locks_ra	standard	pass	
 tests/test_recomp_configuration.py::test_compact_deadlines_preserve_loads_branches_and_resume[False]	standard	pass	
 tests/test_recomp_configuration.py::test_compact_deadlines_preserve_loads_branches_and_resume[True]	standard	pass	
 tests/test_recomp_configuration.py::test_irq_observes_state_before_next_instruction[delay_store-fast]	standard	pass	

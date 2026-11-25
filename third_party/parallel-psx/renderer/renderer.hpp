@@ -157,6 +157,12 @@ public:
 	void set_track_textures(bool enable);
 	void set_dump_textures(bool enable);
 	void set_replace_textures(bool enable);
+	void set_hd_provider(HdTextureProvider *provider);
+	Vulkan::ImageHandle create_hd_texture(unsigned width, unsigned height, const uint8_t *rgba, bool generate_mips = true);
+	// Host presentation only: synchronize parallel-psx scaled VRAM for an
+	// external 3D HD model render pass covering native VRAM rect.
+	Vulkan::ImageView &begin_hd_model_pass(const Rect &rect);
+	void end_hd_model_pass();
 
 	void set_adaptive_smoothing(bool enable)
 	{

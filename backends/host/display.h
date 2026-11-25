@@ -62,6 +62,9 @@ int host_display_present_capture(const char *dir, unsigned width, unsigned heigh
 int host_display_running(void);
 int host_display_failed(void);
 int host_input_fast(void);
+int host_input_speed_toggle(void);
+int host_input_no_encounters_toggle(void);
+int host_input_battle_assist_toggle(void);
 unsigned host_input_disc(void);
 void host_input_dualshock(int enabled);
 int host_input_controller(unsigned port);

@@ -13,7 +13,8 @@ static const struct { const char *label, *value[4]; int persistent; } copy[] = {
     {"Memory card",{"changed: reopen the save menu"},0}, {"RA strict",{"loading states is off"},0},
     {"RA strict",{"fast-forward is off"},0}, {"Fast forward",{""},1}, {"Disc",{"%u"},0},
     {"Controller",{"connected: %s"},0}, {"Controller",{"disconnected"},0}, {"Save states",{"not available"},0},
-    {"Screenshot",{"saved"},0}, {"Screenshot failed",{"%.48s"},0}
+    {"Screenshot",{"saved"},0}, {"Screenshot failed",{"%.48s"},0},
+    {"Speed",{"1x","3x"},0}, {"No encounters",{"Off","On"},0}, {"Battle assist",{"Off","On"},0}
 };
 static struct {
     int enabled, window, persistent, replacement, dirty, width, height;
@@ -25,6 +26,10 @@ static struct {
     unsigned count;
     host_osd_panel_t panel;
     uint8_t *pixels;
+    int booster_speed, booster_no_enc, booster_assist;
+    int booster_dirty, booster_width, booster_height;
+    host_osd_panel_t booster_panel;
+    uint8_t *booster_pixels;
 } osd = {.enabled=1};
 
 static double now(void) {
@@ -38,7 +43,12 @@ static uint8_t opacity(void) {
     if (!osd.persistent && age>=1920) a=(2220-age)/300;
     return a<=0 ? 0 : a>=1 ? 255 : (uint8_t)(a*255+0.5);
 }
-static void shutdown_locked(void) { free(osd.pixels); memset(&osd,0,sizeof(osd)); osd.enabled=1; }
+static void shutdown_locked(void) {
+    free(osd.pixels);
+    free(osd.booster_pixels);
+    memset(&osd,0,sizeof(osd));
+    osd.enabled=1;
+}
 static void configure_locked(int enabled,const char *tests) {
     const char *p=tests;
     shutdown_locked(); osd.enabled=enabled;
@@ -89,6 +99,8 @@ static void event_locked(unsigned event,unsigned number,const char *detail) {
     if (event>=sizeof(copy)/sizeof(copy[0])) return;
     format=copy[event].value[0];
     if (event==HOST_OSD_CRT) snprintf(value,sizeof(value),"%s",copy[event].value[number<4 ? number : 0]);
+    else if (event==HOST_OSD_SPEED || event==HOST_OSD_NO_ENCOUNTERS || event==HOST_OSD_BATTLE_ASSIST)
+        snprintf(value,sizeof(value),"%s",copy[event].value[number!=0]);
     else if (event==HOST_OSD_SLOT) snprintf(value,sizeof(value),copy[event].value[detail!=NULL],number);
     else if (event==HOST_OSD_CONNECTED || event==HOST_OSD_SCREENSHOT_FAILED) snprintf(value,sizeof(value),format,detail ? detail : "?");
     else if (event==HOST_OSD_SAVE_FAILED || event==HOST_OSD_LOAD_FAILED)
@@ -184,6 +196,154 @@ static const host_osd_panel_t *panel_locked(int width,int height,host_rect_t are
     return &osd.panel;
 }
 
+static void booster_text(uint8_t *dst,int stride,const char *s,int x,int y,int width,int height,int scale,const uint32_t *font,const uint8_t color[3]) {
+    int row,col,dy,dx;
+    while (*s) {
+        unsigned c=glyph(&s);
+        for (row=0;row<height;++row) for (col=0;col<width;++col) if (font[c*height+row]&(0x80000000u>>col))
+            for (dy=0;dy<scale;++dy) for (dx=0;dx<scale;++dx) {
+                uint8_t *p=dst+((size_t)(y+row*scale+dy)*stride+x+col*scale+dx)*4;
+                memcpy(p,color,3); p[3]=255;
+            }
+        x+=width*scale;
+    }
+}
+static int in_triangle(float px,float py,float ax,float ay,float bx,float by,float cx,float cy) {
+    float c1=(bx-ax)*(py-ay)-(by-ay)*(px-ax);
+    float c2=(cx-bx)*(py-by)-(cy-by)*(px-bx);
+    float c3=(ax-cx)*(py-cy)-(ay-cy)*(px-cx);
+    return (c1>=0 && c2>=0 && c3>=0) || (c1<=0 && c2<=0 && c3<=0);
+}
+static int booster_icon_hit(int kind,float u,float v) {
+    if (kind==0) {
+        /* Double fast-forward chevrons (>>). */
+        return in_triangle(u,v, 0.08f,0.18f, 0.50f,0.50f, 0.08f,0.82f) ||
+               in_triangle(u,v, 0.48f,0.18f, 0.92f,0.50f, 0.48f,0.82f);
+    }
+    if (kind==1) {
+        /* Prohibition circle with 45-degree diagonal slash. */
+        float dx=u-0.5f, dy=v-0.5f, d2=dx*dx+dy*dy;
+        if (d2<=0.42f*0.42f && d2>=0.28f*0.28f) return 1;
+        if (d2<=0.34f*0.34f) {
+            float diff=dx-dy;
+            if (diff<0) diff=-diff;
+            if (diff<=0.10f) return 1;
+        }
+        return 0;
+    }
+    /* Crisp lightning bolt for Battle Assist. */
+    return in_triangle(u,v, 0.58f,0.06f, 0.18f,0.55f, 0.52f,0.55f) ||
+           in_triangle(u,v, 0.48f,0.45f, 0.82f,0.45f, 0.42f,0.94f);
+}
+static void draw_booster_pill(uint8_t *dst,int stride,int x0,int y0,int pw,int ph,int kind,const char *label,
+                              int cw_raw,int ch_raw,int scale,const uint32_t *font,const uint8_t accent[3]) {
+    static const uint8_t fg[3]={244,246,250};
+    int ch=ch_raw*scale, padx=(int)(ch*0.55f+0.5f), pady=(ph-ch)/2;
+    int icon_s=ch, icon_gap=(int)(ch*0.35f+0.5f);
+    float r=ph*0.32f, border=ch>=32 ? 2.0f : 1.25f;
+    for (int ly=0;ly<ph;++ly) for (int lx=0;lx<pw;++lx) {
+        int inside=0, edge=0;
+        for (int sy=0;sy<4;++sy) for (int sx=0;sx<4;++sx) {
+            float px=lx+(sx+0.5f)/4.0f, py=ly+(sy+0.5f)/4.0f;
+            float dx=px<r ? r-px : px>pw-r ? px-(pw-r) : 0;
+            float dy=py<r ? r-py : py>ph-r ? py-(ph-r) : 0;
+            if (dx*dx+dy*dy<=r*r) {
+                ++inside;
+                float ir=r-border; if (ir<0) ir=0;
+                float idx=px<r ? r-px : px>pw-r ? px-(pw-r) : 0;
+                float idy=py<r ? r-py : py>ph-r ? py-(ph-r) : 0;
+                int in_inner=(px>=border && px<=pw-border && py>=border && py<=ph-border && idx*idx+idy*idy<=ir*ir);
+                if (!in_inner) ++edge;
+            }
+        }
+        if (!inside) continue;
+        uint8_t *p=dst+((size_t)(y0+ly)*stride+x0+lx)*4;
+        /* Dark glass fill with subtle colored rim. */
+        int bg_a=(204*inside+8)/16;
+        int br_r=(14*10+accent[0]*6)/16, br_g=(16*10+accent[1]*6)/16, br_b=(22*10+accent[2]*6)/16;
+        p[0]=(uint8_t)((14*(inside-edge)+br_r*edge)/inside);
+        p[1]=(uint8_t)((16*(inside-edge)+br_g*edge)/inside);
+        p[2]=(uint8_t)((22*(inside-edge)+br_b*edge)/inside);
+        p[3]=(uint8_t)bg_a;
+    }
+    /* 4x4 supersampled vector icon on the left side of the pill. */
+    int ix0=x0+padx, iy0=y0+pady;
+    for (int ly=0;ly<icon_s;++ly) for (int lx=0;lx<icon_s;++lx) {
+        int hits=0;
+        for (int sy=0;sy<4;++sy) for (int sx=0;sx<4;++sx) {
+            float u=(lx+(sx+0.5f)/4.0f)/(float)icon_s;
+            float v=(ly+(sy+0.5f)/4.0f)/(float)icon_s;
+            hits+=booster_icon_hit(kind,u,v);
+        }
+        if (!hits) continue;
+        uint8_t *p=dst+((size_t)(iy0+ly)*stride+ix0+lx)*4;
+        p[0]=(uint8_t)((p[0]*(16-hits)+accent[0]*hits+8)/16);
+        p[1]=(uint8_t)((p[1]*(16-hits)+accent[1]*hits+8)/16);
+        p[2]=(uint8_t)((p[2]*(16-hits)+accent[2]*hits+8)/16);
+        {
+            int na=p[3]+((255-p[3])*hits+8)/16;
+            p[3]=(uint8_t)(na>255 ? 255 : na);
+        }
+    }
+    booster_text(dst,stride,label,x0+padx+icon_s+icon_gap,y0+pady,cw_raw,ch_raw,scale,font,fg);
+}
+static void boosters_locked(int speed_3x,int no_encounters,int battle_assist) {
+    int s=!!speed_3x, n=!!no_encounters, b=!!battle_assist;
+    if (osd.booster_speed!=s || osd.booster_no_enc!=n || osd.booster_assist!=b) {
+        osd.booster_speed=s; osd.booster_no_enc=n; osd.booster_assist=b;
+        osd.booster_dirty=1;
+    }
+}
+static const host_osd_panel_t *booster_panel_locked(int width,int height,host_rect_t area) {
+    static const int widths[]={8,12,16,12,32};
+    static const uint8_t colors[3][3]={{78,214,255},{255,196,72},{112,236,148}};
+    static const char *const labels[3]={"3x","NO ENC","ASSIST"};
+    const uint32_t *fonts[]={&spleen_16[0][0],&spleen_24[0][0],&spleen_32[0][0],&spleen_24[0][0],&spleen_64[0][0]};
+    int active[3]={osd.booster_speed,osd.booster_no_enc,osd.booster_assist};
+    int count=active[0]+active[1]+active[2];
+    int margin;
+    if (!osd.enabled || !count || width<=0 || height<=0) return NULL;
+    margin=(int)(area.h*0.03+0.5);
+    if (!osd.booster_dirty && width==osd.booster_width && height==osd.booster_height && osd.booster_pixels) {
+        osd.booster_panel.x=area.x+margin;
+        osd.booster_panel.y=area.y+area.h-margin-osd.booster_panel.h;
+        return &osd.booster_panel;
+    }
+    int base=font_index(height);
+    int chosen=base>0 ? base-1 : 0;
+    int ch=cell_heights[chosen], scale=chosen==3 ? 2 : 1, cw=widths[chosen]*scale;
+    int padx=(int)(ch*0.55f+0.5f), pady=(int)(ch*0.32f+0.5f);
+    int icon_s=ch, icon_gap=(int)(ch*0.35f+0.5f);
+    int gap=ch/2; if (gap<6) gap=6;
+    int ph=ch+2*pady;
+    int pill_w[3]={0,0,0}, total_w=0, drawn=0;
+    for (int i=0;i<3;++i) if (active[i]) {
+        pill_w[i]=2*padx+icon_s+icon_gap+cells(labels[i])*cw;
+        total_w+=pill_w[i]+(drawn ? gap : 0);
+        ++drawn;
+    }
+    free(osd.booster_pixels);
+    osd.booster_pixels=calloc((size_t)total_w*(size_t)ph,4);
+    osd.booster_panel.rgba=osd.booster_pixels;
+    if (!osd.booster_pixels) { osd.booster_dirty=1; return NULL; }
+    osd.booster_panel.w=total_w; osd.booster_panel.h=ph;
+    osd.booster_panel.cell_w=cw; osd.booster_panel.cell_h=ch;
+    osd.booster_panel.opacity=255;
+    osd.booster_panel.x=area.x+margin;
+    osd.booster_panel.y=area.y+area.h-margin-ph;
+    {
+        int x=0;
+        for (int i=0;i<3;++i) if (active[i]) {
+            draw_booster_pill(osd.booster_pixels,total_w,x,0,pill_w[i],ph,i,labels[i],
+                              widths[chosen],ch/scale,scale,fonts[chosen],colors[i]);
+            x+=pill_w[i]+gap;
+        }
+    }
+    osd.booster_width=width; osd.booster_height=height; osd.booster_dirty=0;
+    ++osd.booster_panel.revision;
+    return &osd.booster_panel;
+}
+
 /* Smooth motion presents from a thread of its own, which reads what the game
  * thread posts: every entry takes one lock, and a renderer holds it while it
  * uses the panel it was given. */
@@ -209,4 +369,10 @@ const char *host_osd_showing(void) { const char *s; host_osd_hold(1); s=showing_
 void host_osd_clear(unsigned event) { host_osd_hold(1); clear_locked(event); host_osd_hold(0); }
 const host_osd_panel_t *host_osd_panel(int width,int height,host_rect_t area) {
     const host_osd_panel_t *p; host_osd_hold(1); p=panel_locked(width,height,area); host_osd_hold(0); return p;
+}
+void host_osd_boosters(int speed_3x,int no_encounters,int battle_assist) {
+    host_osd_hold(1); boosters_locked(speed_3x,no_encounters,battle_assist); host_osd_hold(0);
+}
+const host_osd_panel_t *host_osd_booster_panel(int width,int height,host_rect_t area) {
+    const host_osd_panel_t *p; host_osd_hold(1); p=booster_panel_locked(width,height,area); host_osd_hold(0); return p;
 }

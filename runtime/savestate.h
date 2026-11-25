@@ -3,6 +3,10 @@
 #include "cpu.h"
 #include <stdio.h>
 #define SAVESTATE_MAX (16u * 1024u * 1024u)
+/* Informational mode bit recorded in save states created after gameplay
+ * boosters were enabled; compatible across clean/tainted sessions and
+ * propagates RetroAchievements lockout on load. */
+#define SAVESTATE_MODE_BOOSTERS_TAINTED (1u << 16)
 typedef struct {
     char build[64];
     uint32_t exe, disc, modes;

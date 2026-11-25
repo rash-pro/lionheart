@@ -167,6 +167,7 @@ Controllers map to the original pad. Keyboard and hotkeys:
 | Previous / next state slot | F6 / F8 | Guide+Left / Guide+Right |
 | Change disc | F1–F4 | Guide+Select |
 | Fast forward (hold) | Tab | Guide+R2 |
+| 3× speed (toggle) | T | Guide+L2 |
 | RetroAchievements | F10 | Guide+Cross |
 | Screenshot | F12 | Guide+Square |
 | CRT preset / fullscreen | F9 / F11 | Guide+Triangle / Guide+Start |
@@ -203,6 +204,14 @@ crt=tv
 | `msaa` | `1`, `2`, `4`, `8` |
 | `crt` | `off`, `pvm`, `tv`, `arcade` (Vulkan only) |
 | `smooth-motion` | `0`, `1` (experimental, opt-in; fields and world map only, not battles yet; may show visual artifacts in some scenes) |
+| `speed-boost` | `0`, `1` (3× capped speed toggle; `T` or `Guide+L2`) |
+| `no-encounters` | `0`, `1` (disables random battles on fields and world map; **permanently disables RetroAchievements**) |
+| `battle-assist` | `0`, `1` (full HP, full ATB, and Limit Breaks ready in battle; **permanently disables RetroAchievements**) |
+| `hd-font` | `off`, `builtin` (OFL Barlow), `custom` (Vulkan only) |
+| `hd-font-path` | Custom `.ttf`/`.otf` font or `.png` atlas for `hd-font=custom` |
+| `hd-textures` | `0`, `1` (Vulkan VRAM texture replacement from `textures-dir`) |
+| `textures-dir`, `dump-textures` | External HD texture pack folder / optional VRAM texture dump folder |
+| `hd-models`, `models-dir` | `0`, `1` and folder with external glTF (`.glb`) HD model packs (see [docs/enhancements.md](docs/enhancements.md)) |
 | `scale-mode` | `aspect`, `integer`, `stretch`, `aspect-crop` |
 | `filter` | `nearest`, `linear` |
 | `fullscreen` | `0`, `1` |

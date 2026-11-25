@@ -25,11 +25,11 @@
 static struct {
     SDL_Window *window;
     SDL_Renderer *renderer;
-    SDL_Texture *texture, *osd_texture;
+    SDL_Texture *texture, *osd_texture, *booster_osd_texture;
     SDL_Surface *surface;
     const char *presented;
     unsigned present_w, present_h;
-    unsigned osd_revision;
+    unsigned osd_revision, booster_osd_revision;
     uint64_t osd_frame;
     int initialized, video, width, height, quit, failed;
     unsigned long long frame;
@@ -45,7 +45,7 @@ static struct {
     SDL_JoystickID controller_ids[2];
     uint16_t controller_buttons[2], controller_axes[2], consumed[2];
     uint8_t guide[2], pad_fast[2], guide_chord[2];
-    int hotkey_off;
+    int hotkey_off, speed_toggle, no_encounters_toggle, battle_assist_toggle;
     unsigned discs, disc_mask, inserted;
     uint8_t sticks[2][4];
     int led_state[2];
@@ -161,6 +161,21 @@ uint16_t host_input_buttons(unsigned port) {
 }
 
 int host_input_fast(void) { return !host.ra_strict && (host.keys[SDL_SCANCODE_TAB] || host.pad_fast[0] || host.pad_fast[1]); }
+int host_input_speed_toggle(void) {
+    int toggled = host.speed_toggle;
+    host.speed_toggle = 0;
+    return toggled;
+}
+int host_input_no_encounters_toggle(void) {
+    int toggled = host.no_encounters_toggle;
+    host.no_encounters_toggle = 0;
+    return toggled;
+}
+int host_input_battle_assist_toggle(void) {
+    int toggled = host.battle_assist_toggle;
+    host.battle_assist_toggle = 0;
+    return toggled;
+}
 
 unsigned host_input_disc(void) {
     unsigned disc = host.disc_request;
@@ -202,7 +217,7 @@ void host_display_hotkeys(int off,unsigned discs) {
 void host_display_disc_mask(unsigned mask) { host.disc_mask=mask & 15; }
 void host_display_disc(unsigned inserted) { host.inserted=inserted; }
 static int action(unsigned key,int down) {
-    if (host.ra_strict && down && (key==SDL_SCANCODE_F7 || key==SDL_SCANCODE_TAB)) {
+    if (host.ra_strict && down && (key==SDL_SCANCODE_F7 || key==SDL_SCANCODE_TAB || key==SDL_SCANCODE_T)) {
         fprintf(stderr,"RA mode: blocked %s\n",key==SDL_SCANCODE_F7 ? "save-state loading (F7)" : "fast-forward (Tab)");
         host_osd_event(key==SDL_SCANCODE_F7 ? HOST_OSD_RA_LOAD : HOST_OSD_RA_FAST,0,NULL);
         return 0;
@@ -212,6 +227,9 @@ static int action(unsigned key,int down) {
         else if (!host_input_fast()) host_osd_clear(HOST_OSD_FAST);
     }
     if (!down) return 1;
+    if (key==SDL_SCANCODE_T) host.speed_toggle=1;
+    if (key==SDL_SCANCODE_Y) host.no_encounters_toggle=1;
+    if (key==SDL_SCANCODE_U) host.battle_assist_toggle=1;
 #ifdef FF8_GUI
     if (key==SDL_SCANCODE_F10 && host_gui_enabled()) host_gui_request(HOST_GUI_ACHIEVEMENTS);
 #endif
@@ -514,23 +532,28 @@ static void soft_screenshot(host_rect_t frame) {
         free(rgb); host_screenshot_fail("cannot read");
     } else host_screenshot_submit(frame.w,frame.h,HOST_SCREENSHOT_RGB,rgb,read_pixels,free);
 }
+static int soft_osd_draw(const host_osd_panel_t *panel,SDL_Texture **texture,unsigned *revision) {
+    if (!panel) return 1;
+    if (!*texture || *revision!=panel->revision) {
+        SDL_DestroyTexture(*texture);
+        *texture=SDL_CreateTexture(host.renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_STREAMING,panel->w,panel->h);
+        if (!*texture || SDL_SetTextureBlendMode(*texture,SDL_BLENDMODE_BLEND) ||
+            SDL_SetTextureScaleMode(*texture,SDL_ScaleModeNearest) ||
+            SDL_UpdateTexture(*texture,NULL,panel->rgba,panel->w*4)) { fail(SDL_GetError()); return 0; }
+        *revision=panel->revision;
+    }
+    SDL_Rect rect={panel->x,panel->y,panel->w,panel->h};
+    if (SDL_SetTextureAlphaMod(*texture,panel->opacity) ||
+        SDL_RenderCopy(host.renderer,*texture,NULL,&rect)) { fail(SDL_GetError()); return 0; }
+    return 1;
+}
 static int soft_osd(host_viewport_t view,int rw,int rh) {
-        {
-            const host_osd_panel_t *panel=host_osd_panel(rw,rh,host_osd_area(view));
-            if (panel) {
-                if (!host.osd_texture || host.osd_revision!=panel->revision) {
-                    SDL_DestroyTexture(host.osd_texture);
-                    host.osd_texture=SDL_CreateTexture(host.renderer,SDL_PIXELFORMAT_RGBA32,SDL_TEXTUREACCESS_STREAMING,panel->w,panel->h);
-                    if (!host.osd_texture || SDL_SetTextureBlendMode(host.osd_texture,SDL_BLENDMODE_BLEND) ||
-                        SDL_SetTextureScaleMode(host.osd_texture,SDL_ScaleModeNearest) ||
-                        SDL_UpdateTexture(host.osd_texture,NULL,panel->rgba,panel->w*4)) { fail(SDL_GetError()); return 0; }
-                    host.osd_revision=panel->revision;
-                }
-                SDL_Rect rect={panel->x,panel->y,panel->w,panel->h};
-                if (SDL_SetTextureAlphaMod(host.osd_texture,panel->opacity) ||
-                    SDL_RenderCopy(host.renderer,host.osd_texture,NULL,&rect)) { fail(SDL_GetError()); return 0; }
-            }
-        }
+    host_rect_t area=host_osd_area(view);
+    if (!soft_osd_draw(host_osd_panel(rw,rh,area),&host.osd_texture,&host.osd_revision)) return 0;
+#ifdef FF8_GUI
+    if (!host_gui_visible())
+#endif
+    if (!soft_osd_draw(host_osd_booster_panel(rw,rh,area),&host.booster_osd_texture,&host.booster_osd_revision)) return 0;
     return 1;
 }
 #ifdef FF8_GUI
@@ -1181,6 +1204,7 @@ int host_display_shutdown(gpu_t *g) {
 #endif
     host_osd_shutdown();
     SDL_DestroyTexture(host.osd_texture);
+    SDL_DestroyTexture(host.booster_osd_texture);
     SDL_DestroyTexture(host.texture); SDL_DestroyRenderer(host.renderer); SDL_FreeSurface(host.surface); SDL_DestroyWindow(host.window);
     for (port = 0; port < 2; ++port) if (host.controllers[port]) SDL_GameControllerClose(host.controllers[port]);
     if (host.video) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);

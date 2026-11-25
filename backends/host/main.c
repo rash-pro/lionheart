@@ -15,11 +15,14 @@
 #ifdef FF8_VULKAN
 #include "vulkan_renderer.h"
 #include "movies.h"
+#include "ff8_ram_layout.h"
 #endif
 #include "sio.h"
 #include "audio.h"
 #include "input.h"
 #include "options.h"
+#include "boosters.h"
+#include "ff8_mod_import.h"
 #ifdef FF8_GUI
 #include "gui.h"
 #define HOST_GUI_CLEANUP() host_gui_shutdown()
@@ -78,6 +81,8 @@ static char native_data[4096];
 static void native_poll(void);
 #endif
 static host_input_t input;
+static host_boosters_t boosters;
+static host_options_t *active_options;
 static host_state_bridge_t *state_bridge;
 static host_achievements_t *achievements;
 static int pgxp_mode;
@@ -121,7 +126,31 @@ static void gui_changed(void *context, const char *key, int overlay) {
         host_display_configure(o->fullscreen,o->scale_mode,o->linear);
     else if (!strcmp(key,"crt")) host_display_crt(o->crt);
     else if (!strcmp(key,"smooth-motion")) { smooth_motion = o->smooth_motion; smooth_pending = 1; }
-    else if (!strcmp(key,"osd")) host_osd_configure(o->osd,o->osd_tests);
+    else if (!strcmp(key,"speed-boost")) {
+        host_boosters_set_speed(&boosters, o->speed_boost);
+        host_audio_speed(host_boosters_speed_scale(&boosters));
+        host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+    } else if (!strcmp(key,"no-encounters") || !strcmp(key,"battle-assist")) {
+        host_boosters_set_gameplay(&boosters, o->no_encounters, o->battle_assist);
+        host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+        if (host_boosters_tainted(&boosters)) {
+            host_ra_lockout();
+            host_states_taint();
+        }
+    }
+#ifdef FF8_VULKAN
+    else if (!strcmp(key,"hd-font") || !strcmp(key,"hd-font-path") ||
+             !strcmp(key,"hd-textures") || !strcmp(key,"textures-dir"))
+        host_gpu_hd_assets(o->hd_font, o->hd_font_path, o->hd_textures, o->textures_dir, o->dump_textures);
+    else if (!strcmp(key,"hd-models") || !strcmp(key,"models-dir"))
+        host_gpu_hd_models(o->hd_models, o->models_dir);
+    else if (!strcmp(key,"hd-reload"))
+        host_gpu_hd_reload();
+#endif
+    else if (!strcmp(key,"osd")) {
+        host_osd_configure(o->osd,o->osd_tests);
+        host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+    }
     else if (!strcmp(key,"ra")) host_ra_enable(o->ra);
     else if (!strcmp(key,"ra-notify")) host_ra_notify(o->ra_notify);
     else if (!strcmp(key,"screenshot-dir")) host_screenshot_configure(o->screenshot_dir,o->screenshot_at);
@@ -213,9 +242,20 @@ static unsigned gui_native_failures(void *context, host_gui_failure_t *rows, uns
     return (unsigned)total;
 }
 #endif
+static int gui_mod_import_start(void *context, const char *const *discs, unsigned count,
+                                const char *mod_path, const char *textures_out,
+                                const char *models_out, const char *movies_out) {
+    (void)context;
+    return host_mod_import_start_async(discs, count, mod_path, textures_out, models_out, movies_out);
+}
+static void gui_mod_import_poll(void *context, host_mod_import_status_t *out) {
+    (void)context;
+    host_mod_import_poll(out);
+}
 static host_gui_services_t gui_services(gui_session_t *session) {
     host_gui_services_t services = {session,gui_changed,gui_action,gui_state_slot,gui_state_available,
-        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive,NULL,NULL,NULL,NULL};
+        gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive,NULL,NULL,NULL,NULL,
+        gui_mod_import_start,gui_mod_import_poll};
 #ifdef FF8_PLAYER
     services.native = gui_native; services.native_install = gui_native_install;
     services.native_cancel = gui_native_cancel; services.native_failures = gui_native_failures;
@@ -252,6 +292,9 @@ static host_gui_result_t gui_shell_display(host_options_t *o) {
 static void restored(cpu_t *c, unsigned disc) {
 #ifdef FF8_PGXP
     pgxp_bind(c->hw->gpu,(pgxp_mode_t)pgxp_mode);
+#ifdef FF8_VULKAN
+    host_gpu_hd_models_rebind();
+#endif
 #else
     (void)pgxp_mode;
 #endif
@@ -268,7 +311,12 @@ static void restored(cpu_t *c, unsigned disc) {
     if (disc) host_native_disc(disc);
 #endif
     if (disc && disc<=disc_count && disc_paths[disc-1]) host_ra_disc(disc_paths[disc-1]);
+    if (host_states_tainted()) {
+        host_boosters_mark_tainted(&boosters);
+        host_ra_lockout();
+    }
     host_ra_reset();
+    host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
     /* Local unlock progress lives outside the guest session and survives loads. */
 }
 
@@ -361,7 +409,7 @@ static unsigned smooth_idle;
 static uint64_t smooth_pictures;
 static cpu_t *smooth_cpu;
 static void smooth_present(cpu_t *c) {
-    int whole = host_input_fast() || (fast && !headless_run);
+    int whole = host_input_fast() || boosters.speed_boost || (fast && !headless_run);
 #ifdef FF8_VULKAN
     if (host_display_smoothing()) {
         if (c != smooth_cpu) { smooth_cpu = c; host_display_park(1); host_display_smooth(smooth_draw, c); host_display_park(0); }
@@ -378,6 +426,69 @@ static void smooth_present(cpu_t *c) {
      * timeline; fast-forward shows the game as it is. */
     host_present(host_frame_present_draw(c, 0, whole));
 }
+#ifdef FF8_VULKAN
+/* The game renders the battle party's names on the CPU. The HD font tells the
+ * rendered strips apart with the names the game can show, read here and never
+ * written; it checks them against VRAM, so stale or foreign bytes change nothing. */
+static void hd_font_names(const cpu_t *c) {
+    static char sent[(FF8_NAME_SIZE + 1) * (2 + FF8_KERNEL_NAME_COUNT)];
+    static size_t sent_size;
+    static const unsigned saved[2] = {FF8_SAVEMAP + FF8_NAME_SQUALL, FF8_SAVEMAP + FF8_NAME_RINOA};
+    char names[sizeof(sent)];
+    size_t size = 0;
+    unsigned i, at = FF8_KERNEL_NAMES;
+    for (i = 0; i < 2 + FF8_KERNEL_NAME_COUNT; ++i) {
+        const uint8_t *text = c->ram + (i < 2 ? saved[i] : at);
+        unsigned length = 0;
+        while (length < FF8_NAME_SIZE && text[length]) ++length;
+        if (i >= 2) {
+            /* The kernel's names follow one another; anything else ends the list. */
+            if (!length || text[length]) break;
+            at += length + 1;
+        }
+        memcpy(names + size, text, length);
+        names[size + length] = 0;
+        size += length + 1;
+    }
+    if (size == sent_size && !memcmp(names, sent, size)) return;
+    memcpy(sent, names, size);
+    sent_size = size;
+    host_gpu_hd_names(names, size);
+}
+#endif
+static void toggle_gameplay_booster_hotkey(const char *key, int is_battle_assist) {
+    int current = is_battle_assist ? boosters.battle_assist : boosters.no_encounters;
+    int next = !current;
+    unsigned osd_event = is_battle_assist ? HOST_OSD_BATTLE_ASSIST : HOST_OSD_NO_ENCOUNTERS;
+    if (next) {
+        const host_ra_status_t *st = host_ra_status();
+        int ra_active = !host_ra_locked() && ((active_options && active_options->ra) ||
+            st->state == HOST_RA_CONNECTED || st->state == HOST_RA_OFFLINE || st->state == HOST_RA_SIGNING_IN);
+#ifdef FF8_GUI
+        if (ra_active && host_gui_enabled()) {
+            host_gui_request_booster_lockout(key);
+            return;
+        }
+#else
+        (void)key; (void)ra_active;
+#endif
+        host_ra_lockout();
+        host_states_taint();
+        if (active_options && active_options->ra) {
+            active_options->ra = 0;
+            host_ra_enable(0);
+        }
+    }
+    if (is_battle_assist) {
+        host_boosters_set_gameplay(&boosters, boosters.no_encounters, next);
+        if (active_options) active_options->battle_assist = next;
+    } else {
+        host_boosters_set_gameplay(&boosters, next, boosters.battle_assist);
+        if (active_options) active_options->no_encounters = next;
+    }
+    host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+    host_osd_event(osd_event, (unsigned)next, NULL);
+}
 static void present_frame(cpu_t *c, void *context) {
     (void)context;
 #ifdef FF8_PLAYER
@@ -390,7 +501,21 @@ static void present_frame(cpu_t *c, void *context) {
     host_audio_pace(!!(gpu_status(c->hw->gpu) & (1u << 20)), fast || host_input_fast());
     host_display_events();
     host_display_input_delivered();
+    if (host_input_speed_toggle()) {
+        int next = !boosters.speed_boost;
+        host_boosters_set_speed(&boosters, next);
+        if (active_options) active_options->speed_boost = next;
+        host_audio_speed(host_boosters_speed_scale(&boosters));
+        host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+        host_osd_event(HOST_OSD_SPEED, (unsigned)next, NULL);
+    }
+    if (host_input_no_encounters_toggle()) toggle_gameplay_booster_hotkey("no-encounters", 0);
+    if (host_input_battle_assist_toggle()) toggle_gameplay_booster_hotkey("battle-assist", 1);
     host_input_sync(c, &input);
+    host_boosters_frame(&boosters, c);
+#ifdef FF8_VULKAN
+    hd_font_names(c);
+#endif
     if (state_bridge) host_state_bridge_frame(state_bridge, c, c->hw->vblanks);
     if (achievements) host_achievements_frame(achievements, c);
     host_ra_frame(c);
@@ -612,6 +737,7 @@ static void print_usage(FILE *out, const char *program) {
     fprintf(out, "Disc identity: --savestate-verify-disc quick|full (default quick, cached at image insertion)\n");
     fprintf(out, "GPU options: --renderer soft|vulkan --internal-scale 1..8 --true-color --msaa 1|2|4|8 --pgxp off|vertex|perspective --dump-scaled-frames DIR --gpu-timings CSV\n");
     fprintf(out, "Movie options: --movies DIR --movie-stats CSV (Vulkan only; original guest audio)\n");
+    fprintf(out, "Mod importer: --import-mods PATH (repeatable; converts FF8 PC/FFNx .iroj/.iro or folder into --textures-dir / --models-dir)\n");
     fprintf(out, "Input options: --card1 PATH --card2 PATH --input-script FILE\n");
     fprintf(out, "Controller options: --pad digital|dualshock --rumble 0|1 (scripts and keyboard stay digital)\n");
     fprintf(out, "Presentation: --fullscreen [0|1] (F11) --windowed --scale-mode aspect|integer|stretch|aspect-crop --filter nearest|linear --config PATH\n");
@@ -665,6 +791,8 @@ int main(int argc, char **argv) {
     int headless = 0;
     const char *renderer = "soft", *scaled_frames = NULL, *gpu_timings = NULL, *presented_frames = NULL;
     const char *movies = NULL, *movie_stats = NULL;
+    const char *import_mods[16] = {NULL};
+    unsigned import_mod_count = 0;
     unsigned internal_scale = 1, msaa = 1;
     int true_color = 0;
     const char *pgxp = "off";
@@ -772,6 +900,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--disc") && i + 1 < argc) {
             if (disc_count == 4) { fprintf(stderr, "At most four --disc images are supported\n"); free(c); return 2; }
             disc_paths[disc_count++] = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--import-mods") && i + 1 < argc) {
+            if (import_mod_count == 16) { fprintf(stderr, "At most 16 --import-mods paths are supported\n"); free(c); return 2; }
+            import_mods[import_mod_count++] = argv[++i];
         }
         else if (!strcmp(argv[i], "--card1") && i + 1 < argc) card_paths[0] = argv[++i];
         else if (!strcmp(argv[i], "--card2") && i + 1 < argc) card_paths[1] = argv[++i];
@@ -920,7 +1052,38 @@ int main(int argc, char **argv) {
     }
 #endif
     if (!*data_dir) host_player_data(data_dir,sizeof(data_dir));
+    atexit(host_mod_import_shutdown);
+    if (import_mod_count > 0) {
+        char default_tex[4096] = {0}, default_mod[4096] = {0};
+        const char *tex_out = *options.textures_dir ? options.textures_dir : NULL;
+        const char *mod_out = *options.models_dir ? options.models_dir : NULL;
+        const char *mov_out = *options.movies ? options.movies : NULL;
+        host_mod_import_status_t st;
+        if (!tex_out && *data_dir) {
+            snprintf(default_tex, sizeof(default_tex), "%s/textures-hd", data_dir);
+            tex_out = default_tex;
+        }
+        if (!mod_out && *data_dir) {
+            snprintf(default_mod, sizeof(default_mod), "%s/models-hd", data_dir);
+            mod_out = default_mod;
+        }
+        if (!host_mod_import_run(disc_paths, disc_count, import_mods, import_mod_count,
+                                 tex_out, mod_out, mov_out, &st)) {
+            fprintf(stderr, "Mod import failed: %s\n", *st.error ? st.error : "unknown error");
+            free(c); return 2;
+        }
+        printf("Imported FF8 mods: %u textures (%u failed), %u models, %u movies\n",
+               st.textures_written, st.failed, st.models_written, st.movies_written);
+        if (tex_out) printf("  Textures: %s\n", tex_out);
+        if (mod_out) printf("  Models:   %s\n", mod_out);
+        if (mov_out && st.movies_written) printf("  Movies:   %s\n", mov_out);
+        free(c); return 0;
+    }
+    active_options = &options;
+    host_boosters_init(&boosters, options.speed_boost, options.no_encounters, options.battle_assist);
+    if (host_boosters_tainted(&boosters)) options.ra = 0;
     host_ra_configure(data_dir,options.ra,options.ra_notify);
+    if (host_boosters_tainted(&boosters)) host_ra_lockout();
     atexit(host_ra_shutdown);
 #ifdef FF8_PLAYER
     snprintf(native_data,sizeof(native_data),"%s",data_dir);
@@ -1037,6 +1200,8 @@ int main(int argc, char **argv) {
     if (!host_gpu_configure(renderer, internal_scale, true_color, msaa, scaled_frames, gpu_timings)) {
         fprintf(stderr, "Invalid GPU options (enhancements require --renderer vulkan)\n"); free(c); HOST_GUI_CLEANUP(); return 2;
     }
+    host_gpu_hd_assets(options.hd_font, options.hd_font_path, options.hd_textures, options.textures_dir, options.dump_textures);
+    host_gpu_hd_models(options.hd_models, options.models_dir);
     host_gpu_present_capture(presented_frames, (unsigned)(options.present_size & 0xffffffffu), (unsigned)(options.present_size >> 32));
 #else
     if (strcmp(renderer, "soft") || internal_scale != 1 || true_color || msaa != 1 || scaled_frames || gpu_timings || movies || movie_stats) {
@@ -1061,6 +1226,9 @@ int main(int argc, char **argv) {
 #endif
 #ifdef FF8_PGXP
     pgxp_bind(hw_get(c)->gpu, !strcmp(pgxp, "vertex") ? PGXP_VERTEX : !strcmp(pgxp, "perspective") ? PGXP_PERSPECTIVE : PGXP_OFF);
+#ifdef FF8_VULKAN
+    host_gpu_hd_models_rebind();
+#endif
 #endif
     smooth_motion = options.smooth_motion; headless_run = headless;
     smooth_fractions = !strcmp(renderer, "vulkan") && internal_scale > 1;
@@ -1127,6 +1295,11 @@ int main(int argc, char **argv) {
         sio_destroy(c);
         host_display_shutdown(NULL); fclose(log); hw_destroy(c); free(c); HOST_GUI_CLEANUP(); return 2;
     }
+    host_boosters_set_speed(&boosters, options.speed_boost);
+    host_boosters_set_gameplay(&boosters, options.no_encounters, options.battle_assist);
+    host_audio_speed(host_boosters_speed_scale(&boosters));
+    host_osd_boosters(boosters.speed_boost, boosters.no_encounters, boosters.battle_assist);
+    if (host_boosters_tainted(&boosters)) host_ra_lockout();
 #ifdef FF8_VULKAN
     if (!host_display_present_stats(present_stats_path)) {
         fprintf(stderr, "Cannot open present statistics: %s\n", present_stats_path);
@@ -1246,6 +1419,7 @@ int main(int argc, char **argv) {
         host_audio_shutdown(c->hw->spu); host_display_shutdown(NULL); fclose(log);
         sio_destroy(c); hw_destroy(c); free(legacy_registry); free(c); host_states_shutdown(); HOST_GUI_CLEANUP(); return 2;
     }
+    if (host_boosters_tainted(&boosters)) host_states_taint();
     }
 #if defined(FF8_PLAYER) && defined(FF8_GUI)
     if (!headless && !native_only && gui_allowed && gui_configured && host_native_running()) {

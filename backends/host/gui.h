@@ -1,13 +1,14 @@
 #ifndef FF8_HOST_GUI_H
 #define FF8_HOST_GUI_H
 #include "options.h"
+#include "ff8_mod_import.h"
 #include <SDL.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef enum { HOST_GUI_HIDDEN, HOST_GUI_SETUP, HOST_GUI_HUB, HOST_GUI_OVERLAY, HOST_GUI_LOADING } host_gui_mode_t;
-typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_CONTROLS, HOST_GUI_RA, HOST_GUI_ACHIEVEMENTS } host_gui_pane_t;
+typedef enum { HOST_GUI_GAME, HOST_GUI_DISCS, HOST_GUI_CARD, HOST_GUI_VIDEO, HOST_GUI_ENHANCEMENTS, HOST_GUI_CONTROLS, HOST_GUI_RA, HOST_GUI_ACHIEVEMENTS } host_gui_pane_t;
 typedef enum { HOST_GUI_RUNNING, HOST_GUI_PLAY, HOST_GUI_QUIT, HOST_GUI_RECREATE, HOST_GUI_ERROR } host_gui_result_t;
 typedef enum { HOST_GUI_KEYBOARD, HOST_GUI_MOUSE, HOST_GUI_PAD } host_gui_input_t;
 /* Native code as the player knows it this frame. */
@@ -57,6 +58,11 @@ typedef struct {
     void (*native_cancel)(void *);
     /* Fills up to capacity rows; returns how many sets failed. */
     unsigned (*native_failures)(void *, host_gui_failure_t *, unsigned capacity);
+    /* Optional automatic FF8 PC / FFNx mod importer (NULL in test harnesses without it). */
+    int (*mod_import_start)(void *, const char *const *discs, unsigned disc_count,
+                            const char *mod_path, const char *textures_out,
+                            const char *models_out, const char *movies_out);
+    void (*mod_import_poll)(void *, host_mod_import_status_t *);
 } host_gui_services_t;
 int host_gui_configure(host_options_t *, const char *data_dir, const host_gui_services_t *, const char *script);
 void host_gui_attach_game(void);
@@ -72,6 +78,7 @@ host_gui_result_t host_gui_shell(void);
  * until the player chooses Play anyway or Quit. */
 host_gui_result_t host_gui_loading(void);
 void host_gui_request(host_gui_pane_t);
+void host_gui_request_booster_lockout(const char *key);
 int host_gui_requested(void);
 void host_gui_open(void);
 int host_gui_visible(void);

@@ -12,6 +12,9 @@ typedef struct {
     char screenshot_dir[512], screenshot_at[4096];
     char osd_tests[4096];
     int renderer, true_color, pgxp, full_disc, snapshot_cards, crt, smooth_motion;
+    int speed_boost, no_encounters, battle_assist;
+    int hd_font, hd_textures, hd_models;
+    char hd_font_path[512], textures_dir[512], dump_textures[512], models_dir[512];
     uint64_t internal_scale, msaa, save_at, present_size;
     char presented_frames[512];
     char movies[512], movie_stats[512], scaled_frames[512], gpu_timings[512];
