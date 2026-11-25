@@ -27,8 +27,15 @@ struct Target {
 ImGuiContext *owner=nullptr;
 VkDescriptorPool pool=VK_NULL_HANDLE;
 bool fonts_uploaded=false;
+uint64_t font_gen=1;
 std::vector<Renderer> renderers;
 std::vector<Target> targets;
+
+static uint64_t hash_bytes(uint64_t h,const void *data,size_t len) {
+    const auto *p=static_cast<const uint8_t *>(data);
+    for (size_t i=0;i<len;++i) h=(h^p[i])*UINT64_C(0x100000001b3);
+    return h;
+}
 
 struct CurrentContext {
     ImGuiContext *previous=ImGui::GetCurrentContext();
@@ -103,11 +110,42 @@ void reset_resources() {
     }
     renderers.clear();
     if (pool) vkDestroyDescriptorPool(device.logical,pool,nullptr);
-    pool=VK_NULL_HANDLE; owner=nullptr; fonts_uploaded=false;
+    pool=VK_NULL_HANDLE; owner=nullptr; fonts_uploaded=false; ++font_gen;
 }
 }
 
 namespace HostGuiVulkan {
+uint64_t font_generation() { return font_gen; }
+uint64_t draw_hash() {
+    if (!owner || !device.logical) return 0;
+    ImDrawData *draw=ImGui::GetDrawData();
+    if (!draw || !draw->Valid || draw->TotalVtxCount==0) return 0;
+    uint64_t h=UINT64_C(0xcbf29ce484222325);
+    h=hash_bytes(h,&draw->DisplayPos,sizeof(draw->DisplayPos));
+    h=hash_bytes(h,&draw->DisplaySize,sizeof(draw->DisplaySize));
+    h=hash_bytes(h,&draw->FramebufferScale,sizeof(draw->FramebufferScale));
+    h=hash_bytes(h,&draw->CmdListsCount,sizeof(draw->CmdListsCount));
+    for (int i=0;i<draw->CmdListsCount;++i) {
+        const ImDrawList *list=draw->CmdLists[i];
+        int nv=list->VtxBuffer.Size, ni=list->IdxBuffer.Size, nc=list->CmdBuffer.Size;
+        h=hash_bytes(h,&nv,sizeof(nv));
+        h=hash_bytes(h,&ni,sizeof(ni));
+        h=hash_bytes(h,&nc,sizeof(nc));
+        if (nv>0) h=hash_bytes(h,list->VtxBuffer.Data,size_t(nv)*sizeof(ImDrawVert));
+        if (ni>0) h=hash_bytes(h,list->IdxBuffer.Data,size_t(ni)*sizeof(ImDrawIdx));
+        for (int c=0;c<nc;++c) {
+            const ImDrawCmd &cmd=list->CmdBuffer[c];
+            h=hash_bytes(h,&cmd.ClipRect,sizeof(cmd.ClipRect));
+            h=hash_bytes(h,&cmd.TextureId,sizeof(cmd.TextureId));
+            h=hash_bytes(h,&cmd.VtxOffset,sizeof(cmd.VtxOffset));
+            h=hash_bytes(h,&cmd.IdxOffset,sizeof(cmd.IdxOffset));
+            h=hash_bytes(h,&cmd.ElemCount,sizeof(cmd.ElemCount));
+            uintptr_t cb=reinterpret_cast<uintptr_t>(cmd.UserCallback);
+            h=hash_bytes(h,&cb,sizeof(cb));
+        }
+    }
+    return h ? h : 1;
+}
 void configure(VkInstance instance,VkPhysicalDevice physical,VkDevice logical,unsigned family,VkQueue queue) {
     host_gui_vulkan_shutdown();
     device={instance,physical,logical,family,queue};
@@ -186,10 +224,13 @@ extern "C" int host_gui_vulkan_prepare(unsigned width,unsigned height) try {
             ImGui_ImplVulkan_DestroyFontsTexture();
         }
         fonts_uploaded=false;
+        ++font_gen;
     }
     ImGui::SetCurrentContext(renderers.front().context);
+    bool had_fonts=fonts_uploaded;
     ImGui_ImplVulkan_NewFrame(); // Own staging commands, never the guest pass.
     fonts_uploaded=ImGui::GetIO().Fonts->TexID!=0;
+    if (fonts_uploaded && !had_fonts) ++font_gen;
     return 1;
 } catch (const std::exception &error) {
     std::fprintf(stderr,"%s\n",error.what()); return 0;
@@ -203,6 +244,7 @@ extern "C" void host_gui_vulkan_invalidate_fonts(void) {
         ImGui_ImplVulkan_DestroyFontsTexture();
     }
     fonts_uploaded=false;
+    ++font_gen;
 }
 extern "C" void host_gui_vulkan_shutdown(void) {
     if (!device.logical) return;
