@@ -75,6 +75,27 @@ static void note(const char *what, const char *name) {
 #endif
 }
 
+static void note_flags(const char *source, int argc, char **argv) {
+    const char *log = getenv("FAKE_CC_FLAGS_LOG");
+    const char *base = strrchr(source, '/');
+    FILE *f;
+    int i;
+#ifdef _WIN32
+    const char *back = strrchr(source, '\\');
+    if (back && (!base || back > base)) base = back;
+#endif
+    if (!log) return;
+    f = fopen(log, "ab");
+    if (!f) return;
+    fprintf(f, "%s", base ? base + 1 : source);
+    for (i = 1; i < argc; ++i) {
+        if (!strncmp(argv[i], "-O", 2) || !strncmp(argv[i], "-DFF8_PRECISE_OUTLINE", 21))
+            fprintf(f, " %s", argv[i]);
+    }
+    fprintf(f, "\n");
+    fclose(f);
+}
+
 int main(int argc, char **argv) {
     const char *source = NULL, *output = NULL;
     int link = 0, i;
@@ -91,6 +112,7 @@ int main(int argc, char **argv) {
         char *text = slurp(source, &size);
         if (!text) { fprintf(stderr, "%s: error: cannot read\n", source); return 1; }
         note("compile", source);
+        note_flags(source, argc, argv);
         if (strstr(text, "LH_FAKE_SLOW")) pause_ms(400);
 #ifndef _WIN32
         if (strstr(text, "LH_FAKE_CHILD")) {
