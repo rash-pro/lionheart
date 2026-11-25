@@ -252,10 +252,38 @@ static void gui_mod_import_poll(void *context, host_mod_import_status_t *out) {
     (void)context;
     host_mod_import_poll(out);
 }
+static int gui_mod_inspect(void *context, const char *mod_path, host_mod_xml_config_t *out) {
+    (void)context;
+    return host_mod_inspect_options(mod_path, out);
+}
+static int gui_mod_import_start_ex(void *context, const char *const *discs, unsigned count,
+                                   const char *mod_path, const char *textures_out,
+                                   const char *models_out, const char *movies_out,
+                                   const char *audio_out, const char *registry_dir,
+                                   const host_mod_option_override_t *overrides, unsigned override_count) {
+    (void)context;
+    return host_mod_import_start_async_ex(discs, count, mod_path, textures_out, models_out,
+                                          movies_out, audio_out, registry_dir, overrides, override_count);
+}
+static unsigned gui_mod_list(void *context, const char *data_dir, host_mod_entry_t *out, unsigned capacity) {
+    (void)context;
+    return host_mod_registry_list(data_dir, out, capacity);
+}
+static int gui_mod_set_enabled(void *context, const char *data_dir, const char *mod_id, int enabled,
+                               const char *textures_dir, const char *models_dir, const char *movies_dir) {
+    (void)context;
+    return host_mod_registry_set_enabled(data_dir, mod_id, enabled, textures_dir, models_dir, movies_dir);
+}
+static int gui_mod_remove(void *context, const char *data_dir, const char *mod_id,
+                          const char *textures_dir, const char *models_dir, const char *movies_dir) {
+    (void)context;
+    return host_mod_registry_remove(data_dir, mod_id, textures_dir, models_dir, movies_dir);
+}
 static host_gui_services_t gui_services(gui_session_t *session) {
     host_gui_services_t services = {session,gui_changed,gui_action,gui_state_slot,gui_state_available,
         gui_disc,gui_loop,gui_device,gui_controller,gui_controller_type,gui_fullscreen_exclusive,NULL,NULL,NULL,NULL,
-        gui_mod_import_start,gui_mod_import_poll};
+        gui_mod_import_start,gui_mod_import_poll,gui_mod_inspect,gui_mod_import_start_ex,
+        gui_mod_list,gui_mod_set_enabled,gui_mod_remove};
 #ifdef FF8_PLAYER
     services.native = gui_native; services.native_install = gui_native_install;
     services.native_cancel = gui_native_cancel; services.native_failures = gui_native_failures;

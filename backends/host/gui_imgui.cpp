@@ -426,6 +426,7 @@ extern "C" void gui_ui_event(const SDL_Event *event) {
     } else headless_event(event);
 }
 extern "C" void gui_ui_begin(unsigned width,unsigned height,int overlay) {
+    (void)overlay;
     if (!ui.context) return;
     ImGui::SetCurrentContext(ui.context);
     uint64_t now=SDL_GetTicks64();
@@ -465,7 +466,6 @@ extern "C" void gui_ui_begin(unsigned width,unsigned height,int overlay) {
     ui.control_row_pending=false;ui.frame_edit=0;ui.scroll_depth=0;
     ImGui::SetNextWindowPos(ImVec2(0,0)); ImGui::SetNextWindowSize(ImVec2(float(width),float(height)));
     ImGui::Begin("##lionheart",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse);
-    if (overlay) draw()->AddRectFilled(ImVec2(0,0),ImVec2(float(width),float(height)),IM_COL32(6,6,10,189));
 }
 extern "C" void gui_ui_end(void) {
     if (!ui.in_frame) return;
@@ -529,7 +529,12 @@ extern "C" float gui_ui_text_width(const char *text,gui_font_t font) {
     return f->CalcTextSizeA(f->FontSize,FLT_MAX,0,text).x/ui.scale;
 }
 extern "C" void gui_ui_panel(gui_rect_t r,unsigned colour,float radius) {
-    if (ui.in_frame) { scroll_note(r.y+r.h); ImRect b=bounds(r);draw()->AddRectFilled(b.Min,b.Max,rgba(colour),pixel(radius)); }
+    if (!ui.in_frame) return;
+    scroll_note(r.y+r.h);
+    ImU32 fill=rgba(colour);
+    if ((fill>>24)==0) return;
+    ImRect b=bounds(r);
+    draw()->AddRectFilled(b.Min,b.Max,fill,pixel(radius));
 }
 extern "C" void gui_ui_line(float x1,float y1,float x2,float y2,unsigned colour,float width) {
     if (ui.in_frame) draw()->AddLine(point(x1,y1),point(x2,y2),rgba(colour),std::max(1.0f,pixel(width)));
@@ -686,10 +691,12 @@ extern "C" int gui_ui_native_pick(gui_pick_t kind,char *path,size_t capacity) {
         const bool tar=!std::strcmp(gui_archive_format(),"tar.xz");
         const char *label_id = kind==GUI_PICK_DISC ? "nav.discs" :
             kind==GUI_PICK_FONT ? "enh.hd_font" :
+            kind==GUI_PICK_MOD_ARCHIVE ? "enh.mod_archive.filter" :
             kind!=GUI_PICK_ARCHIVE ? "nav.card" :
             tar ? "browser.archives.tar.xz" : "browser.archives.zip";
         const char *spec = kind==GUI_PICK_DISC ? "cue,bin" :
             kind==GUI_PICK_FONT ? "ttf,otf,png" :
+            kind==GUI_PICK_MOD_ARCHIVE ? "iro,iroj" :
             kind==GUI_PICK_ARCHIVE ? gui_archive_format() : "mcr,mcd,srm";
         nfdu8filteritem_t filter={host_gui_string(label_id), spec};
         nfdopendialogu8args_t args={};args.filterList=&filter;args.filterCount=1;

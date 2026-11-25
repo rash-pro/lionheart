@@ -16,7 +16,7 @@
 #define FF8_VERSION "dev"
 #endif
 
-enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE,MODAL_NATIVE,MODAL_BOOSTER_RA_LOCKOUT };
+enum { MODAL_NONE,MODAL_BROWSER,MODAL_RA_WARNING,MODAL_QUIT,MODAL_WRITE,MODAL_NATIVE,MODAL_BOOSTER_RA_LOCKOUT,MODAL_MOD_OPTIONS,MODAL_MOD_LOG,MODAL_MOD_REMOVE };
 static struct {
     host_options_t *options; host_gui_services_t services;
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
@@ -44,6 +44,12 @@ static struct {
     int native_step;
     char crash_log[512],native_archive[512];
     int mod_import_seen_done;
+    int mods_loaded;
+    unsigned mod_count;
+    host_mod_entry_t mods[HOST_MOD_MAX_ENTRIES];
+    char mod_pending_path[512];
+    host_mod_xml_config_t mod_xml_config;
+    unsigned mod_active_idx;
 } gui;
 
 const char *host_gui_string(const char *id) {
@@ -254,6 +260,45 @@ static void back(int controller) {
 }
 static void pick(gui_pick_t kind,unsigned slot);
 static void setup_next(void);
+static void refresh_mods(void) {
+    if (gui.services.mod_list && *gui.data) {
+        gui.mod_count=gui.services.mod_list(gui.services.context,gui.data,gui.mods,HOST_MOD_MAX_ENTRIES);
+        if (gui.mod_count>HOST_MOD_MAX_ENTRIES) gui.mod_count=HOST_MOD_MAX_ENTRIES;
+    } else gui.mod_count=0;
+    gui.mods_loaded=1;
+}
+static void start_mod_import(const char *path,const host_mod_option_override_t *overrides,unsigned override_count) {
+    const char *discs[4];
+    unsigned dc=0;
+    char default_tex[4128]={0}, default_mod[4128]={0}, default_mov[4128]={0}, default_aud[4128]={0};
+    const char *tex_out=*gui.options->textures_dir ? gui.options->textures_dir : NULL;
+    const char *mod_out=*gui.options->models_dir ? gui.options->models_dir : NULL;
+    const char *mov_out=*gui.options->movies ? gui.options->movies : NULL;
+    const char *aud_out=NULL;
+    for (unsigned i=0;i<4;++i) if (*gui.options->discs[i]) discs[dc++]=gui.options->discs[i];
+    if (!tex_out && *gui.data) { snprintf(default_tex,sizeof(default_tex),"%s/textures-hd",gui.data); tex_out=default_tex; }
+    if (!mod_out && *gui.data) { snprintf(default_mod,sizeof(default_mod),"%s/models-hd",gui.data); mod_out=default_mod; }
+    if (!mov_out && *gui.data) { snprintf(default_mov,sizeof(default_mov),"%s/movies-hd",gui.data); mov_out=default_mov; }
+    if (*gui.data) { snprintf(default_aud,sizeof(default_aud),"%s/audio-hd",gui.data); aud_out=default_aud; }
+    gui.mod_import_seen_done=0;
+    if (gui.services.mod_import_start_ex)
+        gui.services.mod_import_start_ex(gui.services.context,discs,dc,path,tex_out,mod_out,mov_out,
+                                         aud_out,*gui.data ? gui.data : NULL,overrides,override_count);
+    else if (gui.services.mod_import_start)
+        gui.services.mod_import_start(gui.services.context,discs,dc,path,tex_out,mod_out,mov_out);
+}
+static void begin_mod_import_flow(const char *path) {
+    if (gui.services.mod_inspect) {
+        memset(&gui.mod_xml_config,0,sizeof(gui.mod_xml_config));
+        if (gui.services.mod_inspect(gui.services.context,path,&gui.mod_xml_config) && gui.mod_xml_config.option_count>0) {
+            snprintf(gui.mod_pending_path,sizeof(gui.mod_pending_path),"%s",path);
+            gui.modal=MODAL_MOD_OPTIONS;
+            request_focus();
+            return;
+        }
+    }
+    start_mod_import(path,NULL,0);
+}
 static void selected(const char *path,gui_pick_t kind,unsigned slot) {
     char folder[512],destination[512],error[512];
     parent_folder(path,folder,sizeof(folder)); snprintf(gui.last_folder,sizeof(gui.last_folder),"%s",folder); persist_ui();
@@ -278,19 +323,8 @@ static void selected(const char *path,gui_pick_t kind,unsigned slot) {
     } else if (kind==GUI_PICK_FONT) changed("hd-font-path",path);
     else if (kind==GUI_PICK_TEXTURES) changed("textures-dir",path);
     else if (kind==GUI_PICK_MODELS) changed("models-dir",path);
-    else if (kind==GUI_PICK_MOD_IMPORT) {
-        const char *discs[4];
-        unsigned dc=0;
-        char default_tex[4128]={0}, default_mod[4128]={0};
-        const char *tex_out=*gui.options->textures_dir ? gui.options->textures_dir : NULL;
-        const char *mod_out=*gui.options->models_dir ? gui.options->models_dir : NULL;
-        const char *mov_out=*gui.options->movies ? gui.options->movies : NULL;
-        for (unsigned i=0;i<4;++i) if (*gui.options->discs[i]) discs[dc++]=gui.options->discs[i];
-        if (!tex_out && *gui.data) { snprintf(default_tex,sizeof(default_tex),"%s/textures-hd",gui.data); tex_out=default_tex; }
-        if (!mod_out && *gui.data) { snprintf(default_mod,sizeof(default_mod),"%s/models-hd",gui.data); mod_out=default_mod; }
-        gui.mod_import_seen_done=0;
-        if (gui.services.mod_import_start)
-            gui.services.mod_import_start(gui.services.context,discs,dc,path,tex_out,mod_out,mov_out);
+    else if (kind==GUI_PICK_MOD_IMPORT || kind==GUI_PICK_MOD_ARCHIVE) {
+        begin_mod_import_flow(path);
     }
     else changed(kind==GUI_PICK_MOVIES ? "movies" : "screenshot-dir",path);
 }
@@ -1102,7 +1136,7 @@ static void draw_enhancements(void) {
         if (imp.finished && !gui.mod_import_seen_done) {
             gui.mod_import_seen_done=1;
             if (imp.ok) {
-                char default_tex[4128]={0}, default_mod[4128]={0};
+                char default_tex[4128]={0}, default_mod[4128]={0}, default_mov[4128]={0};
                 if (!*gui.options->textures_dir && *gui.data) {
                     snprintf(default_tex,sizeof(default_tex),"%s/textures-hd",gui.data);
                     changed("textures-dir",default_tex);
@@ -1111,28 +1145,91 @@ static void draw_enhancements(void) {
                     snprintf(default_mod,sizeof(default_mod),"%s/models-hd",gui.data);
                     changed("models-dir",default_mod);
                 }
+                if (imp.movies_written>0 && !*gui.options->movies && *gui.data) {
+                    snprintf(default_mov,sizeof(default_mov),"%s/movies-hd",gui.data);
+                    changed("movies",default_mov);
+                }
                 if (imp.textures_written>0 && !gui.options->hd_textures) changed_number("hd-textures",1);
                 if (imp.models_written>0 && !gui.options->hd_models) changed_number("hd-models",1);
                 if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
+                refresh_mods();
             }
         }
         gui_ui_control_row(R(x,892,width,66));
-        label("enh.mod_import",x+18,899,width-220,GUI_REGULAR,(vulkan && has_disc) ? GUI_TEXT : GUI_MUTED);
+        label("enh.mod_import",x+18,899,width-340,GUI_REGULAR,(vulkan && has_disc) ? GUI_TEXT : GUI_MUTED);
         if (imp.running) {
             if (imp.total>0) snprintf(status_line,sizeof(status_line),S("enh.mod_import.progress"),imp.stage,imp.done,imp.total);
             else snprintf(status_line,sizeof(status_line),"%s",*imp.stage ? imp.stage : S("enh.mod_import.running"));
-            text("enh.mod_import.status",status_line,x+18,927,width-220,GUI_SUB,GUI_ACCENT);
+            text("enh.mod_import.status",status_line,x+18,927,width-340,GUI_SUB,GUI_ACCENT);
         } else if (imp.finished && imp.ok) {
-            snprintf(status_line,sizeof(status_line),S("enh.mod_import.done"),imp.textures_written,imp.models_written);
-            text("enh.mod_import.status",status_line,x+18,927,width-220,GUI_SUB,GUI_OK);
+            if (imp.movies_written>0 || imp.audio_written>0)
+                snprintf(status_line,sizeof(status_line),S("enh.mod_import.done_media"),imp.textures_written,imp.models_written,imp.movies_written,imp.audio_written);
+            else
+                snprintf(status_line,sizeof(status_line),S("enh.mod_import.done"),imp.textures_written,imp.models_written);
+            text("enh.mod_import.status",status_line,x+18,927,width-340,GUI_SUB,GUI_OK);
         } else if (imp.finished && *imp.error) {
-            text("enh.mod_import.status",imp.error,x+18,927,width-220,GUI_SUB,GUI_ERROR);
+            text("enh.mod_import.status",imp.error,x+18,927,width-340,GUI_SUB,GUI_ERROR);
         } else {
-            label("enh.mod_import.sub",x+18,927,width-220,GUI_SUB,GUI_DIM);
+            label("enh.mod_import.sub",x+18,927,width-340,GUI_SUB,GUI_DIM);
+        }
+        if (gui_ui_button("enh.mod_import.file_btn",S("enh.mod_import.btn_file"),
+                          R(x+width-318,906,136,38),(vulkan && has_disc && !imp.running) ? 0 : GUI_DISABLED)) {
+            pick(GUI_PICK_MOD_ARCHIVE,0);
         }
         if (gui_ui_button("enh.mod_import.btn",imp.running ? S("enh.mod_import.running") : S("enh.mod_import.btn"),
-                          R(x+width-186,906,168,38),(vulkan && has_disc && !imp.running) ? GUI_PRIMARY : GUI_DISABLED)) {
+                          R(x+width-172,906,154,38),(vulkan && has_disc && !imp.running) ? GUI_PRIMARY : GUI_DISABLED)) {
             pick(GUI_PICK_MOD_IMPORT,0);
+        }
+
+        if (gui.services.mod_list) {
+            if (!gui.mods_loaded) refresh_mods();
+            float my=978;
+            label("enh.mods.heading",x+18,my,width-36,GUI_SUB,GUI_MUTED);
+            my+=32;
+            if (gui.mod_count==0) {
+                label("enh.mods.empty",x+18,my,width-36,GUI_SUB,GUI_DIM);
+            } else {
+                for (unsigned i=0;i<gui.mod_count;++i) {
+                    host_mod_entry_t *m=&gui.mods[i];
+                    char idbuf[96], sum[256];
+                    gui_ui_panel(R(x,my,width,66),0x13131aff,7);
+                    snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.name",i);
+                    text(idbuf,m->name,x+18,my+9,width-280,GUI_REGULAR,m->enabled ? GUI_TEXT : GUI_MUTED);
+                    if (!m->enabled) {
+                        snprintf(sum,sizeof(sum),"%s",S("enh.mods.disabled"));
+                    } else if (m->warnings>0 || m->failed>0) {
+                        snprintf(sum,sizeof(sum),S("enh.mods.summary_warn"),m->textures_written,m->models_written,m->warnings+m->failed);
+                    } else {
+                        snprintf(sum,sizeof(sum),S("enh.mods.summary"),m->textures_written,m->models_written,m->movies_written,m->audio_written);
+                    }
+                    snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.sub",i);
+                    text(idbuf,sum,x+18,my+36,width-280,GUI_SUB,!m->enabled ? GUI_MUTED : (m->warnings+m->failed)>0 ? GUI_WARN : GUI_DIM);
+
+                    snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.toggle",i);
+                    int next_en=gui_ui_toggle(idbuf,R(x+width-244,my+20,46,26),m->enabled,vulkan && !imp.running && gui.services.mod_set_enabled!=NULL);
+                    if (next_en!=m->enabled && gui.services.mod_set_enabled) {
+                        if (gui.services.mod_set_enabled(gui.services.context,gui.data,m->id,next_en,
+                                                         gui.options->textures_dir,gui.options->models_dir,gui.options->movies)) {
+                            refresh_mods();
+                            if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
+                            break;
+                        }
+                    }
+                    snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.log",i);
+                    if (gui_ui_button(idbuf,S("enh.mods.log"),R(x+width-186,my+14,74,38),0)) {
+                        gui.mod_active_idx=i;
+                        gui.modal=MODAL_MOD_LOG;
+                        request_focus();
+                    }
+                    snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.remove",i);
+                    if (gui_ui_button(idbuf,S("btn.remove"),R(x+width-102,my+14,90,38),(!imp.running && gui.services.mod_remove) ? GUI_DANGER : GUI_DISABLED)) {
+                        gui.mod_active_idx=i;
+                        gui.modal=MODAL_MOD_REMOVE;
+                        request_focus();
+                    }
+                    my+=74;
+                }
+            }
         }
     }
     pane_body_end();
@@ -1319,10 +1416,93 @@ static void draw_browser(void) {
     gui_ui_modal_end();
 }
 static void draw_dialog(void) {
-    float height=gui.modal==MODAL_RA_WARNING ? 346 : gui.modal==MODAL_BOOSTER_RA_LOCKOUT ? 304 : gui.modal==MODAL_NATIVE ? 470 : 236,width=gui.modal==MODAL_NATIVE ? 864 : 620;
+    float height=gui.modal==MODAL_RA_WARNING ? 346 :
+                 gui.modal==MODAL_BOOSTER_RA_LOCKOUT ? 304 :
+                 gui.modal==MODAL_NATIVE ? 470 :
+                 gui.modal==MODAL_MOD_OPTIONS ? 520 :
+                 gui.modal==MODAL_MOD_LOG ? 460 :
+                 236;
+    float width=(gui.modal==MODAL_NATIVE || gui.modal==MODAL_MOD_OPTIONS || gui.modal==MODAL_MOD_LOG) ? 864 : 620;
     float x=(gui.width-width)/2,y=(gui.height-height)/2;
     gui_ui_modal_begin("dialog",R(x,y,width,height));
-    if (gui.modal==MODAL_NATIVE) {
+    if (gui.modal==MODAL_MOD_OPTIONS) {
+        char title[192];
+        snprintf(title,sizeof(title),"%s",*gui.mod_xml_config.mod_name ? gui.mod_xml_config.mod_name : S("enh.mod_opts.title"));
+        text("mod.opts.title",title,x+32,y+24,width-64,GUI_TITLE,GUI_TEXT);
+        label("enh.mod_opts.sub",x+32,y+64,width-64,GUI_SUB,GUI_DIM);
+        gui_ui_scroll_begin("mod.opts.list",R(x+32,y+100,width-64,height-188));
+        for (unsigned i=0;i<gui.mod_xml_config.option_count;++i) {
+            host_mod_xml_option_t *opt=&gui.mod_xml_config.options[i];
+            float oy=y+104+(float)i*70;
+            char idbuf[64];
+            gui_ui_panel(R(x+32,oy,width-80,62),0x1a1a24ff,6);
+            snprintf(idbuf,sizeof(idbuf),"mod.opt.%u.name",i);
+            text(idbuf,opt->name,x+48,oy+8,width-360,GUI_REGULAR,GUI_TEXT);
+            if (*opt->description) {
+                snprintf(idbuf,sizeof(idbuf),"mod.opt.%u.desc",i);
+                text(idbuf,opt->description,x+48,oy+34,width-360,GUI_SUB,GUI_DIM);
+            }
+            snprintf(idbuf,sizeof(idbuf),"mod.opt.%u.ctrl",i);
+            if (opt->type==0 && opt->choice_count==2) {
+                int cur=(opt->selected_value!=0) ? 1 : 0;
+                int next=gui_ui_toggle(idbuf,R(x+width-114,oy+18,46,26),cur,1);
+                if (next!=cur) opt->selected_value=next ? opt->choices[1].value : opt->choices[0].value;
+            } else if (opt->choice_count>0) {
+                unsigned cur_idx=0;
+                for (unsigned c=0;c<opt->choice_count;++c) if (opt->choices[c].value==opt->selected_value) { cur_idx=c; break; }
+                if (gui_ui_button(idbuf,opt->choices[cur_idx].name,R(x+width-304,oy+12,240,38),0)) {
+                    cur_idx=(cur_idx+1)%opt->choice_count;
+                    opt->selected_value=opt->choices[cur_idx].value;
+                }
+            }
+            if (gui.first_focus && i==0) gui_ui_focus(idbuf);
+        }
+        gui_ui_scroll_end();
+        if (button("btn.cancel",x+width-334,y+height-66,130,0)) { gui.modal=MODAL_NONE; request_focus(); }
+        if (gui_ui_button("enh.mod_opts.import",S("enh.mod_opts.import"),R(x+width-190,y+height-66,158,42),GUI_PRIMARY)) {
+            host_mod_option_override_t ovs[HOST_MOD_MAX_OPTIONS];
+            unsigned ov_count=gui.mod_xml_config.option_count;
+            if (ov_count>HOST_MOD_MAX_OPTIONS) ov_count=HOST_MOD_MAX_OPTIONS;
+            for (unsigned i=0;i<ov_count;++i) {
+                snprintf(ovs[i].id,sizeof(ovs[i].id),"%s",gui.mod_xml_config.options[i].id);
+                ovs[i].value=gui.mod_xml_config.options[i].selected_value;
+            }
+            gui.modal=MODAL_NONE;
+            start_mod_import(gui.mod_pending_path,ovs,ov_count);
+            request_focus();
+        }
+    } else if (gui.modal==MODAL_MOD_LOG) {
+        const host_mod_entry_t *m=(gui.mod_active_idx<gui.mod_count) ? &gui.mods[gui.mod_active_idx] : NULL;
+        text("mod.log.title",m ? m->name : S("enh.mods.log_title"),x+32,y+24,width-64,GUI_TITLE,GUI_TEXT);
+        if (m && *m->source) text("mod.log.src",m->source,x+32,y+64,width-64,GUI_MONO,GUI_DIM);
+        gui_ui_scroll_begin("mod.log.body",R(x+32,y+100,width-64,height-184));
+        if (m && *m->summary_log) {
+            gui_ui_text("mod.log.text",m->summary_log,R(x+32,y+104,width-80,height-192),GUI_MONO,GUI_TEXT);
+        } else {
+            label("enh.mods.log_empty",x+32,y+104,width-80,GUI_SUB,GUI_DIM);
+        }
+        gui_ui_scroll_end();
+        if (button("btn.close",x+width-166,y+height-66,134,GUI_PRIMARY)) { gui.modal=MODAL_NONE; request_focus(); }
+        if (gui.first_focus) gui_ui_focus("btn.close");
+    } else if (gui.modal==MODAL_MOD_REMOVE) {
+        const host_mod_entry_t *m=(gui.mod_active_idx<gui.mod_count) ? &gui.mods[gui.mod_active_idx] : NULL;
+        char body[256];
+        label("enh.mods.remove_title",x+32,y+28,width-64,GUI_TITLE,GUI_WARN);
+        snprintf(body,sizeof(body),S("enh.mods.remove_body"),m ? m->name : "");
+        text("mod.remove.body",body,x+32,y+86,width-64,GUI_REGULAR,GUI_TEXT);
+        if (button("btn.cancel",x+width-312,y+height-72,130,0)) { gui.modal=MODAL_NONE; request_focus(); }
+        if (gui.first_focus) gui_ui_focus("btn.cancel");
+        if (button("btn.remove",x+width-166,y+height-72,134,GUI_DANGER)) {
+            if (m && gui.services.mod_remove) {
+                gui.services.mod_remove(gui.services.context,gui.data,m->id,
+                                        gui.options->textures_dir,gui.options->models_dir,gui.options->movies);
+                refresh_mods();
+                if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
+            }
+            gui.modal=MODAL_NONE;
+            request_focus();
+        }
+    } else if (gui.modal==MODAL_NATIVE) {
         if (gui.native.compiler!=HOST_GUI_COMPILER_READY) draw_native_install(x+32,y+28,width-64);
         else draw_native_details(x+32,y+28,width-64);
         if (button("btn.close",x+width-166,y+height-72,134,0)) { gui.modal=MODAL_NONE; request_focus(); }
@@ -1402,12 +1582,11 @@ void host_gui_frame(unsigned width,unsigned height) {
     }
     unsigned focus_epoch=gui.focus_epoch;
     gui_ui_begin(width,height,overlay());
-    gui_ui_panel(R(0,0,gui.width,gui.height),overlay() ? 0x00000000 : 0x0b0b10ff,0);
-    if (gui.mode==HOST_GUI_SETUP) draw_setup();
-    else if (gui.mode==HOST_GUI_LOADING) draw_loading();
+    if (gui.mode==HOST_GUI_SETUP) { gui_ui_panel(R(0,0,gui.width,gui.height),0x0b0b10ff,0); draw_setup(); }
+    else if (gui.mode==HOST_GUI_LOADING) { gui_ui_panel(R(0,0,gui.width,gui.height),0x0b0b10ff,0); draw_loading(); }
     else {
         gui_ui_panel(R(0,0,gui.rail,gui.height-56),0x101016ff,0);
-        gui_ui_panel(R(gui.rail,0,gui.width-gui.rail,gui.height-56),overlay() ? 0x101014c7 : 0x0b0b10ff,0);
+        gui_ui_panel(R(gui.rail,0,gui.width-gui.rail,gui.height-56),overlay() ? 0x0e0e12f1 : 0x0b0b10ff,0);
         gui_ui_scroll_begin("rail",R(0,0,gui.rail,gui.height-56));
         rail();
         gui_ui_scroll_end();

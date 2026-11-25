@@ -457,6 +457,146 @@ int main(int argc, char **argv) {
     assert(!dec_off.suppress_ps1_triangle);
     assert(!dec_off.flush_pending_hd_models);
 
+    /* 6. Battle & World Map scene matching (multi-entity battle: party character,
+     *    single-bone weapon, enemy + HUD flush; World map: character + vehicle + transition). */
+    {
+        std::filesystem::path bw_root = root / "battle_world_pack";
+        write_synthetic_glb(bw_root / "battle/d0c000.glb", true);
+        write_synthetic_glb(bw_root / "battle/d0w000.glb", true);
+        write_synthetic_glb(bw_root / "battle/c0m001.glb", true);
+        write_synthetic_glb(bw_root / "world/squall.glb", true);
+        write_synthetic_glb(bw_root / "world/ragnarok.glb", true);
+
+        std::vector<uint16_t> bw_vram(1024u * 512u, 0u);
+        for (unsigned y = 0; y < 32; ++y) {
+            for (unsigned x = 0; x < 32; ++x) {
+                bw_vram[(0u + y) * 1024u + (384u + x)] = uint16_t((x * 13u + y * 29u) | 0x8000u);   /* weapon */
+                bw_vram[(0u + y) * 1024u + (448u + x)] = uint16_t((x * 23u + y * 41u) | 0x8000u);   /* enemy */
+                bw_vram[(256u + y) * 1024u + (512u + x)] = uint16_t((x * 7u + y * 53u) | 0x8000u);  /* ragnarok */
+            }
+        }
+        uint64_t h_weapon = HostHD::ModelRegistry::hash_vram_rect(384, 0, 32, 32, bw_vram.data());
+        uint64_t h_enemy = HostHD::ModelRegistry::hash_vram_rect(448, 0, 32, 32, bw_vram.data());
+        uint64_t h_rag = HostHD::ModelRegistry::hash_vram_rect(512, 256, 32, 32, bw_vram.data());
+        char hw[32], he[32], hr[32];
+        std::snprintf(hw, sizeof(hw), "%016llx", (unsigned long long)h_weapon);
+        std::snprintf(he, sizeof(he), "%016llx", (unsigned long long)h_enemy);
+        std::snprintf(hr, sizeof(hr), "%016llx", (unsigned long long)h_rag);
+        {
+            std::ofstream mf(bw_root / "manifest.json");
+            mf << "{\n"
+                  "  \"models\": {\n"
+                  "    \"battle/d0c000\": { \"file\": \"battle/d0c000.glb\", \"scale\": 1.0 },\n"
+                  "    \"battle/d0w000\": { \"file\": \"battle/d0w000.glb\", \"scale\": 1.0, \"bone_remap\": [0], \"vram_texture_hashes\": [\"" << hw << "\"] },\n"
+                  "    \"battle/c0m001\": { \"file\": \"battle/c0m001.glb\", \"scale\": 1.0, \"bone_remap\": [0, 1], \"vram_texture_hashes\": [\"" << he << "\"] },\n"
+                  "    \"world/squall\": { \"file\": \"world/squall.glb\", \"scale\": 1.0 },\n"
+                  "    \"world/ragnarok\": { \"file\": \"world/ragnarok.glb\", \"scale\": 1.0, \"bone_remap\": [0], \"vram_texture_hashes\": [\"" << hr << "\"] }\n"
+                  "  }\n"
+                  "}\n";
+        }
+
+        HostHD::ModelRegistry bw_reg;
+        bw_reg.configure(true, bw_root.string());
+        assert(bw_reg.has_model("battle/d0c000"));
+        assert(bw_reg.has_model("battle/d0w000"));
+        assert(bw_reg.has_model("battle/c0m001"));
+        assert(bw_reg.has_model("world/squall"));
+        assert(bw_reg.has_model("world/ragnarok"));
+
+        HostHD::HdSceneTracker bw_tracker;
+        bw_tracker.record_vram_upload(384, 0, 32, 32, bw_vram.data());
+        bw_tracker.record_vram_upload(448, 0, 32, 32, bw_vram.data());
+        bw_tracker.record_vram_upload(512, 256, 32, 32, bw_vram.data());
+
+        HostHD::SceneContext battle_ctx{};
+        battle_ctx.mode = HostHD::SceneMode::Battle;
+        battle_ctx.party[0] = 0; /* Squall -> battle/d0c000 */
+        battle_ctx.party[1] = 0xff;
+        battle_ctx.party[2] = 0xff;
+
+        int32_t tr_hero0[3] = {0, 0, 400};
+        int32_t tr_hero1[3] = {0, -20, 400};
+        int32_t tr_wpn[3] = {500, 0, 400};
+        int32_t tr_enm0[3] = {-700, 0, 1200};
+        int32_t tr_enm1[3] = {-700, -30, 1200};
+
+        /* Hero (2 bones, canonical battle/d0c000) */
+        bw_tracker.record_gte_projection(rot, tr_hero0, ofx_q16, ofy_q16, 256, v_in[0], pack_sxy(200, 130), 200.0f, 130.0f, 400, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_hero0, ofx_q16, ofy_q16, 256, v_in[1], pack_sxy(210, 130), 210.0f, 130.0f, 400, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_hero1, ofx_q16, ofy_q16, 256, v_in[2], pack_sxy(200, 140), 200.0f, 140.0f, 400, battle_ctx);
+        /* Single-bone weapon (VRAM hash -> battle/d0w000) */
+        bw_tracker.record_gte_projection(rot, tr_wpn, ofx_q16, ofy_q16, 256, v_in[0], pack_sxy(230, 120), 230.0f, 120.0f, 400, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_wpn, ofx_q16, ofy_q16, 256, v_in[1], pack_sxy(240, 120), 240.0f, 120.0f, 400, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_wpn, ofx_q16, ofy_q16, 256, v_in[2], pack_sxy(230, 130), 230.0f, 130.0f, 400, battle_ctx);
+        /* Enemy (2 bones, VRAM hash -> battle/c0m001) */
+        bw_tracker.record_gte_projection(rot, tr_enm0, ofx_q16, ofy_q16, 256, v_in[0], pack_sxy(60, 100), 60.0f, 100.0f, 1200, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_enm0, ofx_q16, ofy_q16, 256, v_in[1], pack_sxy(75, 100), 75.0f, 100.0f, 1200, battle_ctx);
+        bw_tracker.record_gte_projection(rot, tr_enm1, ofx_q16, ofy_q16, 256, v_in[2], pack_sxy(60, 115), 60.0f, 115.0f, 1200, battle_ctx);
+
+        HostHD::TriangleObservation t_hero{};
+        t_hero.x[0] = 200; t_hero.y[0] = 130; t_hero.x[1] = 210; t_hero.y[1] = 130; t_hero.x[2] = 200; t_hero.y[2] = 140;
+        t_hero.clip_right = 319; t_hero.clip_bottom = 239;
+        assert(bw_tracker.observe_triangle(t_hero, bw_reg).suppress_ps1_triangle);
+
+        HostHD::TriangleObservation t_wpn{};
+        t_wpn.x[0] = 230; t_wpn.y[0] = 120; t_wpn.x[1] = 240; t_wpn.y[1] = 120; t_wpn.x[2] = 230; t_wpn.y[2] = 130;
+        t_wpn.textured = true; t_wpn.tex_page_x = 384; t_wpn.tex_page_y = 0; t_wpn.tex_depth = 2;
+        t_wpn.u[0] = 0; t_wpn.v[0] = 0; t_wpn.u[1] = 16; t_wpn.v[1] = 0; t_wpn.u[2] = 0; t_wpn.v[2] = 16;
+        t_wpn.clip_right = 319; t_wpn.clip_bottom = 239;
+        assert(bw_tracker.observe_triangle(t_wpn, bw_reg).suppress_ps1_triangle);
+
+        HostHD::TriangleObservation t_enm{};
+        t_enm.x[0] = 60; t_enm.y[0] = 100; t_enm.x[1] = 75; t_enm.y[1] = 100; t_enm.x[2] = 60; t_enm.y[2] = 115;
+        t_enm.textured = true; t_enm.tex_page_x = 448; t_enm.tex_page_y = 0; t_enm.tex_depth = 2;
+        t_enm.u[0] = 0; t_enm.v[0] = 0; t_enm.u[1] = 16; t_enm.v[1] = 0; t_enm.u[2] = 0; t_enm.v[2] = 16;
+        t_enm.clip_right = 319; t_enm.clip_bottom = 239;
+        assert(bw_tracker.observe_triangle(t_enm, bw_reg).suppress_ps1_triangle);
+
+        /* Overlapping battle HUD rect triggers flush before HUD draws on top. */
+        assert(bw_tracker.should_flush_for_rect(195, 125, 30, 30));
+        auto bdraws = bw_tracker.take_pending_draws();
+        assert(bdraws.size() == 3);
+        assert(bdraws[0].model_id == "battle/d0c000");
+        assert(bdraws[1].model_id == "battle/d0w000");
+        assert(bdraws[2].model_id == "battle/c0m001");
+
+        /* Transition Battle -> World: stale Battle poses must clear, World character + vehicle match cleanly. */
+        bw_tracker.end_frame();
+        HostHD::SceneContext world_ctx{};
+        world_ctx.mode = HostHD::SceneMode::World;
+        world_ctx.party[0] = 0; /* Squall -> world/squall */
+
+        int32_t tr_wsq0[3] = {0, 0, 500};
+        int32_t tr_wsq1[3] = {0, -15, 500};
+        int32_t tr_rag[3] = {900, 0, 1500};
+        bw_tracker.record_gte_projection(rot, tr_wsq0, ofx_q16, ofy_q16, 256, v_in[0], pack_sxy(150, 110), 150.0f, 110.0f, 500, world_ctx);
+        bw_tracker.record_gte_projection(rot, tr_wsq0, ofx_q16, ofy_q16, 256, v_in[1], pack_sxy(160, 110), 160.0f, 110.0f, 500, world_ctx);
+        bw_tracker.record_gte_projection(rot, tr_wsq1, ofx_q16, ofy_q16, 256, v_in[2], pack_sxy(150, 120), 150.0f, 120.0f, 500, world_ctx);
+        bw_tracker.record_gte_projection(rot, tr_rag, ofx_q16, ofy_q16, 256, v_in[0], pack_sxy(250, 90), 250.0f, 90.0f, 1500, world_ctx);
+        bw_tracker.record_gte_projection(rot, tr_rag, ofx_q16, ofy_q16, 256, v_in[1], pack_sxy(265, 90), 265.0f, 90.0f, 1500, world_ctx);
+        bw_tracker.record_gte_projection(rot, tr_rag, ofx_q16, ofy_q16, 256, v_in[2], pack_sxy(250, 105), 250.0f, 105.0f, 1500, world_ctx);
+
+        /* Old Battle enemy triangle MUST NOT match after Battle -> World transition! */
+        assert(!bw_tracker.observe_triangle(t_enm, bw_reg).suppress_ps1_triangle);
+
+        HostHD::TriangleObservation t_wsq{};
+        t_wsq.x[0] = 150; t_wsq.y[0] = 110; t_wsq.x[1] = 160; t_wsq.y[1] = 110; t_wsq.x[2] = 150; t_wsq.y[2] = 120;
+        t_wsq.clip_right = 319; t_wsq.clip_bottom = 239;
+        assert(bw_tracker.observe_triangle(t_wsq, bw_reg).suppress_ps1_triangle);
+
+        HostHD::TriangleObservation t_rag{};
+        t_rag.x[0] = 250; t_rag.y[0] = 90; t_rag.x[1] = 265; t_rag.y[1] = 90; t_rag.x[2] = 250; t_rag.y[2] = 105;
+        t_rag.textured = true; t_rag.tex_page_x = 512; t_rag.tex_page_y = 256; t_rag.tex_depth = 2;
+        t_rag.u[0] = 0; t_rag.v[0] = 0; t_rag.u[1] = 16; t_rag.v[1] = 0; t_rag.u[2] = 0; t_rag.v[2] = 16;
+        t_rag.clip_right = 319; t_rag.clip_bottom = 239;
+        assert(bw_tracker.observe_triangle(t_rag, bw_reg).suppress_ps1_triangle);
+
+        auto wdraws = bw_tracker.take_pending_draws();
+        assert(wdraws.size() == 2);
+        assert(wdraws[0].model_id == "world/squall");
+        assert(wdraws[1].model_id == "world/ragnarok");
+    }
+
     /* Optional argv[2]: validate loading an externally generated pack (e.g. from tools/hd_models_import.py). */
     if (argc >= 3) {
         HostHD::ModelRegistry ext;

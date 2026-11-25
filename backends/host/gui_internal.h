@@ -12,7 +12,7 @@ typedef enum { GUI_REGULAR, GUI_TITLE, GUI_SUB, GUI_MONO, GUI_HINT } gui_font_t;
 typedef enum { GUI_TEXT, GUI_DIM, GUI_MUTED, GUI_ACCENT, GUI_OK, GUI_WARN, GUI_ERROR, GUI_CASUAL } gui_colour_t;
 /* GUI_ALERT colours only a row's second line, as a status in error. */
 enum { GUI_DISABLED=1, GUI_PRIMARY=2, GUI_DANGER=4, GUI_SELECTED=8, GUI_GHOST=16, GUI_ALERT=32 };
-typedef enum { GUI_PICK_DISC, GUI_PICK_CARD, GUI_PICK_MOVIES, GUI_PICK_SCREENSHOTS, GUI_PICK_ARCHIVE, GUI_PICK_FONT, GUI_PICK_TEXTURES, GUI_PICK_MODELS, GUI_PICK_MOD_IMPORT } gui_pick_t;
+typedef enum { GUI_PICK_DISC, GUI_PICK_CARD, GUI_PICK_MOVIES, GUI_PICK_SCREENSHOTS, GUI_PICK_ARCHIVE, GUI_PICK_FONT, GUI_PICK_TEXTURES, GUI_PICK_MODELS, GUI_PICK_MOD_IMPORT, GUI_PICK_MOD_ARCHIVE } gui_pick_t;
 
 /* Every rectangle is in logical 1280x720 coordinates. begin computes scale once. */
 int gui_ui_attach(SDL_Window *, SDL_Renderer *);

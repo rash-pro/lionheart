@@ -1288,14 +1288,32 @@ void HdSceneTracker::evaluate_cluster_match(ClusterState &cluster, uint64_t tex_
             candidates.emplace_back(buf);
         }
     } else if (sc.mode == SceneMode::Battle) {
+        static const char *const kBattlePartyIds[11][2] = {
+            {"battle/d0c000", "battle/d0c001"}, /* 0: Squall */
+            {"battle/d1c003", "battle/d1c004"}, /* 1: Zell */
+            {"battle/d2c006", nullptr},         /* 2: Irvine */
+            {"battle/d3c007", nullptr},         /* 3: Quistis */
+            {"battle/d4c009", nullptr},         /* 4: Rinoa */
+            {"battle/d5c011", "battle/d5c012"}, /* 5: Selphie */
+            {"battle/d6c014", nullptr},         /* 6: Seifer */
+            {"battle/d7c016", nullptr},         /* 7: Edea */
+            {"battle/d8c017", "battle/d8c018"}, /* 8: Laguna */
+            {"battle/d9c019", "battle/d9c020"}, /* 9: Kiros */
+            {"battle/dac021", "battle/dac022"}, /* 10: Ward */
+        };
         for (int slot = 0; slot < 3; ++slot) {
             uint8_t pid = sc.party[slot];
+            if (pid < 11) {
+                if (kBattlePartyIds[pid][0]) candidates.emplace_back(kBattlePartyIds[pid][0]);
+                if (kBattlePartyIds[pid][1]) candidates.emplace_back(kBattlePartyIds[pid][1]);
+            }
             if (pid < 16) {
                 char buf[32];
                 std::snprintf(buf, sizeof(buf), "battle/c0m%03u", unsigned(pid) + 1u);
                 candidates.emplace_back(buf);
             }
         }
+        candidates.emplace_back("battle/d0c000");
         candidates.emplace_back("battle/c0m001");
     } else if (sc.mode == SceneMode::World) {
         if (const char *nm = party_world_name(sc.party[0])) {
@@ -1303,6 +1321,12 @@ void HdSceneTracker::evaluate_cluster_match(ClusterState &cluster, uint64_t tex_
         }
         candidates.emplace_back("world/squall");
         candidates.emplace_back("world/c0w000");
+        candidates.emplace_back("world/balamb_garden");
+        candidates.emplace_back("world/garden");
+        candidates.emplace_back("world/ragnarok");
+        candidates.emplace_back("world/chocobo");
+        candidates.emplace_back("world/car");
+        candidates.emplace_back("world/train");
     }
     /* Optional wildcard IDs for developer/user synthetic test packs. */
     candidates.emplace_back("default");
