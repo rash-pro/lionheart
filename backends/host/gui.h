@@ -63,6 +63,17 @@ typedef struct {
                             const char *mod_path, const char *textures_out,
                             const char *models_out, const char *movies_out);
     void (*mod_import_poll)(void *, host_mod_import_status_t *);
+    int (*mod_inspect)(void *, const char *mod_path, host_mod_xml_config_t *);
+    int (*mod_import_start_ex)(void *, const char *const *discs, unsigned disc_count,
+                               const char *mod_path, const char *textures_out,
+                               const char *models_out, const char *movies_out,
+                               const char *audio_out, const char *registry_dir,
+                               const host_mod_option_override_t *overrides, unsigned override_count);
+    unsigned (*mod_list)(void *, const char *data_dir, host_mod_entry_t *out, unsigned capacity);
+    int (*mod_set_enabled)(void *, const char *data_dir, const char *mod_id, int enabled,
+                           const char *textures_dir, const char *models_dir, const char *movies_dir);
+    int (*mod_remove)(void *, const char *data_dir, const char *mod_id,
+                      const char *textures_dir, const char *models_dir, const char *movies_dir);
 } host_gui_services_t;
 int host_gui_configure(host_options_t *, const char *data_dir, const host_gui_services_t *, const char *script);
 void host_gui_attach_game(void);

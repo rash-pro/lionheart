@@ -15,6 +15,8 @@ namespace HostGuiVulkan {
 void configure(VkInstance, VkPhysicalDevice, VkDevice, unsigned queue_family, VkQueue);
 /* Forget before replacing the target/view. Resize is rare and drains its old work. */
 void forget_image(VkImage);
+uint64_t draw_hash();
+uint64_t font_generation();
 bool render(VkCommandBuffer, VkImage, VkImageView, VkExtent2D, VkFormat);
 }
 #endif

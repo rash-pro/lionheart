@@ -317,9 +317,37 @@ struct Backend {
                    scanout_timing.mode==o.scanout_timing.mode;
         }
     };
+    struct OsdKey {
+        bool active=false;
+        unsigned revision=0;
+        uint8_t opacity=0;
+        int x=0, y=0, w=0, h=0;
+        bool operator==(const OsdKey &o) const noexcept {
+            return active==o.active && (!active || (revision==o.revision && opacity==o.opacity &&
+                   x==o.x && y==o.y && w==o.w && h==o.h));
+        }
+    };
+    struct ComposedGuiKey {
+        BackdropKey backdrop{};
+        uint64_t draw_hash=0;
+        uint64_t font_gen=0;
+        OsdKey osd{}, booster_osd{};
+        VkImage target_image=VK_NULL_HANDLE;
+        bool operator==(const ComposedGuiKey &o) const noexcept {
+            return backdrop==o.backdrop && draw_hash==o.draw_hash &&
+                   font_gen==o.font_gen && osd==o.osd && booster_osd==o.booster_osd &&
+                   target_image==o.target_image;
+        }
+    };
     ImageHandle gui_backdrop;
     BackdropKey gui_backdrop_key{};
     bool gui_backdrop_valid=false;
+    ComposedGuiKey gui_composed_output_key{}, gui_composed_capture_key{};
+    bool gui_composed_output_valid=false, gui_composed_capture_valid=false;
+    void invalidate_gui_composed() noexcept {
+        gui_composed_output_valid=false;
+        gui_composed_capture_valid=false;
+    }
 #endif
     std::vector<uint8_t> presented;
     ImageHandle osd_image, booster_osd_image;
@@ -344,7 +372,7 @@ struct Backend {
         for (auto &scanout:scanouts) scanout.reset();
         crt_lines.reset(); crt_beam.reset(); crt_glow_h.reset(); crt_glow.reset(); output.reset(); capture_output.reset();
 #ifdef FF8_GUI
-        gui_backdrop.reset(); gui_backdrop_valid=false;
+        gui_backdrop.reset(); gui_backdrop_valid=false; invalidate_gui_composed();
 #endif
         osd_image.reset(); booster_osd_image.reset();
         movie_buffer.reset(); movie_frame.reset(); movie_patches.clear();
@@ -460,6 +488,7 @@ void degrade(const char *where, const char *reason) noexcept {
         backend->failed=true;
 #ifdef FF8_GUI
         backend->gui_backdrop_valid=false;
+        backend->invalidate_gui_composed();
 #endif
     }
     options.enabled=false;
@@ -780,7 +809,7 @@ extern "C" int host_gpu_resume(gpu_t *g) try {
     backend->dirty=false;
     ++backend->scanout_revision;
 #ifdef FF8_GUI
-    backend->gui_backdrop.reset(); backend->gui_backdrop_valid=false;
+    backend->gui_backdrop.reset(); backend->gui_backdrop_valid=false; backend->invalidate_gui_composed();
 #endif
     for (auto &row:backend->dirty_rows) row.fill(0);
     backend->raster=gpu_raster_state(g);
@@ -1646,12 +1675,44 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
         auto view=host_viewport(b.scanout_timing,b.native_width,b.native_height,int(extent.width),int(extent.height),presentation_mode);
         host_gui_toast_frame(extent.width,extent.height,host_osd_area(view));
     }
+    const auto *osd_p=osd_panel(b,extent);
+    const auto *bosd_p=osd_booster_panel(b,extent);
     bool use_backdrop=host_gui_visible() && (&target==&b.output || !b.window);
     Backend::BackdropKey backdrop_key{};
     bool backdrop_hit=false;
     if (use_backdrop) {
         backdrop_key=make_backdrop_key(b,extent,format,preset);
         backdrop_hit=b.gui_backdrop_valid && b.gui_backdrop && b.gui_backdrop_key==backdrop_key;
+    }
+    bool is_output_target=(&target==&b.output);
+    bool is_capture_target=(&target==&b.capture_output);
+    Backend::ComposedGuiKey composed_key{};
+    bool can_cache_composed=host_gui_visible() && !host_screenshot_pending() &&
+                            (is_output_target || is_capture_target);
+    if (can_cache_composed) {
+        uint64_t dh=HostGuiVulkan::draw_hash();
+        if (dh!=0) {
+            composed_key.backdrop=use_backdrop ? backdrop_key : make_backdrop_key(b,extent,format,preset);
+            composed_key.draw_hash=dh;
+            composed_key.font_gen=HostGuiVulkan::font_generation();
+            if (osd_p) composed_key.osd={true,osd_p->revision,osd_p->opacity,osd_p->x,osd_p->y,osd_p->w,osd_p->h};
+            if (bosd_p) composed_key.booster_osd={true,bosd_p->revision,bosd_p->opacity,bosd_p->x,bosd_p->y,bosd_p->w,bosd_p->h};
+            composed_key.target_image=target ? target->get_image() : VK_NULL_HANDLE;
+            bool &slot_valid=is_output_target ? b.gui_composed_output_valid : b.gui_composed_capture_valid;
+            Backend::ComposedGuiKey &slot_key=is_output_target ? b.gui_composed_output_key : b.gui_composed_capture_key;
+            if (slot_valid && target && target->get_width()==extent.width && target->get_height()==extent.height &&
+                target->get_format()==format && slot_key==composed_key) {
+                if (b.context->get_gpu_props().limits.timestampComputeAndGraphics) {
+                    auto &command=*b.renderer->command_buffer_hack_fixme();
+                    auto first=command.write_timestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                    auto last=command.write_timestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+                    if (first && last) b.gui_samples.push_back({first,last});
+                }
+                return;
+            }
+        } else {
+            can_cache_composed=false;
+        }
     }
     if (backdrop_hit) {
         ensure_image(*b.device,target,extent.width,extent.height,format,
@@ -1695,6 +1756,7 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
 #endif
         ) screenshot_copy(b,target,extent);
 #ifdef FF8_GUI
+    bool gui_drawn=false;
     if (host_gui_visible() || host_gui_toast_visible()) {
         auto &command=*b.renderer->command_buffer_hack_fixme();
         // Start after preceding composition commands complete, and end after GUI
@@ -1702,16 +1764,30 @@ void composed_present(Backend &b,ImageHandle &target,VkExtent2D extent,VkFormat 
         QueryPoolHandle first;
         if (b.context->get_gpu_props().limits.timestampComputeAndGraphics)
             first=command.write_timestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-        bool drawn=HostGuiVulkan::render(command.get_command_buffer(),target->get_image(),
+        gui_drawn=HostGuiVulkan::render(command.get_command_buffer(),target->get_image(),
                                         target->get_view().get_view(),extent,format);
-        if (drawn && first) {
+        if (gui_drawn && first) {
             auto last=command.write_timestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
             if (last) b.gui_samples.push_back({first,last});
         }
     }
-#endif
+    if (is_output_target || is_capture_target) {
+        bool &slot_valid=is_output_target ? b.gui_composed_output_valid : b.gui_composed_capture_valid;
+        Backend::ComposedGuiKey &slot_key=is_output_target ? b.gui_composed_output_key : b.gui_composed_capture_key;
+        if (can_cache_composed && gui_drawn && target) {
+            composed_key.target_image=target->get_image();
+            slot_key=composed_key;
+            slot_valid=true;
+        } else {
+            slot_valid=false;
+        }
+    }
+    if (osd_p) osd_present(b,*target,*osd_p,b.osd_image,b.osd_revision);
+    if (bosd_p) osd_present(b,*target,*bosd_p,b.booster_osd_image,b.booster_osd_revision);
+#else
     if (auto *panel=osd_panel(b,extent)) osd_present(b,*target,*panel,b.osd_image,b.osd_revision);
     if (auto *bpanel=osd_booster_panel(b,extent)) osd_present(b,*target,*bpanel,b.booster_osd_image,b.booster_osd_revision);
+#endif
 }
 // Offscreen presentation for --dump-presented-frames and the preview tool. It
 // has its own target, so a window presenting the same frame is unaffected.
@@ -1763,9 +1839,12 @@ extern "C" int host_gpu_present(void) {
     try {
         auto &b=*backend;
 #ifdef FF8_GUI
-        if (!host_gui_visible() && b.gui_backdrop) {
-            b.gui_backdrop.reset();
-            b.gui_backdrop_valid=false;
+        if (!host_gui_visible()) {
+            if (b.gui_backdrop) {
+                b.gui_backdrop.reset();
+                b.gui_backdrop_valid=false;
+            }
+            b.invalidate_gui_composed();
         }
         struct PreserveCounters {
             Renderer &renderer;

@@ -48,11 +48,28 @@ int main() try {
             ++reinitializations;
         }
         unsigned width=round>=6?1920:1280,height=round>=6?1080:720;
-        if (round==6) { host_gui_vulkan_invalidate_fonts(); ImGui::GetIO().Fonts->Clear(); ImGui::GetIO().Fonts->AddFontDefault(); }
+        uint64_t gen_before=HostGuiVulkan::font_generation();
+        if (round==6) {
+            host_gui_vulkan_invalidate_fonts();
+            if (HostGuiVulkan::font_generation()==gen_before) throw std::runtime_error("font generation did not advance");
+            ImGui::GetIO().Fonts->Clear(); ImGui::GetIO().Fonts->AddFontDefault();
+        }
         if (!host_gui_vulkan_prepare(width,height)) return 3;
         ImGui::GetIO().DisplaySize=ImVec2(float(width),float(height)); ImGui::GetIO().DeltaTime=1.0f/60;
         ImGui::NewFrame(); ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(20,30),ImVec2(60,80),IM_COL32(159,180,216,255));
         ImGui::GetBackgroundDrawList()->AddText(ImVec2(90,40),IM_COL32_WHITE,"Atlas text"); ImGui::Render();
+        uint64_t h1=HostGuiVulkan::draw_hash();
+        if (!h1) throw std::runtime_error("draw_hash zero on non-empty draw data");
+        if (round==0) {
+            ImGui::NewFrame(); ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(20,30),ImVec2(60,80),IM_COL32(159,180,216,255));
+            ImGui::GetBackgroundDrawList()->AddText(ImVec2(90,40),IM_COL32_WHITE,"Atlas text"); ImGui::Render();
+            if (HostGuiVulkan::draw_hash()!=h1) throw std::runtime_error("identical frames produced different draw_hash");
+            ImGui::NewFrame(); ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(20,30),ImVec2(60,80),IM_COL32(159,180,216,255));
+            ImGui::GetBackgroundDrawList()->AddText(ImVec2(91,40),IM_COL32_WHITE,"Atlas text"); ImGui::Render();
+            if (HostGuiVulkan::draw_hash()==h1) throw std::runtime_error("changed frame produced identical draw_hash");
+            ImGui::NewFrame(); ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(20,30),ImVec2(60,80),IM_COL32(159,180,216,255));
+            ImGui::GetBackgroundDrawList()->AddText(ImVec2(90,40),IM_COL32_WHITE,"Atlas text"); ImGui::Render();
+        }
         VkFormat format=round%2?VK_FORMAT_B8G8R8A8_UNORM:VK_FORMAT_R8G8B8A8_UNORM;
         VkImageCreateInfo ii={}; ii.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO; ii.imageType=VK_IMAGE_TYPE_2D; ii.format=format;
         ii.extent={width,height,1}; ii.mipLevels=ii.arrayLayers=1; ii.samples=VK_SAMPLE_COUNT_1_BIT; ii.tiling=VK_IMAGE_TILING_OPTIMAL;

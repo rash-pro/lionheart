@@ -84,19 +84,23 @@ constexpr uint32_t kFf8Glyphs[] = {
 };
 
 /* Geometric vector symbols for FF8 sysfnt cells absent from Latin TTF cmaps
- * (corner brackets 「」『』 and clean UI shapes ■□♦▼▽↓). */
+ * (corner brackets 「」『』, UI shapes ■□♦▼▽↓◎★☆, and musical note ♪). */
 bool is_geometric_sysfnt(size_t cell_idx) {
     switch (cell_idx + 0x20u) {
     case 0x36u: /* 「 */
     case 0x37u: /* 」 */
     case 0xABu: /* ■ */
+    case 0xACu: /* ◎ */
     case 0xADu: /* ♦ */
     case 0xB0u: /* □ */
+    case 0xB1u: /* ★ */
     case 0xB2u: /* 『 */
     case 0xB3u: /* 』 */
     case 0xB4u: /* ▽ */
     case 0xB6u: /* ▼ */
+    case 0xB9u: /* ☆ */
     case 0xBBu: /* ↓ */
+    case 0xC3u: /* ♪ */
         return true;
     default:
         return false;
@@ -356,7 +360,7 @@ bool HdFont::load_ttf_bytes(const uint8_t *data, size_t size) {
 bool HdFont::load_custom_png(const std::string &path) {
     int w = 0, h = 0, comp = 0;
     unsigned char *decoded = stbi_load(path.c_str(), &w, &h, &comp, 4);
-    if (!decoded || w < 256 || h < 128) {
+    if (!decoded || w < 256 || h < 120) {
         if (decoded) stbi_image_free(decoded);
         return false;
     }
@@ -605,16 +609,22 @@ void HdFont::extract_clut_colors(const uint16_t clut[16], uint8_t fg[3], uint8_t
 
     /* FF8's sysfnt CLUTs fill unused indices 2..11 with a single sentinel colour
      * (usually bright yellow 0x03FF or 0x0000), while actual glyph pixels only use
-     * index 1 (drop shadow) and 12..15 (anti-aliased ramp peaking at index 15).
-     * Never let unused filler entries override blue/green/red/grey/purple text. */
-    if (clut[1] != 0 && clut[15] != 0) {
+     * index 1 (drop shadow, optionally 0 during fades) and 12..15 (anti-aliased
+     * ramp peaking at index 15). Never let unused filler entries override real text. */
+    if (clut[15] != 0) {
         bool uniform_filler = true;
         for (unsigned i = 3; i <= 11; ++i) {
             if (clut[i] != clut[2]) { uniform_filler = false; break; }
         }
         if (uniform_filler && clut[15] != clut[2]) {
             unpack_abgr1555(clut[15], fg);
-            unpack_abgr1555(clut[1], shadow);
+            if (clut[1] != 0) {
+                unpack_abgr1555(clut[1], shadow);
+            } else {
+                shadow[0] = uint8_t(std::max(1, int(fg[0]) / 7));
+                shadow[1] = uint8_t(std::max(1, int(fg[1]) / 7));
+                shadow[2] = uint8_t(std::max(1, int(fg[2]) / 7));
+            }
             return;
         }
     }
@@ -831,7 +841,7 @@ bool HdFont::render_atlas(unsigned local_w, unsigned local_h, const uint16_t clu
     }
 
     if (!ttf_data_ || !ttf_size_ || local_w < kGlyphCols * kCellNative) return false;
-    scale = scale >= 8 ? 8u : (scale >= 4 ? 4u : 2u);
+    scale = scale > 4 ? 8u : (scale > 2 ? 4u : 2u);
     if (!build_coverage(local_w, local_h, scale, vram, vram_x, vram_y)) return false;
 
     /* The glyphs are the same picture under every palette; only the colours differ. */
@@ -1037,6 +1047,40 @@ bool HdFont::build_coverage(unsigned local_w, unsigned local_h, unsigned scale,
                 return std::max(d_top, std::max(d_left, d_right));
             };
 
+            auto star5_sd = [](float px, float py, float scx, float scy, float r_outer, float r_inner) -> float {
+                constexpr float kPi = 3.14159265358979323846f;
+                constexpr float kStep = 2.0f * kPi / 5.0f;
+                constexpr float kHalf = kPi / 5.0f;
+                /* Point straight up: rotate so -Y is angle 0. */
+                const float dx = px - scx, dy = -(py - scy);
+                float ang = std::atan2(dx, dy);
+                if (ang < 0.0f) ang += 2.0f * kPi;
+                ang = std::fmod(ang, kStep);
+                if (ang > kHalf) ang = kStep - ang;
+                const float r = std::hypot(dx, dy);
+                const float qx = r * std::sin(ang);
+                const float qy = r * std::cos(ang);
+                /* Edge from outer vertex A=(0, r_outer) to inner vertex B=(r_inner*sin(kHalf), r_inner*cos(kHalf)). */
+                const float ax = 0.0f, ay = r_outer;
+                const float bx = r_inner * std::sin(kHalf), by = r_inner * std::cos(kHalf);
+                const float ex = bx - ax, ey = by - ay;
+                const float elen = std::hypot(ex, ey);
+                /* Outward normal points right/up from A->B. */
+                const float nx = -ey / elen, ny = ex / elen;
+                const float t = std::clamp(((qx - ax) * ex + (qy - ay) * ey) / (elen * elen), 0.0f, 1.0f);
+                const float cx_p = ax + t * ex, cy_p = ay + t * ey;
+                const float dist = std::hypot(qx - cx_p, qy - cy_p);
+                const float side = (qx - ax) * nx + (qy - ay) * ny;
+                return side >= 0.0f ? dist : -dist;
+            };
+
+            auto seg_dist = [](float px, float py, float ax, float ay, float bx, float by) -> float {
+                const float ex = bx - ax, ey = by - ay;
+                const float denom = ex * ex + ey * ey;
+                const float t = denom > 1e-6f ? std::clamp(((px - ax) * ex + (py - ay) * ey) / denom, 0.0f, 1.0f) : 0.0f;
+                return std::hypot(px - (ax + t * ex), py - (ay + t * ey));
+            };
+
             switch (code) {
             case 0x36u: { /* 「 */
                 const float w = std::min(gw, 0.55f * gh);
@@ -1126,6 +1170,67 @@ bool HdFont::build_coverage(unsigned local_w, unsigned local_h, unsigned scale,
                 });
                 break;
             }
+            case 0xACu: { /* ◎ double circle */
+                const float r_out = 0.5f * std::min(gw, 0.84f * gh);
+                const float r_in = 0.44f * r_out;
+                const float stroke = std::max(0.75f, 0.72f * bar_px);
+                const float half_s = 0.5f * stroke;
+                add_sdf([&](float px, float py) {
+                    const float d = std::hypot(px - cx, py - cy);
+                    const float ring_out = 0.5f - (std::fabs(d - (r_out - half_s)) - half_s);
+                    const float ring_in = 0.5f - (std::fabs(d - r_in) - half_s);
+                    return std::max(ring_out, ring_in);
+                });
+                break;
+            }
+            case 0xB1u: { /* ★ filled 5-point star */
+                const float r_out = 0.5f * std::min(gw, 0.88f * gh);
+                const float r_in = 0.40f * r_out;
+                const float scy = cy + 0.04f * r_out;
+                add_sdf([&](float px, float py) {
+                    return 0.5f - star5_sd(px, py, cx, scy, r_out, r_in);
+                });
+                break;
+            }
+            case 0xB9u: { /* ☆ hollow 5-point star */
+                const float r_out = 0.5f * std::min(gw, 0.90f * gh);
+                const float r_in = 0.40f * r_out;
+                const float scy = cy + 0.04f * r_out;
+                const float stroke = std::max(0.75f, 0.72f * bar_px);
+                add_sdf([&](float px, float py) {
+                    const float sd = star5_sd(px, py, cx, scy, r_out, r_in);
+                    return std::clamp(0.5f - sd, 0.0f, 1.0f) - std::clamp(0.5f - (sd + stroke), 0.0f, 1.0f);
+                });
+                break;
+            }
+            case 0xC3u: { /* ♪ eighth musical note */
+                const float nw = std::min(gw, 0.78f * gh);
+                const float head_rx = 0.25f * nw;
+                const float head_ry = 0.17f * gh;
+                const float hcx = cx - 0.14f * nw;
+                const float hcy = gy1 - 0.20f * gh;
+                const float stem_x = hcx + 0.78f * head_rx;
+                const float stem_top = gy0 + 0.04f * gh;
+                const float stem_r = std::max(0.55f, 0.42f * stem_px);
+                const float flag_mid_x = stem_x + 0.48f * nw;
+                const float flag_mid_y = stem_top + 0.24f * gh;
+                const float flag_end_x = stem_x + 0.34f * nw;
+                const float flag_end_y = stem_top + 0.46f * gh;
+                const float flag_r = std::max(0.65f, 0.48f * bar_px);
+                add_sdf([&](float px, float py) {
+                    /* Slightly tilted oval notehead */
+                    const float rx = px - hcx, ry = py - hcy;
+                    const float ux = 0.92f * rx - 0.39f * ry;
+                    const float uy = 0.39f * rx + 0.92f * ry;
+                    const float ed = (std::hypot(ux / head_rx, uy / head_ry) - 1.0f) * std::min(head_rx, head_ry);
+                    const float c_head = 0.5f - ed;
+                    const float c_stem = 0.5f - (seg_dist(px, py, stem_x, hcy, stem_x, stem_top) - stem_r);
+                    const float c_flag1 = 0.5f - (seg_dist(px, py, stem_x, stem_top, flag_mid_x, flag_mid_y) - flag_r);
+                    const float c_flag2 = 0.5f - (seg_dist(px, py, flag_mid_x, flag_mid_y, flag_end_x, flag_end_y) - 0.85f * flag_r);
+                    return std::max(std::max(c_head, c_stem), std::max(c_flag1, c_flag2));
+                });
+                break;
+            }
             case 0xBBu: { /* ↓ */
                 const float tw = std::min(gw, 0.76f * gh);
                 const float y_head = gy1 - 0.44f * gh;
@@ -1204,16 +1309,22 @@ bool HdFont::build_coverage(unsigned local_w, unsigned local_h, unsigned scale,
             /* Vertical fit. Accented capitals rise above the cell and are shortened
              * onto the baseline, as in the game's own font; brackets and the like,
              * which reach both above the capitals and below the baseline, keep their
-             * shape and move. */
+             * shape and move. Also clamp both bounds for custom fonts with extreme
+             * ascender/descender metrics so no glyph ever clips outside the cell. */
             float sy = sf, base = float(base_y);
             if (base - max_uy * sy < top_lim || base - min_uy * sy > bot_lim) {
                 if (max_uy > 1.02f * cap_units && min_uy < -0.08f * cap_units) {
                     sy = std::min(sy, (bot_lim - top_lim) / (max_uy - min_uy));
                     base = std::clamp(base, top_lim + max_uy * sy, bot_lim + min_uy * sy);
-                } else if (base - max_uy * sy < top_lim) {
-                    sy = (base - top_lim) / max_uy;
                 } else {
-                    sy = (bot_lim - base) / -min_uy;
+                    if (max_uy > 0.0f && base - max_uy * sy < top_lim)
+                        sy = std::min(sy, (base - top_lim) / max_uy);
+                    if (min_uy < 0.0f && base - min_uy * sy > bot_lim)
+                        sy = std::min(sy, (bot_lim - base) / -min_uy);
+                }
+                if (base - max_uy * sy < top_lim || base - min_uy * sy > bot_lim) {
+                    sy = std::min(sy, (bot_lim - top_lim) / std::max(1.0f, max_uy - min_uy));
+                    base = std::clamp(base, top_lim + max_uy * sy, bot_lim + min_uy * sy);
                 }
             }
             const int base_i = int(std::lround(base));
@@ -1652,7 +1763,7 @@ bool HdFont::render_icon_sheet(unsigned local_w, unsigned local_h, const uint16_
                                const uint16_t *vram, unsigned vram_x, unsigned vram_y) const {
     if (mode_ == FontMode::Off || local_w != 256 || local_h != 256) return false;
     if (!ttf_data_ || !ttf_size_) return false;
-    scale = scale >= 8 ? 8u : (scale >= 4 ? 4u : 2u);
+    scale = scale > 4 ? 8u : (scale > 2 ? 4u : 2u);
 
     out.width = local_w * scale;
     out.height = local_h * scale;
@@ -1675,7 +1786,7 @@ bool HdFont::render_icon_band(size_t band, const uint16_t clut[16], unsigned sca
     const auto &bands = icon_bands();
     if (mode_ == FontMode::Off || band >= bands.size()) return false;
     if (!ttf_data_ || !ttf_size_) return false;
-    scale = scale >= 8 ? 8u : (scale >= 4 ? 4u : 2u);
+    scale = scale > 4 ? 8u : (scale > 2 ? 4u : 2u);
 
     const IconBand &b = bands[band];
     out.width = b.w * scale;
@@ -1896,7 +2007,14 @@ unsigned HdFont::render_icon_cells(size_t first, size_t last, unsigned origin_x,
         float sx = sy * std::clamp(avail_w / (span_ux * sy), min_ratio, max_ratio);
         const float hard_w = float(std::max(2, layout_w - 2 - pad_l - pad_r));
         if (span_ux * sx > hard_w) sx = hard_w / span_ux;
-        if (sx < sy * 0.62f) sy = sx / 0.62f; /* keep very long words legible */
+        if (sx < sy * 0.62f) {
+            const float old_sy = sy;
+            sy = sx / 0.62f; /* keep very long words legible and vertically centered */
+            const float mid_old = base - 0.5f * (text_top + text_bot) * old_sy;
+            base = mid_old + 0.5f * (text_top + text_bot) * sy;
+            if (base - text_top * sy < top_lim) base = top_lim + text_top * sy;
+            if (base - text_bot * sy > bot_lim) base = bot_lim + text_bot * sy;
+        }
         const float rendered_w = span_ux * sx;
         const float centre = (ink_l + ink_r) * 0.5f - float(pad_r - pad_l) * 0.5f;
         const float left_min = float(1 + pad_l);
@@ -1985,6 +2103,7 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
     const float tracking = 0.04f * cap_units;
     std::vector<PlacedGlyph> glyphs;
     float pen_u = 0.0f, min_ux = 1e9f, max_ux = -1e9f;
+    float min_uy = 0.0f, max_uy = cap_units;
     int prev = 0;
     for (const char ch : names[size_t(match)]) {
         const unsigned cell = unsigned(uint8_t(ch)) - 0x20u;
@@ -1998,6 +2117,8 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
         if (stbtt_GetGlyphBox(&font, g, &gx0, &gy0, &gx1, &gy1)) {
             min_ux = std::min(min_ux, pen_u + float(gx0));
             max_ux = std::max(max_ux, pen_u + float(gx1));
+            min_uy = std::min(min_uy, float(gy0));
+            max_uy = std::max(max_uy, float(gy1));
             glyphs.push_back({g, pen_u});
         }
         pen_u += float(adv) + tracking;
@@ -2005,7 +2126,7 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
     }
     if (glyphs.empty() || max_ux <= min_ux) return false;
 
-    scale = scale >= 8 ? 8u : (scale >= 4 ? 4u : 2u);
+    scale = scale > 4 ? 8u : (scale > 2 ? 4u : 2u);
     const int s = int(scale);
     const int bw = int(kNameW) * s, bh = int(kNameH) * s;
     out.width = unsigned(bw);
@@ -2015,7 +2136,7 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
     /* Same outline weight as the HP digits drawn beside the name. Capitals take
      * the name face's rows (strip rows 1..9) and half a texel of its outline at
      * each end, as the digits do in their cells, unless this face's descenders
-     * would then leave the rows the game shows. One size for every name. */
+     * or accented ascenders would then leave the rows the game shows. */
     const int outline_r = std::max(1, s / 2);
     const int shadow_shift = std::max(1, s / 4);
     float desc_units = 0.0f;
@@ -2026,10 +2147,10 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
     }
     const float cap_top = float(outline_r);
     const float bottom = float(int(kNameShownRows) * s - std::max(outline_r, shadow_shift));
+    const float span_uy = std::max(cap_units + desc_units, max_uy - min_uy);
     float sy = std::min(float((kNameBaseRow - kNameCapRow + 1) * s + s) / cap_units,
-                        (bottom - cap_top) / (cap_units + desc_units));
+                        (bottom - cap_top) / span_uy);
     float sx = sy * kNameStretch;
-    const float base = cap_top + cap_units * sy;
     /* Right-aligned on the original ink, like the game's own layout: the HP
      * digits follow two texels further on. */
     const float right = std::min(float(bw - 1 - outline_r), float((ink.segments.back().x1 + 1) * s));
@@ -2037,6 +2158,9 @@ bool HdFont::render_name_strip(size_t strip, const uint16_t clut[16], unsigned s
     const float span_ux = max_ux - min_ux;
     if (span_ux * sx > room) sx = room / span_ux;
     if (sx < sy * 0.62f) sy = sx / 0.62f; /* keep very long names legible */
+    float base = cap_top + max_uy * sy;
+    if (base - min_uy * sy > bottom) base = bottom + min_uy * sy;
+    if (base - max_uy * sy < cap_top) base = cap_top + max_uy * sy;
     const float left = right - span_ux * sx;
 
     uint8_t backdrop[3];

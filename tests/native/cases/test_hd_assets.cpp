@@ -10,7 +10,7 @@ LH_TEST_P(test_hd_model_prebuilt_shader_matches_source_and_validates, hd_model_s
 }
 
 LH_TEST(test_hd_font_detection_clut_and_atlas) {
-    auto r = t.ok(t.harness("hd_font").timeout(30));
+    auto r = t.ok(t.harness("hd_font").arg(t.root() / "third_party/chakra-petch/ChakraPetch-Regular.ttf").timeout(30));
     LH_CONTAINS(r.out, "ok");
 }
 

@@ -624,7 +624,50 @@ struct Ps1Index {
     std::unordered_map<std::string, std::vector<TexTarget>> textures;
     /* Key: "d000".."d075" */
     std::unordered_map<std::string, Ps1ModelInfo> field_models;
+    /* Key: "c0m000".."c0m143", "d0c000".."dac022", "d0w000".."d9w037" */
+    std::unordered_map<std::string, Ps1ModelInfo> battle_models;
+    /* Key: "c0w000", "squall", "car", "garden", "ragnarok", "chocobo", "wmset_section38" */
+    std::unordered_map<std::string, Ps1ModelInfo> world_models;
 };
+
+/* Parse bone count, vertex count, and TIM count from an FF8 battle .dat buffer. */
+void inspect_battle_dat_ps1(const std::vector<uint8_t> &dat, Ps1ModelInfo &out) {
+    if (dat.size() < 16) return;
+    uint32_t sec_count = le32(dat.data());
+    if (sec_count < 3 || sec_count > 32 || 4u + (sec_count + 1u) * 4u > dat.size()) return;
+    uint32_t off_skel = le32(dat.data() + 4u + 0u * 4u);
+    uint32_t off_geom = le32(dat.data() + 4u + 1u * 4u);
+    uint32_t off_tex = le32(dat.data() + 4u + (sec_count - 1u) * 4u);
+    if (off_skel + 2u <= dat.size()) {
+        uint16_t nbones = le16(dat.data() + off_skel);
+        if (nbones <= 256) {
+            out.skin_bones.clear();
+            for (uint16_t b = 0; b < nbones; ++b) out.skin_bones.push_back(b);
+        }
+    }
+    if (off_geom + 4u <= dat.size()) {
+        uint32_t nobjs = le32(dat.data() + off_geom);
+        if (nobjs > 0 && nobjs <= 64 && off_geom + 4u + nobjs * 4u <= dat.size()) {
+            uint32_t total_v = 0;
+            for (uint32_t oi = 0; oi < nobjs; ++oi) {
+                uint32_t oo = off_geom + le32(dat.data() + off_geom + 4u + oi * 4u);
+                if (oo + 2u > dat.size()) continue;
+                uint16_t ng = le16(dat.data() + oo);
+                size_t p = oo + 2u;
+                for (uint16_t g = 0; g < ng && p + 4u <= dat.size(); ++g) {
+                    uint16_t vc = le16(dat.data() + p + 2u);
+                    p += 4u + size_t(vc) * 6u;
+                    total_v += vc;
+                }
+            }
+            out.vert_count = total_v;
+        }
+    }
+    if (off_tex + 4u <= dat.size()) {
+        uint32_t ntims = le32(dat.data() + off_tex);
+        if (ntims <= 64) out.tim_count = ntims;
+    }
+}
 
 struct BattleCharEntry {
     int slot;
@@ -827,9 +870,18 @@ bool index_ps1_disc(const fs::path &disc_path, Ps1Index &idx, std::string *error
                 auto tims = scan_embedded_tims(raw.data(), raw.size());
                 char prefix[24];
                 std::snprintf(prefix, sizeof(prefix), "c0m%03d", m);
+                std::string bid(prefix);
+                Ps1ModelInfo &binfo = idx.battle_models[bid];
+                inspect_battle_dat_ps1(raw, binfo);
+                if (binfo.tim_count == 0) binfo.tim_count = uint32_t(tims.size());
                 for (size_t ti = 0; ti < tims.size(); ++ti) {
-                    add_tim_target(idx, std::string(prefix) + "-" + std::to_string(ti), tims[ti], false, false);
+                    add_tim_target(idx, bid + "-" + std::to_string(ti), tims[ti], false, false,
+                                   &binfo.vram_texture_hashes);
                 }
+                std::sort(binfo.vram_texture_hashes.begin(), binfo.vram_texture_hashes.end());
+                binfo.vram_texture_hashes.erase(
+                    std::unique(binfo.vram_texture_hashes.begin(), binfo.vram_texture_hashes.end()),
+                    binfo.vram_texture_hashes.end());
             }
 
             /* 2c. Battle party characters & weapons: battle[311..359] (raw) */
@@ -839,9 +891,18 @@ bool index_ps1_disc(const fs::path &disc_path, Ps1Index &idx, std::string *error
                 std::vector<uint8_t> raw;
                 if (!disc.read_bytes(lba, sz, raw)) continue;
                 auto tims = scan_embedded_tims(raw.data(), raw.size());
+                std::string bid(bc.name);
+                Ps1ModelInfo &binfo = idx.battle_models[bid];
+                inspect_battle_dat_ps1(raw, binfo);
+                if (binfo.tim_count == 0) binfo.tim_count = uint32_t(tims.size());
                 for (size_t ti = 0; ti < tims.size(); ++ti) {
-                    add_tim_target(idx, std::string(bc.name) + "-" + std::to_string(ti), tims[ti], false, false);
+                    add_tim_target(idx, bid + "-" + std::to_string(ti), tims[ti], false, false,
+                                   &binfo.vram_texture_hashes);
                 }
+                std::sort(binfo.vram_texture_hashes.begin(), binfo.vram_texture_hashes.end());
+                binfo.vram_texture_hashes.erase(
+                    std::unique(binfo.vram_texture_hashes.begin(), binfo.vram_texture_hashes.end()),
+                    binfo.vram_texture_hashes.end());
             }
         }
     }
@@ -864,12 +925,18 @@ bool index_ps1_disc(const fs::path &disc_path, Ps1Index &idx, std::string *error
                     uint32_t end = (s0 + 1 < 48) ? le32(wm.data() + size_t(s0 + 1) * 4u) : uint32_t(wm.size());
                     if (end <= start || end > wm.size()) continue;
                     auto tims = scan_embedded_tims(wm.data() + start, end - start);
+                    Ps1ModelInfo &winfo = idx.world_models["wmset_section" + std::to_string(sec1)];
+                    winfo.tim_count = uint32_t(tims.size());
                     for (size_t ti = 0; ti < tims.size(); ++ti) {
                         add_tim_target(idx, "wmset_section" + std::to_string(sec1) + "-" + std::to_string(ti),
-                                       tims[ti], false, false);
+                                       tims[ti], false, false, &winfo.vram_texture_hashes);
                         add_tim_target(idx, "section" + std::to_string(sec1) + "-" + std::to_string(ti),
                                        tims[ti], false, false);
                     }
+                    std::sort(winfo.vram_texture_hashes.begin(), winfo.vram_texture_hashes.end());
+                    winfo.vram_texture_hashes.erase(
+                        std::unique(winfo.vram_texture_hashes.begin(), winfo.vram_texture_hashes.end()),
+                        winfo.vram_texture_hashes.end());
                 }
             }
         }
@@ -1234,6 +1301,387 @@ struct MchTexProvider {
     const std::vector<ModSource> *sources = nullptr;
 };
 
+struct PrimVert {
+    float px, py, pz;
+    float u, v;
+    uint16_t joint;
+};
+
+struct PrimBucket {
+    std::vector<PrimVert> verts;
+    std::vector<uint32_t> indices;
+};
+
+bool pack_prim_buckets_to_glb(const std::map<uint32_t, PrimBucket> &buckets,
+                              const std::vector<std::vector<uint8_t>> &embedded_pngs,
+                              const fs::path &glb_out) {
+    if (buckets.empty()) return false;
+
+    std::vector<uint8_t> bin;
+    json buffer_views = json::array();
+    json accessors = json::array();
+    json images = json::array();
+    json textures = json::array();
+    json materials = json::array();
+    json primitives = json::array();
+
+    auto align4 = [&]() {
+        while (bin.size() & 3u) bin.push_back(0);
+    };
+
+    std::unordered_map<uint32_t, int> tex_to_mat;
+    for (const auto &kv : buckets) {
+        uint32_t ti = kv.first;
+        json mat = {
+            {"pbrMetallicRoughness", {
+                {"metallicFactor", 0.0},
+                {"roughnessFactor", 1.0}
+            }},
+            {"alphaMode", "MASK"},
+            {"alphaCutoff", 0.5},
+            {"doubleSided", true}
+        };
+        if (ti < embedded_pngs.size() && !embedded_pngs[ti].empty()) {
+            align4();
+            size_t bv_off = bin.size();
+            const auto &png = embedded_pngs[ti];
+            bin.insert(bin.end(), png.begin(), png.end());
+            int bv_idx = int(buffer_views.size());
+            buffer_views.push_back({
+                {"buffer", 0},
+                {"byteOffset", bv_off},
+                {"byteLength", png.size()}
+            });
+            int img_idx = int(images.size());
+            images.push_back({
+                {"bufferView", bv_idx},
+                {"mimeType", "image/png"}
+            });
+            int tex_idx = int(textures.size());
+            textures.push_back({{"source", img_idx}});
+            mat["pbrMetallicRoughness"]["baseColorTexture"] = {{"index", tex_idx}};
+        }
+        tex_to_mat[ti] = int(materials.size());
+        materials.push_back(std::move(mat));
+    }
+
+    for (const auto &kv : buckets) {
+        const auto &b = kv.second;
+        if (b.verts.empty() || b.indices.empty()) continue;
+
+        align4();
+        size_t pos_off = bin.size();
+        float min_p[3] = {1e9f, 1e9f, 1e9f};
+        float max_p[3] = {-1e9f, -1e9f, -1e9f};
+        for (const auto &v : b.verts) {
+            write_f32(bin, v.px); write_f32(bin, v.py); write_f32(bin, v.pz);
+            min_p[0] = std::min(min_p[0], v.px); max_p[0] = std::max(max_p[0], v.px);
+            min_p[1] = std::min(min_p[1], v.py); max_p[1] = std::max(max_p[1], v.py);
+            min_p[2] = std::min(min_p[2], v.pz); max_p[2] = std::max(max_p[2], v.pz);
+        }
+        int pos_bv = int(buffer_views.size());
+        buffer_views.push_back({{"buffer", 0}, {"byteOffset", pos_off}, {"byteLength", b.verts.size() * 12u}});
+        int pos_acc = int(accessors.size());
+        accessors.push_back({
+            {"bufferView", pos_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC3"},
+            {"min", {min_p[0], min_p[1], min_p[2]}}, {"max", {max_p[0], max_p[1], max_p[2]}}
+        });
+
+        align4();
+        size_t uv_off = bin.size();
+        for (const auto &v : b.verts) {
+            write_f32(bin, v.u); write_f32(bin, v.v);
+        }
+        int uv_bv = int(buffer_views.size());
+        buffer_views.push_back({{"buffer", 0}, {"byteOffset", uv_off}, {"byteLength", b.verts.size() * 8u}});
+        int uv_acc = int(accessors.size());
+        accessors.push_back({
+            {"bufferView", uv_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC2"}
+        });
+
+        align4();
+        size_t j_off = bin.size();
+        for (const auto &v : b.verts) {
+            write_le16(bin, v.joint); write_le16(bin, 0); write_le16(bin, 0); write_le16(bin, 0);
+        }
+        int j_bv = int(buffer_views.size());
+        buffer_views.push_back({{"buffer", 0}, {"byteOffset", j_off}, {"byteLength", b.verts.size() * 8u}});
+        int j_acc = int(accessors.size());
+        accessors.push_back({
+            {"bufferView", j_bv}, {"componentType", 5123}, {"count", b.verts.size()}, {"type", "VEC4"}
+        });
+
+        align4();
+        size_t w_off = bin.size();
+        for (size_t k = 0; k < b.verts.size(); ++k) {
+            write_f32(bin, 1.0f); write_f32(bin, 0.0f); write_f32(bin, 0.0f); write_f32(bin, 0.0f);
+        }
+        int w_bv = int(buffer_views.size());
+        buffer_views.push_back({{"buffer", 0}, {"byteOffset", w_off}, {"byteLength", b.verts.size() * 16u}});
+        int w_acc = int(accessors.size());
+        accessors.push_back({
+            {"bufferView", w_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC4"}
+        });
+
+        align4();
+        size_t idx_off = bin.size();
+        for (uint32_t i : b.indices) write_le32(bin, i);
+        int idx_bv = int(buffer_views.size());
+        buffer_views.push_back({{"buffer", 0}, {"byteOffset", idx_off}, {"byteLength", b.indices.size() * 4u}});
+        int idx_acc = int(accessors.size());
+        accessors.push_back({
+            {"bufferView", idx_bv}, {"componentType", 5125}, {"count", b.indices.size()}, {"type", "SCALAR"}
+        });
+
+        primitives.push_back({
+            {"attributes", {
+                {"POSITION", pos_acc},
+                {"TEXCOORD_0", uv_acc},
+                {"JOINTS_0", j_acc},
+                {"WEIGHTS_0", w_acc}
+            }},
+            {"indices", idx_acc},
+            {"material", tex_to_mat[kv.first]}
+        });
+    }
+    if (primitives.empty()) return false;
+
+    align4();
+    json gltf = {
+        {"asset", {{"version", "2.0"}, {"generator", "Lionheart native FF8 mod importer"}}},
+        {"scene", 0},
+        {"scenes", json::array({{{"nodes", json::array({0})}}})},
+        {"nodes", json::array({{{"mesh", 0}}})},
+        {"meshes", json::array({{{"primitives", primitives}}})},
+        {"materials", materials},
+        {"buffers", json::array({{{"byteLength", bin.size()}}})},
+        {"bufferViews", buffer_views},
+        {"accessors", accessors}
+    };
+    if (!images.empty()) gltf["images"] = images;
+    if (!textures.empty()) gltf["textures"] = textures;
+
+    std::string jstr = gltf.dump();
+    while (jstr.size() & 3u) jstr.push_back(' ');
+
+    std::vector<uint8_t> glb;
+    glb.reserve(12 + 8 + jstr.size() + 8 + bin.size());
+    write_le32(glb, 0x46546C67u); /* "glTF" */
+    write_le32(glb, 2u);
+    write_le32(glb, uint32_t(12 + 8 + jstr.size() + 8 + bin.size()));
+    write_le32(glb, uint32_t(jstr.size()));
+    write_le32(glb, 0x4E4F534Au); /* "JSON" */
+    glb.insert(glb.end(), jstr.begin(), jstr.end());
+    write_le32(glb, uint32_t(bin.size()));
+    write_le32(glb, 0x004E4942u); /* "BIN\0" */
+    glb.insert(glb.end(), bin.begin(), bin.end());
+
+    return write_file_bytes(glb_out, glb.data(), glb.size());
+}
+
+/* ---------- High-Poly Battle .dat -> glTF 2.0 .glb Exporter ---------- */
+
+bool convert_battle_dat_to_glb(const std::string &model_id,
+                               const std::vector<uint8_t> &dat,
+                               const Ps1ModelInfo &ps1_info,
+                               const MchTexProvider &tex_prov,
+                               const fs::path &glb_out,
+                               std::vector<int> &out_bone_remap) {
+    if (dat.size() < 24) return false;
+    uint32_t sec_count = le32(dat.data());
+    if (sec_count < 3 || sec_count > 32 || 4u + (sec_count + 1u) * 4u > dat.size()) return false;
+
+    uint32_t off_skel = le32(dat.data() + 4u + 0u * 4u);
+    uint32_t off_geom = le32(dat.data() + 4u + 1u * 4u);
+    uint32_t off_tex = le32(dat.data() + 4u + (sec_count - 1u) * 4u);
+    if (off_skel >= dat.size() || off_geom + 4u > dat.size() || off_tex >= dat.size()) return false;
+
+    /* 1. Skeleton bone table (Section 1: uint16 num_bones, uint16 scale, 12-byte pad, 48-byte bones). */
+    uint16_t num_bones = 0;
+    std::vector<int16_t> bone_parent;
+    if (off_skel + 16u <= dat.size()) {
+        num_bones = le16(dat.data() + off_skel);
+        if (num_bones > 256) num_bones = 0;
+        bone_parent.assign(num_bones, -1);
+        for (uint16_t b = 0; b < num_bones; ++b) {
+            size_t boff = off_skel + 16u + size_t(b) * 48u;
+            if (boff + 2u <= dat.size()) bone_parent[b] = le_s16(dat.data() + boff);
+        }
+    }
+
+    /* 2. Texture dimensions from Section N (TIM table) + HD texture lookup. */
+    std::vector<uint32_t> tim_w, tim_h;
+    std::vector<std::vector<uint8_t>> embedded_pngs;
+    if (off_tex + 4u <= dat.size()) {
+        uint32_t ntims = le32(dat.data() + off_tex);
+        if (ntims > 0 && ntims <= 32 && off_tex + 4u + ntims * 4u <= dat.size()) {
+            tim_w.assign(ntims, 128u);
+            tim_h.assign(ntims, 128u);
+            embedded_pngs.resize(ntims);
+            for (uint32_t ti = 0; ti < ntims; ++ti) {
+                uint32_t toff = off_tex + le32(dat.data() + off_tex + 4u + ti * 4u);
+                TimParsed tp;
+                if (toff < dat.size() && parse_tim_at(dat.data(), dat.size(), toff, tp)) {
+                    tim_w[ti] = tp.px_w ? tp.px_w : 128u;
+                    tim_h[ti] = tp.px_h ? tp.px_h : 128u;
+                }
+            }
+        }
+    }
+    if (tim_w.empty()) {
+        auto scanned = scan_embedded_tims(dat.data() + off_tex, dat.size() - off_tex);
+        size_t ntims = std::max<size_t>(1, scanned.size());
+        tim_w.assign(ntims, 128u);
+        tim_h.assign(ntims, 128u);
+        embedded_pngs.resize(ntims);
+        for (size_t ti = 0; ti < scanned.size(); ++ti) {
+            tim_w[ti] = scanned[ti].px_w ? scanned[ti].px_w : 128u;
+            tim_h[ti] = scanned[ti].px_h ? scanned[ti].px_h : 128u;
+        }
+    }
+    for (size_t ti = 0; ti < embedded_pngs.size(); ++ti) {
+        std::string key = model_id + "-" + std::to_string(ti);
+        const std::pair<int, ModFileRef> *found = nullptr;
+        if (tex_prov.same_src) {
+            auto it = tex_prov.same_src->find(key);
+            if (it != tex_prov.same_src->end()) found = &it->second;
+        }
+        if (!found && tex_prov.global) {
+            auto it = tex_prov.global->find(key);
+            if (it != tex_prov.global->end()) found = &it->second;
+        }
+        if (found && tex_prov.sources && found->first >= 0 &&
+            size_t(found->first) < tex_prov.sources->size()) {
+            std::vector<uint8_t> raw;
+            if (read_mod_file((*tex_prov.sources)[size_t(found->first)], found->second, raw)) {
+                DdsImage img;
+                if (decode_image_bytes(raw.data(), raw.size(), img)) {
+                    encode_rgba_png(img.width, img.height, img.rgba.data(), embedded_pngs[ti]);
+                }
+            }
+        }
+    }
+
+    /* 3. Geometry objects (Section 2). */
+    uint32_t nobjs = le32(dat.data() + off_geom);
+    if (nobjs == 0 || nobjs > 64 || off_geom + 4u + nobjs * 4u > dat.size()) return false;
+
+    std::map<uint32_t, PrimBucket> buckets;
+    std::vector<uint16_t> used_bones;
+    std::unordered_map<uint16_t, uint16_t> bone_to_joint;
+    auto joint_for_bone = [&](uint16_t bid) -> uint16_t {
+        auto it = bone_to_joint.find(bid);
+        if (it != bone_to_joint.end()) return it->second;
+        uint16_t j = uint16_t(used_bones.size());
+        bone_to_joint[bid] = j;
+        used_bones.push_back(bid);
+        return j;
+    };
+
+    for (uint32_t oi = 0; oi < nobjs; ++oi) {
+        uint32_t oo = off_geom + le32(dat.data() + off_geom + 4u + oi * 4u);
+        if (oo + 2u > dat.size()) continue;
+        uint16_t ngroups = le16(dat.data() + oo);
+        size_t p = oo + 2u;
+
+        struct BattleVert { float x, y, z; uint16_t joint; };
+        std::vector<BattleVert> verts;
+        for (uint16_t g = 0; g < ngroups; ++g) {
+            if (p + 4u > dat.size()) break;
+            uint16_t bid = le16(dat.data() + p + 0u);
+            uint16_t vc = le16(dat.data() + p + 2u);
+            p += 4u;
+            if (p + size_t(vc) * 6u > dat.size()) break;
+            uint16_t j = joint_for_bone(bid);
+            for (uint16_t vi = 0; vi < vc; ++vi) {
+                const uint8_t *vp = dat.data() + p + size_t(vi) * 6u;
+                verts.push_back({float(le_s16(vp + 0)), float(le_s16(vp + 2)), float(le_s16(vp + 4)), j});
+            }
+            p += size_t(vc) * 6u;
+        }
+        if (verts.empty()) continue;
+
+        /* Align relative to object start (4-byte boundary) before triangle/quad header. */
+        size_t rel = p - oo;
+        if (rel & 3u) p += (4u - (rel & 3u));
+        if (p + 12u > dat.size()) continue;
+
+        uint16_t ntris = le16(dat.data() + p + 0u);
+        uint16_t nquads = le16(dat.data() + p + 2u);
+        p += 12u; /* 2+2 + 8 bytes padding */
+
+        auto emit = [&](uint32_t tex_id, uint16_t vi, uint8_t u, uint8_t v) -> uint32_t {
+            if (tex_id >= tim_w.size()) tex_id = 0;
+            if (vi >= verts.size()) vi = 0;
+            auto &b = buckets[tex_id];
+            PrimVert pv{};
+            pv.px = verts[vi].x; pv.py = verts[vi].y; pv.pz = verts[vi].z;
+            pv.u = (float(u) + 0.5f) / float(tim_w[tex_id]);
+            pv.v = (float(v) + 0.5f) / float(tim_h[tex_id]);
+            pv.joint = verts[vi].joint;
+            uint32_t idx_out = uint32_t(b.verts.size());
+            b.verts.push_back(pv);
+            return idx_out;
+        };
+
+        for (uint16_t ti = 0; ti < ntris && p + 16u <= dat.size(); ++ti, p += 16u) {
+            const uint8_t *tp = dat.data() + p;
+            uint16_t v0 = le16(tp + 0) & 0x0FFFu;
+            uint16_t v1 = le16(tp + 2) & 0x0FFFu;
+            uint16_t v2 = le16(tp + 4) & 0x0FFFu;
+            uint16_t tex_id = le16(tp + 12) & 0x000Fu;
+            if (tex_id >= tim_w.size()) tex_id = 0;
+            uint32_t i0 = emit(tex_id, v0, tp[6], tp[7]);
+            uint32_t i1 = emit(tex_id, v1, tp[8], tp[9]);
+            uint32_t i2 = emit(tex_id, v2, tp[10], tp[11]);
+            auto &b = buckets[tex_id];
+            b.indices.push_back(i0); b.indices.push_back(i1); b.indices.push_back(i2);
+        }
+        for (uint16_t qi = 0; qi < nquads && p + 20u <= dat.size(); ++qi, p += 20u) {
+            const uint8_t *qp = dat.data() + p;
+            uint16_t v0 = le16(qp + 0) & 0x0FFFu;
+            uint16_t v1 = le16(qp + 2) & 0x0FFFu;
+            uint16_t v2 = le16(qp + 4) & 0x0FFFu;
+            uint16_t v3 = le16(qp + 6) & 0x0FFFu;
+            uint16_t tex_id = le16(qp + 16) & 0x000Fu;
+            if (tex_id >= tim_w.size()) tex_id = 0;
+            uint32_t i0 = emit(tex_id, v0, qp[8], qp[9]);
+            uint32_t i1 = emit(tex_id, v1, qp[10], qp[11]);
+            uint32_t i2 = emit(tex_id, v2, qp[12], qp[13]);
+            uint32_t i3 = emit(tex_id, v3, qp[14], qp[15]);
+            auto &b = buckets[tex_id];
+            b.indices.push_back(i0); b.indices.push_back(i1); b.indices.push_back(i2);
+            b.indices.push_back(i1); b.indices.push_back(i3); b.indices.push_back(i2);
+        }
+    }
+
+    if (buckets.empty()) return false;
+
+    out_bone_remap.clear();
+    if (!used_bones.empty()) {
+        out_bone_remap.resize(used_bones.size(), 0);
+        size_t ps1_bones = ps1_info.skin_bones.size();
+        for (size_t j = 0; j < used_bones.size(); ++j) {
+            uint16_t b = used_bones[j];
+            if (ps1_bones > 0) {
+                int16_t cur = int16_t(b);
+                int mapped = -1;
+                for (int depth = 0; depth < 32 && cur >= 0; ++depth) {
+                    if (size_t(cur) < ps1_bones) { mapped = int(cur); break; }
+                    if (size_t(cur) < bone_parent.size() && bone_parent[size_t(cur)] != cur)
+                        cur = bone_parent[size_t(cur)];
+                    else break;
+                }
+                out_bone_remap[j] = mapped >= 0 ? mapped : 0;
+            } else {
+                out_bone_remap[j] = int(b);
+            }
+        }
+    }
+
+    return pack_prim_buckets_to_glb(buckets, embedded_pngs, glb_out);
+}
+
 bool convert_mch_to_glb(const std::string &model_id,
                         const std::vector<uint8_t> &mch,
                         const Ps1ModelInfo &ps1_info,
@@ -1353,15 +1801,6 @@ bool convert_mch_to_glb(const std::string &model_id,
     }
 
     /* 3. Build per-texture primitive geometry. */
-    struct PrimVert {
-        float px, py, pz;
-        float u, v;
-        uint16_t joint;
-    };
-    struct PrimBucket {
-        std::vector<PrimVert> verts;
-        std::vector<uint32_t> indices;
-    };
     std::map<uint32_t, PrimBucket> buckets;
 
     auto read_pos = [&](uint16_t vi, float &x, float &y, float &z) {
@@ -1410,174 +1849,7 @@ bool convert_mch_to_glb(const std::string &model_id,
         }
     }
 
-    if (buckets.empty()) return false;
-
-    /* 4. Pack glTF 2.0 binary buffer & JSON. */
-    std::vector<uint8_t> bin;
-    json buffer_views = json::array();
-    json accessors = json::array();
-    json images = json::array();
-    json textures = json::array();
-    json materials = json::array();
-    json primitives = json::array();
-
-    auto align4 = [&]() {
-        while (bin.size() & 3u) bin.push_back(0);
-    };
-
-    /* Embed available PNGs */
-    std::unordered_map<uint32_t, int> tex_to_mat;
-    for (const auto &kv : buckets) {
-        uint32_t ti = kv.first;
-        json mat = {
-            {"pbrMetallicRoughness", {
-                {"metallicFactor", 0.0},
-                {"roughnessFactor", 1.0}
-            }},
-            {"alphaMode", "MASK"},
-            {"alphaCutoff", 0.5},
-            {"doubleSided", true}
-        };
-        if (ti < embedded_pngs.size() && !embedded_pngs[ti].empty()) {
-            align4();
-            size_t bv_off = bin.size();
-            const auto &png = embedded_pngs[ti];
-            bin.insert(bin.end(), png.begin(), png.end());
-            int bv_idx = int(buffer_views.size());
-            buffer_views.push_back({
-                {"buffer", 0},
-                {"byteOffset", bv_off},
-                {"byteLength", png.size()}
-            });
-            int img_idx = int(images.size());
-            images.push_back({
-                {"bufferView", bv_idx},
-                {"mimeType", "image/png"}
-            });
-            int tex_idx = int(textures.size());
-            textures.push_back({{"source", img_idx}});
-            mat["pbrMetallicRoughness"]["baseColorTexture"] = {{"index", tex_idx}};
-        }
-        tex_to_mat[ti] = int(materials.size());
-        materials.push_back(std::move(mat));
-    }
-
-    for (const auto &kv : buckets) {
-        const auto &b = kv.second;
-        if (b.verts.empty() || b.indices.empty()) continue;
-
-        /* POSITION (VEC3 float) */
-        align4();
-        size_t pos_off = bin.size();
-        float min_p[3] = {1e9f, 1e9f, 1e9f};
-        float max_p[3] = {-1e9f, -1e9f, -1e9f};
-        for (const auto &v : b.verts) {
-            write_f32(bin, v.px); write_f32(bin, v.py); write_f32(bin, v.pz);
-            min_p[0] = std::min(min_p[0], v.px); max_p[0] = std::max(max_p[0], v.px);
-            min_p[1] = std::min(min_p[1], v.py); max_p[1] = std::max(max_p[1], v.py);
-            min_p[2] = std::min(min_p[2], v.pz); max_p[2] = std::max(max_p[2], v.pz);
-        }
-        int pos_bv = int(buffer_views.size());
-        buffer_views.push_back({{"buffer", 0}, {"byteOffset", pos_off}, {"byteLength", b.verts.size() * 12u}});
-        int pos_acc = int(accessors.size());
-        accessors.push_back({
-            {"bufferView", pos_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC3"},
-            {"min", {min_p[0], min_p[1], min_p[2]}}, {"max", {max_p[0], max_p[1], max_p[2]}}
-        });
-
-        /* TEXCOORD_0 (VEC2 float) */
-        align4();
-        size_t uv_off = bin.size();
-        for (const auto &v : b.verts) {
-            write_f32(bin, v.u); write_f32(bin, v.v);
-        }
-        int uv_bv = int(buffer_views.size());
-        buffer_views.push_back({{"buffer", 0}, {"byteOffset", uv_off}, {"byteLength", b.verts.size() * 8u}});
-        int uv_acc = int(accessors.size());
-        accessors.push_back({
-            {"bufferView", uv_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC2"}
-        });
-
-        /* JOINTS_0 (VEC4 UNSIGNED_SHORT) */
-        align4();
-        size_t j_off = bin.size();
-        for (const auto &v : b.verts) {
-            write_le16(bin, v.joint); write_le16(bin, 0); write_le16(bin, 0); write_le16(bin, 0);
-        }
-        int j_bv = int(buffer_views.size());
-        buffer_views.push_back({{"buffer", 0}, {"byteOffset", j_off}, {"byteLength", b.verts.size() * 8u}});
-        int j_acc = int(accessors.size());
-        accessors.push_back({
-            {"bufferView", j_bv}, {"componentType", 5123}, {"count", b.verts.size()}, {"type", "VEC4"}
-        });
-
-        /* WEIGHTS_0 (VEC4 float) */
-        align4();
-        size_t w_off = bin.size();
-        for (size_t k = 0; k < b.verts.size(); ++k) {
-            write_f32(bin, 1.0f); write_f32(bin, 0.0f); write_f32(bin, 0.0f); write_f32(bin, 0.0f);
-        }
-        int w_bv = int(buffer_views.size());
-        buffer_views.push_back({{"buffer", 0}, {"byteOffset", w_off}, {"byteLength", b.verts.size() * 16u}});
-        int w_acc = int(accessors.size());
-        accessors.push_back({
-            {"bufferView", w_bv}, {"componentType", 5126}, {"count", b.verts.size()}, {"type", "VEC4"}
-        });
-
-        /* INDICES (SCALAR UNSIGNED_INT) */
-        align4();
-        size_t idx_off = bin.size();
-        for (uint32_t i : b.indices) write_le32(bin, i);
-        int idx_bv = int(buffer_views.size());
-        buffer_views.push_back({{"buffer", 0}, {"byteOffset", idx_off}, {"byteLength", b.indices.size() * 4u}});
-        int idx_acc = int(accessors.size());
-        accessors.push_back({
-            {"bufferView", idx_bv}, {"componentType", 5125}, {"count", b.indices.size()}, {"type", "SCALAR"}
-        });
-
-        primitives.push_back({
-            {"attributes", {
-                {"POSITION", pos_acc},
-                {"TEXCOORD_0", uv_acc},
-                {"JOINTS_0", j_acc},
-                {"WEIGHTS_0", w_acc}
-            }},
-            {"indices", idx_acc},
-            {"material", tex_to_mat[kv.first]}
-        });
-    }
-
-    align4();
-    json gltf = {
-        {"asset", {{"version", "2.0"}, {"generator", "Lionheart native FF8 mod importer"}}},
-        {"scene", 0},
-        {"scenes", json::array({{{"nodes", json::array({0})}}})},
-        {"nodes", json::array({{{"mesh", 0}}})},
-        {"meshes", json::array({{{"primitives", primitives}}})},
-        {"materials", materials},
-        {"buffers", json::array({{{"byteLength", bin.size()}}})},
-        {"bufferViews", buffer_views},
-        {"accessors", accessors}
-    };
-    if (!images.empty()) gltf["images"] = images;
-    if (!textures.empty()) gltf["textures"] = textures;
-
-    std::string jstr = gltf.dump();
-    while (jstr.size() & 3u) jstr.push_back(' ');
-
-    std::vector<uint8_t> glb;
-    glb.reserve(12 + 8 + jstr.size() + 8 + bin.size());
-    write_le32(glb, 0x46546C67u); /* "glTF" */
-    write_le32(glb, 2u);
-    write_le32(glb, uint32_t(12 + 8 + jstr.size() + 8 + bin.size()));
-    write_le32(glb, uint32_t(jstr.size()));
-    write_le32(glb, 0x4E4F534Au); /* "JSON" */
-    glb.insert(glb.end(), jstr.begin(), jstr.end());
-    write_le32(glb, uint32_t(bin.size()));
-    write_le32(glb, 0x004E4942u); /* "BIN\0" */
-    glb.insert(glb.end(), bin.begin(), bin.end());
-
-    return write_file_bytes(glb_out, glb.data(), glb.size());
+    return pack_prim_buckets_to_glb(buckets, embedded_pngs, glb_out);
 }
 
 /* ---------- Progress Helper ---------- */
@@ -1600,15 +1872,188 @@ struct ProgressSink {
     }
 };
 
+bool is_safe_rel_path(const std::string &rel) {
+    if (rel.empty() || rel[0] == '/' || rel[0] == '\\') return false;
+    if (rel.find("..") != std::string::npos) return false;
+    if (rel.size() >= 2 && rel[1] == ':') return false;
+    return true;
+}
+
+std::string slugify_mod_id(const std::string &raw) {
+    std::string out;
+    out.reserve(48);
+    bool last_dash = false;
+    for (unsigned char c : raw) {
+        if (std::isalnum(c)) {
+            out.push_back(char(std::tolower(c)));
+            last_dash = false;
+        } else if (!out.empty() && !last_dash) {
+            out.push_back('-');
+            last_dash = true;
+        }
+        if (out.size() >= 52) break;
+    }
+    while (!out.empty() && out.back() == '-') out.pop_back();
+    if (out.empty()) out = "mod";
+    return out;
+}
+
+bool path_occupied(const fs::path &path) {
+    std::error_code ec;
+    const auto status = fs::symlink_status(path, ec);
+    return status.type() != fs::file_type::not_found && ec != std::errc::no_such_file_or_directory;
+}
+
+std::string asset_root(const fs::path &path) {
+    if (path.empty()) return {};
+    std::error_code ec;
+    fs::path absolute = fs::absolute(path, ec);
+    if (ec) return {};
+    fs::path root = fs::weakly_canonical(absolute, ec);
+    return ec ? std::string{} : root.generic_string();
+}
+
+bool move_file_safe(const fs::path &src, const fs::path &dst) {
+    std::error_code ec;
+    if (!path_occupied(src)) return true;
+    if (!fs::is_regular_file(fs::symlink_status(src, ec))) return false;
+    fs::create_directories(dst.parent_path(), ec);
+    if (ec || !fs::copy_file(src, dst, ec)) return false;
+    if (fs::remove(src, ec)) return true;
+    fs::remove(dst, ec);
+    return false;
+}
+
+bool load_registry_json(const fs::path &reg_path, json &out) {
+    out = {{"version", 1}, {"mods", json::array()}};
+    std::error_code ec;
+    if (!fs::is_regular_file(reg_path, ec)) return false;
+    std::ifstream in(reg_path);
+    if (!in) return false;
+    try {
+        json parsed = json::parse(in);
+        if (parsed.is_object() && parsed.contains("mods") && parsed["mods"].is_array()) {
+            out = std::move(parsed);
+            return true;
+        }
+    } catch (...) {}
+    return false;
+}
+
+bool save_registry_json(const fs::path &reg_path, const json &doc) {
+    std::error_code ec;
+    fs::create_directories(reg_path.parent_path(), ec);
+    fs::path tmp = reg_path;
+    tmp += ".tmp";
+    std::string dump = doc.dump(2) + "\n";
+    if (!write_file_bytes(tmp, reinterpret_cast<const uint8_t *>(dump.data()), dump.size())) return false;
+    fs::rename(tmp, reg_path, ec);
+    if (!ec) return true;
+    fs::remove(tmp, ec);
+    return false;
+}
+
+bool read_mod_xml_from_path(const std::string &mod_path, std::string &xml_out, std::string &label_out) {
+    xml_out.clear();
+    label_out.clear();
+    std::error_code ec;
+    fs::path p(mod_path);
+    auto try_archive = [&](const fs::path &ap) -> bool {
+        std::vector<IrosEntry> entries;
+        if (!parse_iros_directory(ap.string(), entries)) return false;
+        for (const auto &e : entries) {
+            if (e.flags != 0 || e.size == 0 || e.size >= 4u * 1024u * 1024u) continue;
+            std::string norm = normalize_slashes(e.name);
+            if (to_lower(norm) == "mod.xml") {
+                std::ifstream in(ap, std::ios::binary);
+                if (!in) return false;
+                in.seekg(std::streamoff(e.offset));
+                std::string buf(e.size, '\0');
+                in.read(&buf[0], std::streamsize(e.size));
+                if (uint64_t(in.gcount()) == e.size) {
+                    xml_out = std::move(buf);
+                    label_out = ap.filename().string();
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    if (fs::is_regular_file(p, ec)) {
+        std::string ext = to_lower(p.extension().string());
+        if (ext == ".iroj" || ext == ".iro") return try_archive(p);
+        return false;
+    }
+    if (fs::is_directory(p, ec)) {
+        fs::path direct = p / "mod.xml";
+        if (fs::is_regular_file(direct, ec)) {
+            std::ifstream in(direct, std::ios::binary);
+            if (in) {
+                xml_out.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                label_out = p.filename().string();
+                return !xml_out.empty();
+            }
+        }
+        std::vector<fs::path> archives;
+        for (const auto &ent : fs::directory_iterator(p, ec)) {
+            if (!ent.is_regular_file(ec)) continue;
+            std::string ext = to_lower(ent.path().extension().string());
+            if (ext == ".iroj" || ext == ".iro") archives.push_back(ent.path());
+        }
+        std::sort(archives.begin(), archives.end(), [](const fs::path &a, const fs::path &b) {
+            return to_lower(a.filename().string()) < to_lower(b.filename().string());
+        });
+        for (const auto &ap : archives) {
+            if (try_archive(ap)) return true;
+        }
+    }
+    return false;
+}
+
+bool is_audio_pack_file(const std::string &low_path, std::string &out_rel) {
+    static const char *const kExts[] = {".ogg", ".wav", ".flac", ".mp3"};
+    bool ext_ok = false;
+    for (const char *ext : kExts) {
+        size_t el = std::strlen(ext);
+        if (low_path.size() > el && low_path.compare(low_path.size() - el, el, ext) == 0) {
+            ext_ok = true;
+            break;
+        }
+    }
+    if (!ext_ok) return false;
+    if (low_path.find("preview/") != std::string::npos) return false;
+    /* Preserve clean relative subpath starting at music/, sfx/, audio/, or vgmstream/. */
+    static const char *const kRoots[] = {"music/", "sfx/", "audio/", "vgmstream/"};
+    for (const char *root : kRoots) {
+        size_t pos = low_path.find(root);
+        if (pos != std::string::npos) {
+            out_rel = low_path.substr(pos);
+            return is_safe_rel_path(out_rel);
+        }
+    }
+    size_t sl = low_path.rfind('/');
+    out_rel = (sl == std::string::npos) ? low_path : low_path.substr(sl + 1);
+    return is_safe_rel_path(out_rel);
+}
+
 bool run_import_impl(const std::vector<std::string> &disc_paths,
                      const std::vector<std::string> &mod_paths,
                      const std::string &textures_out,
                      const std::string &models_out,
                      const std::string &movies_out,
+                     const std::string &audio_out,
+                     const std::string &registry_dir,
+                     const std::vector<std::pair<std::string, int>> &overrides,
                      ProgressSink *sink,
                      host_mod_import_status_t &final_status) {
     final_status = {};
     final_status.running = 1;
+    std::vector<std::string> log_lines;
+    unsigned warnings = 0;
+    auto add_log = [&](const std::string &msg, bool is_warn = false) {
+        if (is_warn) ++warnings;
+        if (log_lines.size() < 48) log_lines.push_back((is_warn ? "[WARN] " : "") + msg);
+    };
 
     if (disc_paths.empty()) {
         std::snprintf(final_status.error, sizeof(final_status.error),
@@ -1624,6 +2069,27 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         final_status.finished = 1;
         return false;
     }
+
+    const bool managed = !registry_dir.empty();
+    const fs::path reg_path = fs::path(registry_dir) / "mods-registry.json";
+    json registry;
+    json roots = json::object();
+    if (managed) {
+        if (!load_registry_json(reg_path, registry) && path_occupied(reg_path)) {
+            std::snprintf(final_status.error, sizeof(final_status.error), "Could not read the mod registry.");
+            final_status.running = 0;
+            final_status.finished = 1;
+            return false;
+        }
+        roots = {{"textures", asset_root(textures_out)}, {"models", asset_root(models_out)},
+                 {"movies", asset_root(movies_out)}, {"audio", asset_root(audio_out)}};
+    }
+    std::atomic<unsigned> conflicts{0};
+    auto occupied_output = [&](const fs::path &path) {
+        if (!managed || !path_occupied(path)) return false;
+        ++conflicts;
+        return true;
+    };
 
     /* Step 1: Index PS1 FF8 disc(s). */
     if (sink) sink->set_stage("Indexing FF8 PlayStation disc...");
@@ -1675,9 +2141,21 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     });
 
     std::vector<ModSource> sources;
-    auto filter_entries_with_xml = [&](const std::string &xml_text,
+    std::string primary_mod_name;
+    auto filter_entries_with_xml = [&](const std::string &src_label,
+                                       const std::string &xml_text,
                                        const std::vector<ModFileRef> &all_refs) -> std::vector<ModFileRef> {
-        ModXmlResult xr = xml_text.empty() ? ModXmlResult{} : parse_and_eval_mod_xml(xml_text);
+        if (!xml_text.empty() && primary_mod_name.empty()) {
+            host_mod_xml_config_t cfg{};
+            if (parse_mod_xml_config(xml_text, cfg) && cfg.mod_name[0]) primary_mod_name = cfg.mod_name;
+        }
+        ModXmlResult xr = xml_text.empty() ? ModXmlResult{} : parse_and_eval_mod_xml(xml_text, overrides);
+        if (xr.has_folder_rules) {
+            std::string summary = src_label + ": mod.xml active folders (" +
+                                  std::to_string(xr.active_folders.size()) + "/" +
+                                  std::to_string(xr.declared_folders.size()) + ")";
+            add_log(summary);
+        }
         std::vector<ModFileRef> active;
         for (const auto &r : all_refs) {
             std::string low = to_lower(r.rel_path);
@@ -1705,7 +2183,10 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     for (const auto &ap : archive_paths) {
         std::vector<IrosEntry> entries;
         std::string aerr;
-        if (!parse_iros_directory(ap.string(), entries, &aerr)) continue;
+        if (!parse_iros_directory(ap.string(), entries, &aerr)) {
+            add_log(ap.filename().string() + ": skipped (" + (aerr.empty() ? "invalid IROS" : aerr) + ")", true);
+            continue;
+        }
         ModSource src;
         src.label = ap.filename().string();
         src.is_archive = true;
@@ -1715,8 +2196,9 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         std::string xml_text;
         std::vector<ModFileRef> all_refs;
         all_refs.reserve(entries.size());
+        unsigned compressed_skipped = 0;
         for (const auto &e : entries) {
-            if (e.flags != 0) continue; /* skip unsupported compressed entries */
+            if (e.flags != 0) { ++compressed_skipped; continue; } /* skip unsupported compressed entries */
             std::string norm = normalize_slashes(e.name);
             ModFileRef r;
             r.rel_path = norm;
@@ -1732,7 +2214,10 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             }
             all_refs.push_back(std::move(r));
         }
-        src.active_files = filter_entries_with_xml(xml_text, all_refs);
+        if (compressed_skipped > 0) {
+            add_log(src.label + ": skipped " + std::to_string(compressed_skipped) + " compressed IROS entries", true);
+        }
+        src.active_files = filter_entries_with_xml(src.label, xml_text, all_refs);
         sources.push_back(std::move(src));
     }
 
@@ -1762,7 +2247,7 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             }
             all_refs.push_back(std::move(r));
         }
-        src.active_files = filter_entries_with_xml(xml_text, all_refs);
+        src.active_files = filter_entries_with_xml(src.label, xml_text, all_refs);
         sources.push_back(std::move(src));
     }
 
@@ -1787,10 +2272,13 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     std::vector<std::unordered_map<std::string, std::pair<int, ModFileRef>>> per_src_tex(sources.size());
     std::unordered_map<std::string, std::pair<int, ModFileRef>> global_mch_tex;
 
+    enum class ModelKind { FieldMch, BattleDat, WorldMch, PrebuiltGlb };
     struct ModelChoice {
         int source_idx = -1;
         ModFileRef ref;
-        std::string model_id; /* "d000".."d075" */
+        ModelKind kind = ModelKind::FieldMch;
+        std::string category; /* "field", "battle", "world" */
+        std::string model_id; /* "d000", "c0m001", "d0c000", "d0w000", "squall", "ragnarok", etc. */
     };
     std::unordered_map<std::string, ModelChoice> model_choices;
 
@@ -1800,6 +2288,13 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         std::string filename;
     };
     std::unordered_map<std::string, MovieChoice> movie_choices;
+
+    struct AudioChoice {
+        int source_idx = -1;
+        ModFileRef ref;
+        std::string rel_path;
+    };
+    std::unordered_map<std::string, AudioChoice> audio_choices;
 
     for (size_t si = 0; si < sources.size(); ++si) {
         for (const auto &ref : sources[si].active_files) {
@@ -1815,16 +2310,60 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
                 fname.substr(4) == ".mch") {
                 std::string mid = fname.substr(0, 4);
                 if (ps1.field_models.count(mid)) {
-                    model_choices[mid] = {int(si), ref, mid};
+                    model_choices["field/" + mid] = {int(si), ref, ModelKind::FieldMch, "field", mid};
                 }
                 continue;
             }
 
-            /* Movies (.avi / .cam) */
+            /* Battle character, weapon, and enemy .dat models (c0mNNN.dat, dXcNNN.dat, dXwNNN.dat) */
+            if (fname.size() == 10 && fname.substr(6) == ".dat") {
+                std::string bid = fname.substr(0, 6);
+                if (ps1.battle_models.count(bid)) {
+                    model_choices["battle/" + bid] = {int(si), ref, ModelKind::BattleDat, "battle", bid};
+                    continue;
+                }
+            }
+
+            /* World map .mch models (c0wNNN.mch, wNNN.mch) */
+            if (fname.size() > 4 && fname.substr(fname.size() - 4) == ".mch") {
+                std::string stem = fname.substr(0, fname.size() - 4);
+                if (low.find("world/") != std::string::npos || stem.rfind("c0w", 0) == 0) {
+                    model_choices["world/" + stem] = {int(si), ref, ModelKind::WorldMch, "world", stem};
+                    continue;
+                }
+            }
+
+            /* Pre-built .glb models under field/, battle/, or world/ */
+            if (fname.size() > 4 && fname.substr(fname.size() - 4) == ".glb") {
+                std::string stem = fname.substr(0, fname.size() - 4);
+                std::string cat;
+                if (low.find("battle/") != std::string::npos || ps1.battle_models.count(stem)) cat = "battle";
+                else if (low.find("world/") != std::string::npos || stem.rfind("c0w", 0) == 0 ||
+                         stem == "squall" || stem == "car" || stem == "garden" ||
+                         stem == "balamb_garden" || stem == "ragnarok" || stem == "chocobo" || stem == "train") cat = "world";
+                else if (low.find("field/") != std::string::npos || ps1.field_models.count(stem)) cat = "field";
+                if (!cat.empty() && is_safe_rel_path(stem)) {
+                    model_choices[cat + "/" + stem] = {int(si), ref, ModelKind::PrebuiltGlb, cat, stem};
+                    continue;
+                }
+            }
+
+            /* Movies (.avi / .cam / .mp4 / .mkv / .webm) */
             if (!movies_out.empty() && fname.size() > 4) {
-                std::string ext = fname.substr(fname.size() - 4);
-                if (ext == ".avi" || ext == ".cam") {
+                std::string ext4 = fname.substr(fname.size() - 4);
+                bool is_mov = (ext4 == ".avi" || ext4 == ".cam" || ext4 == ".mp4" || ext4 == ".mkv" ||
+                               (fname.size() > 5 && fname.substr(fname.size() - 5) == ".webm"));
+                if (is_mov) {
                     movie_choices[fname] = {int(si), ref, fname};
+                    continue;
+                }
+            }
+
+            /* Audio / music replacement packs (.ogg / .wav / .flac / .mp3) */
+            if (!audio_out.empty()) {
+                std::string audio_rel;
+                if (is_audio_pack_file(low, audio_rel)) {
+                    audio_choices[audio_rel] = {int(si), ref, audio_rel};
                     continue;
                 }
             }
@@ -1845,7 +2384,8 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         }
     }
 
-    unsigned total_jobs = unsigned(tex_choices.size() + model_choices.size() + movie_choices.size());
+    unsigned total_jobs = unsigned(tex_choices.size() + model_choices.size() +
+                                   movie_choices.size() + audio_choices.size());
     if (sink) {
         sink->set_total(total_jobs);
         sink->set_stage("Converting HD textures & 3D models...");
@@ -1859,24 +2399,37 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     std::unordered_set<std::string> remapped_uv_models;
     for (const auto &kv : model_choices) {
         const auto &mc = kv.second;
-        auto pit = ps1.field_models.find(mc.model_id);
-        if (pit == ps1.field_models.end()) continue;
-        std::vector<uint8_t> mch;
-        if (!read_mod_file(sources[size_t(mc.source_idx)], mc.ref, mch) || mch.size() < 64) continue;
-        uint32_t mod_tims = 0;
-        size_t pos = 0;
-        while (pos + 4 <= mch.size()) {
-            uint32_t v = le32(mch.data() + pos);
-            pos += 4;
-            if (v == 0xFFFFFFFFu) break;
-            ++mod_tims;
-        }
-        if (pos + 4 > mch.size()) continue;
-        uint32_t moff = le32(mch.data() + pos);
-        if (moff + 64 > mch.size()) continue;
-        uint32_t mod_verts = le32(mch.data() + moff + 1 * 4);
-        if (mod_tims != pit->second.tim_count || mod_verts != pit->second.vert_count) {
-            remapped_uv_models.insert(mc.model_id);
+        if (mc.kind == ModelKind::FieldMch) {
+            auto pit = ps1.field_models.find(mc.model_id);
+            if (pit == ps1.field_models.end()) continue;
+            std::vector<uint8_t> mch;
+            if (!read_mod_file(sources[size_t(mc.source_idx)], mc.ref, mch) || mch.size() < 64) continue;
+            uint32_t mod_tims = 0;
+            size_t pos = 0;
+            while (pos + 4 <= mch.size()) {
+                uint32_t v = le32(mch.data() + pos);
+                pos += 4;
+                if (v == 0xFFFFFFFFu) break;
+                ++mod_tims;
+            }
+            if (pos + 4 > mch.size()) continue;
+            uint32_t moff = le32(mch.data() + pos);
+            if (moff + 64 > mch.size()) continue;
+            uint32_t mod_verts = le32(mch.data() + moff + 1 * 4);
+            if (mod_tims != pit->second.tim_count || mod_verts != pit->second.vert_count) {
+                remapped_uv_models.insert(mc.model_id);
+            }
+        } else if (mc.kind == ModelKind::BattleDat) {
+            auto pit = ps1.battle_models.find(mc.model_id);
+            if (pit == ps1.battle_models.end()) continue;
+            std::vector<uint8_t> dat;
+            if (!read_mod_file(sources[size_t(mc.source_idx)], mc.ref, dat) || dat.size() < 24) continue;
+            Ps1ModelInfo mod_info;
+            inspect_battle_dat_ps1(dat, mod_info);
+            if ((mod_info.tim_count && pit->second.tim_count && mod_info.tim_count != pit->second.tim_count) ||
+                (mod_info.vert_count && pit->second.vert_count && mod_info.vert_count != pit->second.vert_count)) {
+                remapped_uv_models.insert(mc.model_id);
+            }
         }
     }
 
@@ -1894,6 +2447,16 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     std::atomic<unsigned> tex_written{0};
     std::atomic<unsigned> tex_skipped{0};
     std::atomic<unsigned> tex_failed{0};
+    std::mutex written_mu;
+    std::vector<std::string> written_tex_files;
+    std::vector<std::string> written_model_files;
+    json written_manifest_models = json::object();
+    std::vector<std::string> written_movie_files;
+    std::vector<std::string> written_audio_files;
+    if (!remapped_uv_models.empty()) {
+        add_log("UV guard kept " + std::to_string(remapped_uv_models.size()) +
+                " remapped model texture sets inside .glb only");
+    }
 
     if (!textures_out.empty() && !tex_jobs.empty()) {
         std::error_code ec;
@@ -1974,15 +2537,31 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
 
                         std::string htex = hex64(target.tex_hash);
                         if (job.pal_idx <= 0) {
-                            fs::path out_p = fs::path(textures_out) / (htex + ".png");
-                            if (write_file_bytes(out_p, png.data(), png.size())) ++tex_written;
-                            else ++tex_failed;
+                            std::string fname_out = htex + ".png";
+                            fs::path out_p = fs::path(textures_out) / fname_out;
+                            std::unique_lock<std::mutex> lk(written_mu, std::defer_lock);
+                            if (managed) lk.lock();
+                            if (!occupied_output(out_p)) {
+                                if (write_file_bytes(out_p, png.data(), png.size())) {
+                                    ++tex_written;
+                                    if (!lk.owns_lock()) lk.lock();
+                                    written_tex_files.push_back(std::move(fname_out));
+                                } else ++tex_failed;
+                            }
                         }
                         if (job.pal_idx >= 0 && size_t(job.pal_idx) < target.clut_hashes.size()) {
                             std::string hclut = hex64(target.clut_hashes[size_t(job.pal_idx)]);
-                            fs::path out_p = fs::path(textures_out) / (htex + "_" + hclut + ".png");
-                            if (write_file_bytes(out_p, png.data(), png.size())) ++tex_written;
-                            else ++tex_failed;
+                            std::string fname_out = htex + "_" + hclut + ".png";
+                            fs::path out_p = fs::path(textures_out) / fname_out;
+                            std::unique_lock<std::mutex> lk(written_mu, std::defer_lock);
+                            if (managed) lk.lock();
+                            if (!occupied_output(out_p)) {
+                                if (write_file_bytes(out_p, png.data(), png.size())) {
+                                    ++tex_written;
+                                    if (!lk.owns_lock()) lk.lock();
+                                    written_tex_files.push_back(std::move(fname_out));
+                                } else ++tex_failed;
+                            }
                         }
                     }
                     if (sink) sink->inc_done();
@@ -1992,13 +2571,15 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         for (auto &w : workers) w.join();
     }
 
-    /* Step 5: Export high-poly field 3D models (.mch -> .glb + manifest.json). */
+    /* Step 5: Export high-poly field, battle, and world 3D models (.mch/.dat/.glb + manifest.json). */
     unsigned models_written = 0;
     unsigned models_failed = 0;
     if (!models_out.empty() && !model_choices.empty()) {
         if (sink) sink->set_stage("Converting HD 3D models...");
         std::error_code ec;
         fs::create_directories(fs::path(models_out) / "field", ec);
+        fs::create_directories(fs::path(models_out) / "battle", ec);
+        fs::create_directories(fs::path(models_out) / "world", ec);
 
         json manifest = {{"models", json::object()}};
         /* Preserve any pre-existing custom models in manifest.json */
@@ -2013,30 +2594,40 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             } catch (...) {}
         }
 
-        /* Sort model IDs ascending (d000 < d001 < ... < d075) so canonical primary models
-         * own any shared VRAM texture hash instead of later cutscene variants (e.g. d075). */
-        std::vector<std::string> sorted_mids;
-        sorted_mids.reserve(model_choices.size());
+        /* Sort canonical keys ascending so primary models own shared VRAM hashes. */
+        auto ps1_info_for = [&](const ModelChoice &mc) -> const Ps1ModelInfo * {
+            if (mc.category == "field") {
+                auto it = ps1.field_models.find(mc.model_id);
+                return it != ps1.field_models.end() ? &it->second : nullptr;
+            }
+            if (mc.category == "battle") {
+                auto it = ps1.battle_models.find(mc.model_id);
+                return it != ps1.battle_models.end() ? &it->second : nullptr;
+            }
+            auto it = ps1.world_models.find(mc.model_id);
+            return it != ps1.world_models.end() ? &it->second : nullptr;
+        };
+
+        std::vector<std::string> sorted_keys;
+        sorted_keys.reserve(model_choices.size());
         std::unordered_map<uint64_t, unsigned> hash_owner_count;
         for (const auto &kv : model_choices) {
-            sorted_mids.push_back(kv.first);
-            auto pit = ps1.field_models.find(kv.first);
-            if (pit != ps1.field_models.end()) {
-                for (uint64_t h : pit->second.vram_texture_hashes) ++hash_owner_count[h];
+            sorted_keys.push_back(kv.first);
+            if (const Ps1ModelInfo *pi = ps1_info_for(kv.second)) {
+                for (uint64_t h : pi->vram_texture_hashes) ++hash_owner_count[h];
             }
         }
-        std::sort(sorted_mids.begin(), sorted_mids.end());
+        std::sort(sorted_keys.begin(), sorted_keys.end());
         std::unordered_set<uint64_t> claimed_hashes;
 
-        for (const auto &mid : sorted_mids) {
-            const auto &mc = model_choices.at(mid);
-            auto ps1_it = ps1.field_models.find(mc.model_id);
-            if (ps1_it == ps1.field_models.end()) {
-                if (sink) sink->inc_done();
-                continue;
-            }
-            std::vector<uint8_t> mch_bytes;
-            if (!read_mod_file(sources[size_t(mc.source_idx)], mc.ref, mch_bytes)) {
+        for (const auto &canon_key : sorted_keys) {
+            const auto &mc = model_choices.at(canon_key);
+            const Ps1ModelInfo *ps1_ptr = ps1_info_for(mc);
+            Ps1ModelInfo empty_ps1;
+            const Ps1ModelInfo &ps1_ref = ps1_ptr ? *ps1_ptr : empty_ps1;
+
+            std::vector<uint8_t> raw_bytes;
+            if (!read_mod_file(sources[size_t(mc.source_idx)], mc.ref, raw_bytes)) {
                 ++models_failed;
                 if (sink) sink->inc_done();
                 continue;
@@ -2047,32 +2638,48 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             prov.global = &global_mch_tex;
             prov.sources = &sources;
 
-            fs::path rel_glb = fs::path("field") / (mc.model_id + ".glb");
+            fs::path rel_glb = fs::path(mc.category) / (mc.model_id + ".glb");
+            fs::path abs_glb = fs::path(models_out) / rel_glb;
+            const bool model_key_exists = managed && manifest["models"].contains(canon_key);
+            if (model_key_exists) ++conflicts;
+            if (model_key_exists || occupied_output(abs_glb)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
             std::vector<int> bone_remap;
-            if (convert_mch_to_glb(mc.model_id, mch_bytes, ps1_it->second, prov,
-                                   fs::path(models_out) / rel_glb, bone_remap)) {
+            bool ok = false;
+            if (mc.kind == ModelKind::FieldMch || mc.kind == ModelKind::WorldMch) {
+                ok = convert_mch_to_glb(mc.model_id, raw_bytes, ps1_ref, prov, abs_glb, bone_remap);
+            } else if (mc.kind == ModelKind::BattleDat) {
+                ok = convert_battle_dat_to_glb(mc.model_id, raw_bytes, ps1_ref, prov, abs_glb, bone_remap);
+            } else if (mc.kind == ModelKind::PrebuiltGlb) {
+                ok = raw_bytes.size() >= 12 && std::memcmp(raw_bytes.data(), "glTF", 4) == 0 &&
+                     write_file_bytes(abs_glb, raw_bytes.data(), raw_bytes.size());
+            }
+
+            if (ok) {
                 json entry = {
                     {"file", rel_glb.generic_string()},
                     {"scale", 1.0},
                     {"double_sided", true}
                 };
                 if (!bone_remap.empty()) entry["bone_remap"] = bone_remap;
-                /* Prefer hashes unique to this model; otherwise let only the primary (lowest ID)
-                 * model claim a shared hash. */
                 json hashes = json::array();
-                for (uint64_t h : ps1_it->second.vram_texture_hashes) {
+                for (uint64_t h : ps1_ref.vram_texture_hashes) {
                     if (hash_owner_count[h] == 1u) {
                         hashes.push_back(hex64(h));
                         claimed_hashes.insert(h);
                     }
                 }
                 if (hashes.empty()) {
-                    for (uint64_t h : ps1_it->second.vram_texture_hashes) {
+                    for (uint64_t h : ps1_ref.vram_texture_hashes) {
                         if (claimed_hashes.insert(h).second) hashes.push_back(hex64(h));
                     }
                 }
                 if (!hashes.empty()) entry["vram_texture_hashes"] = hashes;
-                manifest["models"]["field/" + mc.model_id] = std::move(entry);
+                written_manifest_models[canon_key] = entry;
+                written_model_files.push_back(rel_glb.generic_string());
+                manifest["models"][canon_key] = std::move(entry);
                 ++models_written;
             } else {
                 ++models_failed;
@@ -2081,10 +2688,11 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         }
 
         std::string mstr = manifest.dump(2) + "\n";
-        write_file_bytes(manifest_path, reinterpret_cast<const uint8_t *>(mstr.data()), mstr.size());
+        if (models_written || !managed)
+            write_file_bytes(manifest_path, reinterpret_cast<const uint8_t *>(mstr.data()), mstr.size());
     }
 
-    /* Step 6: Optional FMV movie extraction (.avi / .cam). */
+    /* Step 6: Optional FMV movie extraction (.avi / .cam / .mp4 / .mkv / .webm). */
     unsigned movies_written = 0;
     if (!movies_out.empty() && !movie_choices.empty()) {
         if (sink) sink->set_stage("Extracting HD movies...");
@@ -2093,8 +2701,13 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         for (const auto &kv : movie_choices) {
             const auto &mc = kv.second;
             fs::path target = fs::path(movies_out) / mc.filename;
+            if (occupied_output(target)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
             if (fs::is_regular_file(target, ec) && fs::file_size(target, ec) == mc.ref.size) {
                 ++movies_written;
+                written_movie_files.push_back(mc.filename);
                 if (sink) sink->inc_done();
                 continue;
             }
@@ -2102,8 +2715,109 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             if (read_mod_file(sources[size_t(mc.source_idx)], mc.ref, data) &&
                 write_file_bytes(target, data.data(), data.size())) {
                 ++movies_written;
+                written_movie_files.push_back(mc.filename);
             }
             if (sink) sink->inc_done();
+        }
+    }
+
+    /* Step 7: Optional audio / music pack extraction (.ogg / .wav / .flac / .mp3). */
+    unsigned audio_written = 0;
+    if (!audio_out.empty() && !audio_choices.empty()) {
+        if (sink) sink->set_stage("Extracting audio pack...");
+        std::error_code ec;
+        fs::create_directories(audio_out, ec);
+        for (const auto &kv : audio_choices) {
+            const auto &ac = kv.second;
+            fs::path target = fs::path(audio_out) / ac.rel_path;
+            fs::create_directories(target.parent_path(), ec);
+            if (occupied_output(target)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
+            if (fs::is_regular_file(target, ec) && fs::file_size(target, ec) == ac.ref.size) {
+                ++audio_written;
+                written_audio_files.push_back(ac.rel_path);
+                if (sink) sink->inc_done();
+                continue;
+            }
+            std::vector<uint8_t> data;
+            if (read_mod_file(sources[size_t(ac.source_idx)], ac.ref, data) &&
+                write_file_bytes(target, data.data(), data.size())) {
+                ++audio_written;
+                written_audio_files.push_back(ac.rel_path);
+            }
+            if (sink) sink->inc_done();
+        }
+        if (audio_written > 0) {
+            add_log("Extracted " + std::to_string(audio_written) +
+                    " audio/music files to audio-hd/ (external audio playback pack staged)");
+        }
+    }
+
+    if (tex_failed.load() > 0) {
+        add_log(std::to_string(tex_failed.load()) + " texture(s) failed to decode or write", true);
+    }
+    if (models_failed > 0) {
+        add_log(std::to_string(models_failed) + " 3D model(s) failed to convert", true);
+    }
+    if (!overrides.empty()) {
+        std::string ov = "Applied " + std::to_string(overrides.size()) + " custom mod.xml option(s)";
+        add_log(ov);
+    }
+
+    if (conflicts) add_log("Preserved " + std::to_string(conflicts.load()) + " existing asset file(s)", true);
+
+    /* Step 8: Persist mod entry in <registry_dir>/mods-registry.json if requested. */
+    if (managed) {
+        auto dedup = [](std::vector<std::string> &v) {
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+        };
+        dedup(written_tex_files);
+        dedup(written_model_files);
+        dedup(written_movie_files);
+        dedup(written_audio_files);
+
+        std::string mod_name = !primary_mod_name.empty() ? primary_mod_name
+                             : (!sources.empty() ? sources.front().label : fs::path(mod_paths.front()).filename().string());
+        const std::string slug = slugify_mod_id(mod_name);
+        std::string mod_id = slug;
+        const auto &mods = registry["mods"];
+        for (unsigned suffix = 2; std::any_of(mods.begin(), mods.end(), [&](const json &entry) {
+                 return entry.is_object() && entry.value("id", "") == mod_id;
+             }); ++suffix) {
+            mod_id = slug + "-" + std::to_string(suffix);
+        }
+
+        json rec = {
+            {"id", mod_id},
+            {"name", mod_name},
+            {"source", mod_paths.front()},
+            {"enabled", true},
+            {"textures_written", tex_written.load()},
+            {"models_written", models_written},
+            {"movies_written", movies_written},
+            {"audio_written", audio_written},
+            {"warnings", warnings},
+            {"failed", tex_failed.load() + models_failed},
+            {"log", log_lines},
+            {"roots", roots},
+            {"files", {
+                {"textures", written_tex_files},
+                {"models", written_model_files},
+                {"movies", written_movie_files},
+                {"audio", written_audio_files}
+            }},
+            {"manifest_models", written_manifest_models}
+        };
+
+        registry["mods"].push_back(std::move(rec));
+        if (!save_registry_json(reg_path, registry)) {
+            std::snprintf(final_status.error, sizeof(final_status.error), "Could not save the mod registry.");
+            final_status.running = 0;
+            final_status.finished = 1;
+            return false;
         }
     }
 
@@ -2116,6 +2830,8 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
     final_status.textures_skipped = tex_skipped.load();
     final_status.models_written = models_written;
     final_status.movies_written = movies_written;
+    final_status.audio_written = audio_written;
+    final_status.warnings = warnings;
     final_status.failed = tex_failed.load() + models_failed;
     std::snprintf(final_status.stage, sizeof(final_status.stage), "Done");
     return true;
@@ -2145,11 +2861,125 @@ bool evaluate_active_when_expr(const std::string &expr,
     return p.eval();
 }
 
-ModXmlResult parse_and_eval_mod_xml(const std::string &xml) {
+bool parse_mod_xml_config(const std::string &xml, host_mod_xml_config_t &out) {
+    out = {};
+    if (xml.empty()) return false;
+    std::string low = to_lower(xml);
+
+    /* Extract top-level <Name>, <Author>, <Version> before the first <ConfigOption> or <ModFolder>. */
+    size_t hdr_end = xml.size();
+    size_t p_cfg = low.find("<configoption");
+    size_t p_fld = low.find("<modfolder");
+    if (p_cfg != std::string::npos) hdr_end = std::min(hdr_end, p_cfg);
+    if (p_fld != std::string::npos) hdr_end = std::min(hdr_end, p_fld);
+    std::string hdr = xml.substr(0, hdr_end);
+    std::string lhdr = low.substr(0, hdr_end);
+    auto extract_hdr = [&](const char *tag) -> std::string {
+        std::string open = std::string("<") + tag + ">";
+        std::string close = std::string("</") + tag + ">";
+        size_t a = lhdr.find(open);
+        if (a == std::string::npos) return "";
+        size_t b = lhdr.find(close, a + open.size());
+        if (b == std::string::npos) return "";
+        return trim(xml_unescape(hdr.substr(a + open.size(), b - (a + open.size()))));
+    };
+    std::snprintf(out.mod_name, sizeof(out.mod_name), "%s", extract_hdr("name").c_str());
+    std::snprintf(out.author, sizeof(out.author), "%s", extract_hdr("author").c_str());
+    std::snprintf(out.version, sizeof(out.version), "%s", extract_hdr("version").c_str());
+
+    size_t pos = 0;
+    while (out.option_count < HOST_MOD_MAX_OPTIONS &&
+           (pos = low.find("<configoption", pos)) != std::string::npos) {
+        size_t end = low.find("</configoption>", pos);
+        if (end == std::string::npos) break;
+        std::string block = xml.substr(pos, end - pos);
+        std::string lblock = low.substr(pos, end - pos);
+        pos = end + 15;
+
+        auto extract_tag_range = [](const std::string &blk, const std::string &lblk, const char *name) -> std::string {
+            std::string open = std::string("<") + name + ">";
+            std::string close = std::string("</") + name + ">";
+            size_t a = lblk.find(open);
+            if (a == std::string::npos) return "";
+            size_t b = lblk.find(close, a + open.size());
+            if (b == std::string::npos) return "";
+            return trim(xml_unescape(blk.substr(a + open.size(), b - (a + open.size()))));
+        };
+
+        /* Stop header extraction of <Name> before the first <Option so an option's <Name> isn't stolen. */
+        size_t first_opt = lblock.find("<option");
+        std::string opt_hdr = first_opt == std::string::npos ? block : block.substr(0, first_opt);
+        std::string lopt_hdr = first_opt == std::string::npos ? lblock : lblock.substr(0, first_opt);
+
+        std::string id = extract_tag_range(opt_hdr, lopt_hdr, "id");
+        if (id.empty()) continue;
+        std::string name = extract_tag_range(opt_hdr, lopt_hdr, "name");
+        if (name.empty()) name = id;
+        std::string desc = extract_tag_range(opt_hdr, lopt_hdr, "description");
+        std::string def = extract_tag_range(opt_hdr, lopt_hdr, "default");
+        std::string type_s = to_lower(extract_tag_range(opt_hdr, lopt_hdr, "type"));
+
+        host_mod_xml_option_t &opt = out.options[out.option_count];
+        opt = {};
+        std::snprintf(opt.id, sizeof(opt.id), "%s", id.c_str());
+        std::snprintf(opt.name, sizeof(opt.name), "%s", name.c_str());
+        std::snprintf(opt.description, sizeof(opt.description), "%s", desc.c_str());
+        opt.default_value = def.empty() ? 0 : std::atoi(def.c_str());
+        opt.selected_value = opt.default_value;
+        opt.type = (type_s == "bool" || type_s == "boolean") ? 0 : 1;
+
+        /* Parse <Option Value="..." Name="..." /> or <Option><Value>..</Value><Name>..</Name></Option> */
+        size_t opos = 0;
+        while (opt.choice_count < HOST_MOD_MAX_CHOICES &&
+               (opos = lblock.find("<option", opos)) != std::string::npos) {
+            size_t gt = block.find('>', opos);
+            if (gt == std::string::npos) break;
+            std::string tag = block.substr(opos, gt - opos + 1);
+            bool self_close = (gt > opos && block[gt - 1] == '/');
+            std::string val_s, cname;
+            extract_xml_attr(tag, "value", val_s);
+            extract_xml_attr(tag, "name", cname);
+            size_t next_o = gt + 1;
+            if (!self_close) {
+                size_t ocl = lblock.find("</option>", gt + 1);
+                if (ocl != std::string::npos) {
+                    std::string obody = block.substr(gt + 1, ocl - (gt + 1));
+                    std::string lobody = lblock.substr(gt + 1, ocl - (gt + 1));
+                    if (val_s.empty()) val_s = extract_tag_range(obody, lobody, "value");
+                    if (cname.empty()) cname = extract_tag_range(obody, lobody, "name");
+                    next_o = ocl + 9;
+                }
+            }
+            opos = next_o;
+            if (val_s.empty() && cname.empty()) continue;
+            host_mod_xml_choice_t &ch = opt.choices[opt.choice_count++];
+            ch.value = std::atoi(val_s.c_str());
+            std::snprintf(ch.name, sizeof(ch.name), "%s", cname.empty() ? val_s.c_str() : cname.c_str());
+        }
+
+        if (opt.choice_count == 0) {
+            opt.type = 0;
+            opt.choice_count = 2;
+            opt.choices[0].value = 0; std::snprintf(opt.choices[0].name, sizeof(opt.choices[0].name), "Off");
+            opt.choices[1].value = 1; std::snprintf(opt.choices[1].name, sizeof(opt.choices[1].name), "On");
+        } else if (opt.choice_count == 2 && opt.choices[0].value == 0 && opt.choices[1].value == 1 &&
+                   (type_s == "bool" || type_s == "boolean")) {
+            opt.type = 0;
+        } else {
+            opt.type = 1;
+        }
+        ++out.option_count;
+    }
+
+    return out.mod_name[0] != 0 || out.option_count > 0;
+}
+
+ModXmlResult parse_and_eval_mod_xml(const std::string &xml,
+                                    const std::vector<std::pair<std::string, int>> &overrides) {
     ModXmlResult out;
     std::string low = to_lower(xml);
 
-    /* 1. Extract <ConfigOption> <ID> + <Default> pairs. */
+    /* 1. Extract <ConfigOption> <ID> + <Default> pairs, then apply user overrides. */
     std::unordered_map<std::string, int> defaults;
     size_t pos = 0;
     while ((pos = low.find("<configoption", pos)) != std::string::npos) {
@@ -2174,6 +3004,9 @@ ModXmlResult parse_and_eval_mod_xml(const std::string &xml) {
             defaults[id] = std::atoi(def.c_str());
         }
         pos = end + 15;
+    }
+    for (const auto &ov : overrides) {
+        if (!ov.first.empty()) defaults[to_lower(ov.first)] = ov.second;
     }
 
     /* 2. Extract <ModFolder Folder="..." [ActiveWhen="..."]> [ <ActiveWhen>...</ActiveWhen> ] */
@@ -2311,13 +3144,40 @@ bool parse_iros_directory(const std::string &path, std::vector<IrosEntry> &out, 
     return true;
 }
 
+bool convert_battle_dat_to_glb_file(const std::string &model_id,
+                                    const std::vector<uint8_t> &dat_bytes,
+                                    const std::string &glb_out_path,
+                                    std::vector<int> *out_bone_remap) {
+    Ps1ModelInfo ps1_info;
+    inspect_battle_dat_ps1(dat_bytes, ps1_info);
+    MchTexProvider empty_prov;
+    std::vector<int> remap;
+    bool ok = convert_battle_dat_to_glb(model_id, dat_bytes, ps1_info, empty_prov, fs::path(glb_out_path), remap);
+    if (ok && out_bone_remap) *out_bone_remap = std::move(remap);
+    return ok;
+}
+
 } // namespace HostHD
 
-extern "C" int host_mod_import_run(const char *const *disc_paths, unsigned disc_count,
-                                   const char *const *mod_paths, unsigned mod_count,
-                                   const char *textures_out, const char *models_out,
-                                   const char *movies_out,
-                                   host_mod_import_status_t *out_status) {
+extern "C" int host_mod_inspect_options(const char *mod_path, host_mod_xml_config_t *out_config) {
+    if (!mod_path || !mod_path[0] || !out_config) return 0;
+    *out_config = {};
+    std::string xml, label;
+    if (!HostHD::read_mod_xml_from_path(mod_path, xml, label)) return 0;
+    bool ok = HostHD::parse_mod_xml_config(xml, *out_config);
+    if (ok && !out_config->mod_name[0] && !label.empty()) {
+        std::snprintf(out_config->mod_name, sizeof(out_config->mod_name), "%s", label.c_str());
+    }
+    return ok ? 1 : 0;
+}
+
+extern "C" int host_mod_import_run_ex(const char *const *disc_paths, unsigned disc_count,
+                                      const char *const *mod_paths, unsigned mod_count,
+                                      const char *textures_out, const char *models_out,
+                                      const char *movies_out, const char *audio_out,
+                                      const char *registry_dir,
+                                      const host_mod_option_override_t *overrides, unsigned override_count,
+                                      host_mod_import_status_t *out_status) {
     std::vector<std::string> discs, mods;
     for (unsigned i = 0; i < disc_count; ++i) {
         if (disc_paths && disc_paths[i] && disc_paths[i][0]) discs.emplace_back(disc_paths[i]);
@@ -2325,20 +3185,38 @@ extern "C" int host_mod_import_run(const char *const *disc_paths, unsigned disc_
     for (unsigned i = 0; i < mod_count; ++i) {
         if (mod_paths && mod_paths[i] && mod_paths[i][0]) mods.emplace_back(mod_paths[i]);
     }
+    std::vector<std::pair<std::string, int>> ovs;
+    for (unsigned i = 0; i < override_count; ++i) {
+        if (overrides && overrides[i].id[0]) ovs.emplace_back(overrides[i].id, overrides[i].value);
+    }
     host_mod_import_status_t st{};
     bool ok = HostHD::run_import_impl(discs, mods,
                                       textures_out ? textures_out : "",
                                       models_out ? models_out : "",
                                       movies_out ? movies_out : "",
-                                      nullptr, st);
+                                      audio_out ? audio_out : "",
+                                      registry_dir ? registry_dir : "",
+                                      ovs, nullptr, st);
     if (out_status) *out_status = st;
     return ok ? 1 : 0;
 }
 
-extern "C" int host_mod_import_start_async(const char *const *disc_paths, unsigned disc_count,
-                                           const char *mod_path,
-                                           const char *textures_out, const char *models_out,
-                                           const char *movies_out) {
+extern "C" int host_mod_import_run(const char *const *disc_paths, unsigned disc_count,
+                                   const char *const *mod_paths, unsigned mod_count,
+                                   const char *textures_out, const char *models_out,
+                                   const char *movies_out,
+                                   host_mod_import_status_t *out_status) {
+    return host_mod_import_run_ex(disc_paths, disc_count, mod_paths, mod_count,
+                                  textures_out, models_out, movies_out, nullptr, nullptr,
+                                  nullptr, 0, out_status);
+}
+
+extern "C" int host_mod_import_start_async_ex(const char *const *disc_paths, unsigned disc_count,
+                                              const char *mod_path,
+                                              const char *textures_out, const char *models_out,
+                                              const char *movies_out, const char *audio_out,
+                                              const char *registry_dir,
+                                              const host_mod_option_override_t *overrides, unsigned override_count) {
     if (!mod_path || !mod_path[0]) return 0;
     auto &as = HostHD::async_state();
     std::lock_guard<std::mutex> lk(as.mu);
@@ -2353,6 +3231,12 @@ extern "C" int host_mod_import_start_async(const char *const *disc_paths, unsign
     std::string tex = textures_out ? textures_out : "";
     std::string mod = models_out ? models_out : "";
     std::string mov = movies_out ? movies_out : "";
+    std::string aud = audio_out ? audio_out : "";
+    std::string reg = registry_dir ? registry_dir : "";
+    std::vector<std::pair<std::string, int>> ovs;
+    for (unsigned i = 0; i < override_count; ++i) {
+        if (overrides && overrides[i].id[0]) ovs.emplace_back(overrides[i].id, overrides[i].value);
+    }
 
     {
         std::lock_guard<std::mutex> slk(as.sink.mu);
@@ -2361,9 +3245,9 @@ extern "C" int host_mod_import_start_async(const char *const *disc_paths, unsign
         std::snprintf(as.sink.st.stage, sizeof(as.sink.st.stage), "Starting mod import...");
     }
     as.active = true;
-    as.worker = std::thread([&as, discs, mods, tex, mod, mov]() {
+    as.worker = std::thread([&as, discs, mods, tex, mod, mov, aud, reg, ovs]() {
         host_mod_import_status_t done_st{};
-        HostHD::run_import_impl(discs, mods, tex, mod, mov, &as.sink, done_st);
+        HostHD::run_import_impl(discs, mods, tex, mod, mov, aud, reg, ovs, &as.sink, done_st);
         {
             std::lock_guard<std::mutex> slk(as.sink.mu);
             as.sink.st = done_st;
@@ -2372,6 +3256,15 @@ extern "C" int host_mod_import_start_async(const char *const *disc_paths, unsign
         as.active = false;
     });
     return 1;
+}
+
+extern "C" int host_mod_import_start_async(const char *const *disc_paths, unsigned disc_count,
+                                           const char *mod_path,
+                                           const char *textures_out, const char *models_out,
+                                           const char *movies_out) {
+    return host_mod_import_start_async_ex(disc_paths, disc_count, mod_path,
+                                          textures_out, models_out, movies_out,
+                                          nullptr, nullptr, nullptr, 0);
 }
 
 extern "C" void host_mod_import_poll(host_mod_import_status_t *out_status) {
@@ -2389,4 +3282,190 @@ extern "C" void host_mod_import_shutdown(void) {
         if (as.worker.joinable()) to_join = std::move(as.worker);
     }
     if (to_join.joinable()) to_join.join();
+}
+
+extern "C" unsigned host_mod_registry_list(const char *data_dir, host_mod_entry_t *out, unsigned capacity) {
+    if (!data_dir || !data_dir[0]) return 0;
+    nlohmann::json doc;
+    if (!HostHD::load_registry_json(std::filesystem::path(data_dir) / "mods-registry.json", doc)) return 0;
+    unsigned count = 0;
+    for (const auto &m : doc["mods"]) {
+        if (!m.is_object()) continue;
+        if (out && count < capacity) {
+            host_mod_entry_t &e = out[count];
+            e = {};
+            std::snprintf(e.id, sizeof(e.id), "%s", m.value("id", "").c_str());
+            std::snprintf(e.name, sizeof(e.name), "%s", m.value("name", "").c_str());
+            std::snprintf(e.source, sizeof(e.source), "%s", m.value("source", "").c_str());
+            e.enabled = m.value("enabled", true) ? 1 : 0;
+            e.textures_written = m.value("textures_written", 0u);
+            e.models_written = m.value("models_written", 0u);
+            e.movies_written = m.value("movies_written", 0u);
+            e.audio_written = m.value("audio_written", 0u);
+            e.warnings = m.value("warnings", 0u);
+            e.failed = m.value("failed", 0u);
+            std::string log_joined;
+            if (m.contains("log") && m["log"].is_array()) {
+                for (const auto &line : m["log"]) {
+                    if (!line.is_string()) continue;
+                    if (!log_joined.empty()) log_joined.push_back('\n');
+                    log_joined += line.get<std::string>();
+                }
+            }
+            std::snprintf(e.summary_log, sizeof(e.summary_log), "%s", log_joined.c_str());
+        }
+        ++count;
+    }
+    return count;
+}
+
+namespace {
+bool registry_matches_root(const nlohmann::json &entry, const char *bucket, const std::string &dir) {
+    if (!entry.contains("roots")) return true;
+    const auto &roots = entry["roots"];
+    return roots.is_object() && roots.contains(bucket) && roots[bucket].is_string() &&
+           roots[bucket] == HostHD::asset_root(dir);
+}
+
+void rebuild_models_manifest_from_registry(const nlohmann::json &doc, const std::string &models_dir) {
+    if (models_dir.empty()) return;
+    namespace fs = std::filesystem;
+    fs::path manifest_path = fs::path(models_dir) / "manifest.json";
+    nlohmann::json manifest = {{"models", nlohmann::json::object()}};
+    std::error_code ec;
+    if (fs::is_regular_file(manifest_path, ec)) {
+        std::ifstream min(manifest_path);
+        try {
+            nlohmann::json existing = nlohmann::json::parse(min);
+            if (existing.is_object() && existing.contains("models") && existing["models"].is_object()) {
+                manifest = std::move(existing);
+            }
+        } catch (...) {}
+    }
+    /* Remove keys owned by disabled mods, then reapply enabled mods. */
+    for (const auto &m : doc["mods"]) {
+        if (!m.is_object() || !registry_matches_root(m, "models", models_dir) ||
+            !m.contains("manifest_models") || !m["manifest_models"].is_object()) continue;
+        bool en = m.value("enabled", true);
+        for (auto it = m["manifest_models"].begin(); it != m["manifest_models"].end(); ++it) {
+            if (!en) manifest["models"].erase(it.key());
+        }
+    }
+    for (const auto &m : doc["mods"]) {
+        if (!m.is_object() || !m.value("enabled", true) || !registry_matches_root(m, "models", models_dir)) continue;
+        if (!m.contains("manifest_models") || !m["manifest_models"].is_object()) continue;
+        for (auto it = m["manifest_models"].begin(); it != m["manifest_models"].end(); ++it) {
+            manifest["models"][it.key()] = it.value();
+        }
+    }
+    std::string dump = manifest.dump(2) + "\n";
+    HostHD::write_file_bytes(manifest_path, reinterpret_cast<const uint8_t *>(dump.data()), dump.size());
+}
+
+std::unordered_set<std::string> collect_other_enabled_files(const nlohmann::json &doc, const std::string &skip_id,
+                                                            const char *bucket, const std::string &dir) {
+    std::unordered_set<std::string> used;
+    for (const auto &m : doc["mods"]) {
+        if (!m.is_object() || !m.value("enabled", true)) continue;
+        if (m.value("id", "") == skip_id || !registry_matches_root(m, bucket, dir)) continue;
+        if (m.contains("files") && m["files"].is_object() && m["files"].contains(bucket) && m["files"][bucket].is_array()) {
+            for (const auto &f : m["files"][bucket]) {
+                if (f.is_string()) used.insert(f.get<std::string>());
+            }
+        }
+    }
+    return used;
+}
+} // namespace
+
+extern "C" int host_mod_registry_set_enabled(const char *data_dir, const char *mod_id, int enabled,
+                                             const char *textures_dir, const char *models_dir,
+                                             const char *movies_dir) {
+    if (!data_dir || !data_dir[0] || !mod_id || !mod_id[0]) return 0;
+    std::string id(mod_id);
+    if (!HostHD::is_safe_rel_path(id) || id.find('/') != std::string::npos) return 0;
+    namespace fs = std::filesystem;
+    fs::path reg_path = fs::path(data_dir) / "mods-registry.json";
+    nlohmann::json doc;
+    if (!HostHD::load_registry_json(reg_path, doc)) return 0;
+
+    nlohmann::json *target = nullptr;
+    for (auto &m : doc["mods"]) {
+        if (m.is_object() && m.value("id", "") == id) { target = &m; break; }
+    }
+    if (!target) return 0;
+    bool want = enabled != 0;
+    if (target->value("enabled", true) == want) return 1;
+
+    fs::path disabled_root = fs::path(data_dir) / "mods-disabled" / id;
+    std::string tex_d = (textures_dir && textures_dir[0]) ? textures_dir : (fs::path(data_dir) / "textures-hd").string();
+    std::string mod_d = (models_dir && models_dir[0]) ? models_dir : (fs::path(data_dir) / "models-hd").string();
+    std::string mov_d = (movies_dir && movies_dir[0]) ? movies_dir : (fs::path(data_dir) / "movies-hd").string();
+    std::string aud_d = (fs::path(data_dir) / "audio-hd").string();
+
+    struct Bucket { const char *name; std::string dir; };
+    Bucket buckets[] = {{"textures", tex_d}, {"models", mod_d}, {"movies", mov_d}, {"audio", aud_d}};
+    if (target->contains("files") && (*target)["files"].is_object()) {
+        std::vector<std::pair<fs::path, fs::path>> moves;
+        for (const auto &b : buckets) {
+            const auto &files = (*target)["files"];
+            if (!files.contains(b.name) || !files[b.name].is_array() || files[b.name].empty()) continue;
+            if (!registry_matches_root(*target, b.name, b.dir)) return 0;
+            auto other_used = collect_other_enabled_files(doc, id, b.name, b.dir);
+            for (const auto &f : files[b.name]) {
+                if (!f.is_string()) continue;
+                std::string rel = f.get<std::string>();
+                if (!HostHD::is_safe_rel_path(rel)) continue;
+                fs::path active_p = fs::path(b.dir) / rel;
+                fs::path stash_p = disabled_root / b.name / rel;
+                if (want) moves.emplace_back(stash_p, active_p);
+                else if (!other_used.count(rel)) moves.emplace_back(active_p, stash_p);
+            }
+        }
+        for (const auto &[src, dst] : moves)
+            if (HostHD::path_occupied(src) && HostHD::path_occupied(dst)) return 0;
+        for (const auto &[src, dst] : moves)
+            if (!HostHD::move_file_safe(src, dst)) return 0;
+    }
+    (*target)["enabled"] = want;
+    if (!HostHD::save_registry_json(reg_path, doc)) return 0;
+    if (target->contains("manifest_models") && !(*target)["manifest_models"].empty()) {
+        rebuild_models_manifest_from_registry(doc, mod_d);
+    }
+    if (want) {
+        std::error_code ec;
+        fs::remove_all(disabled_root, ec);
+    }
+    return 1;
+}
+
+extern "C" int host_mod_registry_remove(const char *data_dir, const char *mod_id,
+                                        const char *textures_dir, const char *models_dir,
+                                        const char *movies_dir) {
+    if (!data_dir || !data_dir[0] || !mod_id || !mod_id[0]) return 0;
+    std::string id(mod_id);
+    if (!HostHD::is_safe_rel_path(id) || id.find('/') != std::string::npos) return 0;
+    namespace fs = std::filesystem;
+    fs::path reg_path = fs::path(data_dir) / "mods-registry.json";
+    nlohmann::json doc;
+    if (!HostHD::load_registry_json(reg_path, doc)) return 0;
+
+    size_t found_idx = SIZE_MAX;
+    for (size_t i = 0; i < doc["mods"].size(); ++i) {
+        if (doc["mods"][i].is_object() && doc["mods"][i].value("id", "") == id) {
+            found_idx = i;
+            break;
+        }
+    }
+    if (found_idx == SIZE_MAX) return 0;
+
+    if (doc["mods"][found_idx].value("enabled", true)) {
+        if (!host_mod_registry_set_enabled(data_dir, mod_id, 0, textures_dir, models_dir, movies_dir)) return 0;
+        if (!HostHD::load_registry_json(reg_path, doc)) return 0;
+    }
+    doc["mods"].erase(doc["mods"].begin() + std::ptrdiff_t(found_idx));
+    if (!HostHD::save_registry_json(reg_path, doc)) return 0;
+    std::error_code ec;
+    fs::remove_all(fs::path(data_dir) / "mods-disabled" / id, ec);
+    return !ec;
 }

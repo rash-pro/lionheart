@@ -17,7 +17,8 @@ static void write_4bpp_pixel(uint16_t *vram, unsigned base_x, unsigned base_y, u
     vram[idx] = uint16_t((vram[idx] & ~(0xfu << shift)) | ((nibble & 0xfu) << shift));
 }
 
-int main() {
+int main(int argc, char **argv) {
+    const char *custom_ttf_path = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : nullptr;
     std::vector<uint16_t> vram(1024u * 512u, 0);
 
     /* 1. Build a synthetic 256x128 4bpp FF8-like sysfnt sheet at (640, 256). */
@@ -81,6 +82,16 @@ int main() {
         uint8_t gfg[3] = {0}, gsh[3] = {0};
         HostHD::HdFont::extract_clut_colors(green_clut, gfg, gsh);
         assert(gfg[1] >= 220 && gfg[0] <= 24 && gfg[2] <= 24);
+
+        /* Shadowless/fading CLUT (clut[1] == 0) with yellow filler at 2..11 must still
+         * select clut[15] instead of the yellow filler and synthesize a dark shadow. */
+        uint16_t fade_blue_clut[16] = {0};
+        for (unsigned i = 2; i <= 11; ++i) fade_blue_clut[i] = pack_abgr1555(255, 255, 0);
+        fade_blue_clut[15] = pack_abgr1555(96, 168, 240);
+        uint8_t fbfg[3] = {0}, fbsh[3] = {0};
+        HostHD::HdFont::extract_clut_colors(fade_blue_clut, fbfg, fbsh);
+        assert(fbfg[2] >= 220 && fbfg[0] <= 110);
+        assert(fbsh[0] <= 40 && fbsh[1] <= 40 && fbsh[2] <= 40);
     }
 
     /* 3. Rasterize the built-in OFL Barlow font at 4x (1024x512). */
@@ -115,27 +126,43 @@ int main() {
         }
     };
 
-    /* Mapped Latin glyphs + apostrophe (0x43=cell 35) + VIII (0xA8=136) + brackets
-     * (0xA9=137, 0xAA=138, 0xAE=142, 0xAF=143) + geometric corner brackets & UI symbols
-     * (0x36=22, 0x37=23, 0xAB=139, 0xAD=141, 0xB0=144, 0xB2=146, 0xB3=147, 0xB4=148,
-     *  0xB6=150, 0xBB=155) + multiply/dash (0xB8=152, 0xBF=159)
-     * must render crisp foreground + dark backdrop with zero SD-fallthrough sentinels. */
-    const unsigned checked_cells[] = {
-        1, 22, 23, 35, 37, 63, 136, 137, 138, 139, 141, 142, 143, 144, 146, 147, 148, 150, 152, 155, 159
-    };
-    for (unsigned idx : checked_cells) {
+    /* Audit EVERY defined sysfnt cell (0x21..0xCB except blank slots 0xC4=164 and 0xC8=168):
+     * every mapped Latin/accented/punctuation glyph, Roman ligature (VIII/VI/II), and
+     * geometric SDF vector symbol (「」『』■◎♦□★▽▼☆↓♪) must render crisp foreground +
+     * dark backdrop with zero SD-fallthrough sentinels. */
+    for (unsigned idx = 1; idx < 172; ++idx) {
         size_t fg_px = 0, bg_px = 0, sent_px = 0;
         inspect_cell(white_atlas, idx, fg_px, bg_px, sent_px);
-        assert(sent_px == 0);
-        assert(fg_px > 20);
-        assert(bg_px > 20);
+        if (idx == 164u || idx == 168u) {
+            assert(sent_px == 48u * 48u);
+        } else {
+            if (sent_px != 0 || fg_px <= 10 || bg_px <= 10) {
+                std::printf("sysfnt cell %u (0x%02X): sent=%zu fg=%zu bg=%zu\n",
+                            idx, 0x20u + idx, sent_px, fg_px, bg_px);
+                assert(false);
+            }
+        }
     }
-
-    /* Unmapped icon/music/star symbol cells (0xAC=140 ◎, 0xB1=145 ★, 0xC3=163 ♪) must emit SD-fallthrough sentinel. */
-    for (unsigned idx : {140u, 145u, 163u}) {
-        size_t fg_px = 0, bg_px = 0, sent_px = 0;
-        inspect_cell(white_atlas, idx, fg_px, bg_px, sent_px);
-        assert(sent_px == 48u * 48u);
+    /* Geometric SDF cells ◎(140), ★(145), ☆(153), ♪(163) render cleanly at 2x, 4x and 8x. */
+    for (unsigned sc : {2u, 3u, 4u, 5u, 8u}) {
+        const unsigned expected_sc = sc > 4 ? 8u : (sc > 2 ? 4u : 2u);
+        HostHD::FontRgba scaled_atlas;
+        assert(font.render_atlas(256, 120, white_clut, sc, scaled_atlas));
+        assert(scaled_atlas.width == 256u * expected_sc && scaled_atlas.height == 120u * expected_sc);
+        const unsigned cell_px = 12u * expected_sc;
+        for (unsigned idx : {140u, 145u, 153u, 163u}) {
+            size_t fg_px = 0, sent_px = 0;
+            const unsigned cx = (idx % 21u) * cell_px, cy = (idx / 21u) * cell_px;
+            for (unsigned py = 0; py < cell_px; ++py) {
+                for (unsigned px = 0; px < cell_px; ++px) {
+                    const size_t off = (size_t(cy + py) * scaled_atlas.width + (cx + px)) * 4u;
+                    if (scaled_atlas.pixels[off + 3] == 255 && scaled_atlas.pixels[off] == 0 &&
+                        scaled_atlas.pixels[off + 1] == 0 && scaled_atlas.pixels[off + 2] == 0) ++sent_px;
+                    else if (scaled_atlas.pixels[off + 3] == 255 && scaled_atlas.pixels[off] >= 200) ++fg_px;
+                }
+            }
+            assert(sent_px == 0 && fg_px >= expected_sc * expected_sc * 4u);
+        }
     }
 
     /* Live VRAM-guided alignment produces valid atlas too. */
@@ -776,6 +803,39 @@ int main() {
         /* No match, no texture: the strip stays as the game drew it. */
         assert(!font.render_name_strip(0, name_clut, 4, none, nv.data(), nix, niy, nfx, nfy, party));
         assert(!font.render_name_strip(1, name_clut, 4, none, nv.data(), nix, niy, nfx, nfy, {}));
+    }
+
+    /* 8. Custom TTF metrics & scale coverage (2x..8x) using a wider font with different
+     *    ascender/descender proportions: verify zero clipping on sysfnt, icon.tex, and names. */
+    if (custom_ttf_path) {
+        HostHD::HdFont custom;
+        custom.configure(HostHD::FontMode::Custom, custom_ttf_path);
+        assert(custom.active() && custom.mode() == HostHD::FontMode::Custom);
+        for (unsigned sc : {2u, 3u, 4u, 6u, 8u}) {
+            const unsigned eff = sc > 4 ? 8u : (sc > 2 ? 4u : 2u);
+            HostHD::FontRgba ca, ci, cn;
+            assert(custom.render_atlas(256, 120, white_clut, sc, ca));
+            assert(ca.width == 256u * eff && ca.height == 120u * eff);
+            assert(custom.render_icon_sheet(256, 256, white_clut, sc, ci, vram.data(), ix, iy));
+            assert(ci.width == 256u * eff && ci.height == 256u * eff);
+            /* Every visible icon cell stays inside its transparent 1-pixel frame even with a wide font. */
+            for (const auto &c : visible_cells) {
+                CellStats st = cell_stats(ci, eff, c[0], c[1], c[2], c[3], 0, 0);
+                const size_t min_fg = eff >= 4 ? 5u : 2u;
+                if (st.sentinel != 0 || st.fg < min_fg || st.border_opaque != 0) {
+                    std::printf("custom icon cell (%u,%u) sc=%u eff=%u: sent=%zu fg=%zu bg=%zu border=%zu\n",
+                                c[0], c[1], sc, eff, st.sentinel, st.fg, st.bg, st.border_opaque);
+                    assert(false);
+                }
+            }
+            assert(custom.render_name_strip(2, name_clut, sc, cn, nv.data(), nix, niy, nfx, nfy, party));
+            assert(cn.width == 96u * eff && cn.height == 16u * eff);
+            unsigned bottom = 0;
+            for (unsigned y = 0; y < cn.height; ++y)
+                for (unsigned x = 0; x < cn.width; ++x)
+                    if (cn.pixels[(size_t(y) * cn.width + x) * 4u + 3]) bottom = std::max(bottom, y);
+            assert(bottom > 0 && bottom < 13u * eff);
+        }
     }
 
     /* Off mode disables rendering. */
