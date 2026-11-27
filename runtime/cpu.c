@@ -36,16 +36,159 @@ typedef struct {
 } dispatch_builder_t;
 static int dispatch_check(cpu_t *c, dispatch_builder_t *index, const entry_t *entry, const code_region_t *region);
 
-static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t count,
-                                   const code_region_t *const *regions, const source_bounds_t *bounds,
-                                   uint32_t pc, int *registered, dispatch_builder_t *index) {
-    size_t lo = 0, hi = count;
-    const code_region_t *previous = NULL;
-    if (!regions || (bounds && (pc < bounds->first || pc >= bounds->end))) return NULL;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (entries[mid].pc <= pc) lo = mid + 1; else hi = mid;
+/* Per-CPU auxiliary dispatch structures kept outside cpu_t so native module
+ * ABI layout stays unchanged. Holds an O(log S) span interval index per source
+ * (eliminating O(N) backward walks in precise_source on misses and uncompiled
+ * overlays) plus a 32K direct-mapped PC cache that avoids 4K aliasing during
+ * interpreted execution of uncompiled battle/effect code. */
+#define FAST_PC_SLOTS 32768u
+typedef struct {
+    uint32_t pc;
+    uint64_t epoch;
+    recompiled_fn fn;
+} fast_pc_slot_t;
+
+typedef struct {
+    uint32_t start;
+    uint64_t end;
+    uint64_t max_end;
+    uint32_t run_first;
+    uint32_t run_last;
+} span_entry_t;
+
+typedef struct {
+    const entry_t *entries;
+    const code_region_t *const *regions;
+    size_t entry_count;
+    span_entry_t *spans;
+    size_t span_count;
+    uint16_t scans;
+    int built;
+} source_span_index_t;
+
+typedef struct cpu_aux {
+    const cpu_t *cpu;
+    struct cpu_aux *next;
+    fast_pc_slot_t fast[FAST_PC_SLOTS];
+    source_span_index_t sources[CODE_OVERLAYS + 1];
+} cpu_aux_t;
+
+static cpu_aux_t *cpu_aux_list;
+static int cpu_aux_cleanup_registered;
+
+static void cpu_aux_free_sources(cpu_aux_t *aux) {
+    unsigned i;
+    for (i = 0; i <= CODE_OVERLAYS; ++i) {
+        free(aux->sources[i].spans);
+        memset(&aux->sources[i], 0, sizeof(aux->sources[i]));
     }
+}
+
+static void cpu_aux_cleanup(void) {
+    while (cpu_aux_list) {
+        cpu_aux_t *a = cpu_aux_list;
+        cpu_aux_list = a->next;
+        cpu_aux_free_sources(a);
+        free(a);
+    }
+}
+
+static cpu_aux_t *cpu_aux_get(const cpu_t *c, int create) {
+    cpu_aux_t *a;
+    for (a = cpu_aux_list; a; a = a->next) if (a->cpu == c) return a;
+    if (!create) return NULL;
+    a = calloc(1, sizeof(*a));
+    if (!a) return NULL;
+    if (!cpu_aux_cleanup_registered) { atexit(cpu_aux_cleanup); cpu_aux_cleanup_registered = 1; }
+    a->cpu = c;
+    a->next = cpu_aux_list;
+    cpu_aux_list = a;
+    return a;
+}
+
+static void cpu_aux_reset(const cpu_t *c) {
+    cpu_aux_t *a = cpu_aux_get(c, 0);
+    if (!a) return;
+    memset(a->fast, 0, sizeof(a->fast));
+    cpu_aux_free_sources(a);
+}
+
+static int compare_span_entries(const void *pa, const void *pb) {
+    const span_entry_t *a = (const span_entry_t *)pa;
+    const span_entry_t *b = (const span_entry_t *)pb;
+    if (a->start != b->start) return a->start < b->start ? -1 : 1;
+    if (a->run_last != b->run_last) return a->run_last > b->run_last ? -1 : 1;
+    return 0;
+}
+
+static source_span_index_t *get_span_index(const cpu_t *c, unsigned source,
+                                           const entry_t *entries, size_t count,
+                                           const code_region_t *const *regions) {
+    cpu_aux_t *aux;
+    source_span_index_t *si;
+    size_t i, total = 0, out = 0;
+    uint64_t running_max = 0;
+    if (source > CODE_OVERLAYS || !regions || !count) return NULL;
+    aux = cpu_aux_get(c, 1);
+    if (!aux) return NULL;
+    si = &aux->sources[source];
+    if (si->built && si->entries == entries && si->regions == regions && si->entry_count == count)
+        return si;
+    if (si->entries == entries && si->regions == regions && si->entry_count == count) {
+        if (++si->scans < 8u) return NULL;
+    } else {
+        free(si->spans);
+        memset(si, 0, sizeof(*si));
+        si->entries = entries; si->regions = regions; si->entry_count = count;
+        si->scans = 1u;
+        return NULL;
+    }
+    si->built = 1;
+    /* Count spans across runs of identical consecutive region pointers. */
+    for (i = 0; i < count; ) {
+        const code_region_t *r = regions[i];
+        size_t j = i + 1;
+        while (j < count && regions[j] == r) ++j;
+        if (r) {
+            size_t s;
+            for (s = 0; s < r->count; ++s) if (r->spans[s].size) ++total;
+        }
+        i = j;
+    }
+    if (!total) return si;
+    si->spans = malloc(total * sizeof(*si->spans));
+    if (!si->spans) { si->built = 0; return NULL; }
+    for (i = 0; i < count; ) {
+        const code_region_t *r = regions[i];
+        size_t j = i + 1;
+        while (j < count && regions[j] == r) ++j;
+        if (r) {
+            size_t s;
+            for (s = 0; s < r->count; ++s) {
+                if (!r->spans[s].size) continue;
+                si->spans[out].start = r->spans[s].address;
+                si->spans[out].end = (uint64_t)r->spans[s].address + r->spans[s].size;
+                si->spans[out].max_end = 0;
+                si->spans[out].run_first = (uint32_t)i;
+                si->spans[out].run_last = (uint32_t)(j - 1);
+                ++out;
+            }
+        }
+        i = j;
+    }
+    si->span_count = out;
+    qsort(si->spans, out, sizeof(*si->spans), compare_span_entries);
+    for (i = 0; i < out; ++i) {
+        if (si->spans[i].end > running_max) running_max = si->spans[i].end;
+        si->spans[i].max_end = running_max;
+    }
+    return si;
+}
+
+static recompiled_fn precise_source_linear(cpu_t *c, const entry_t *entries, size_t lo,
+                                           const code_region_t *const *regions,
+                                           uint32_t pc, int *registered, dispatch_builder_t *index) {
+    const code_region_t *previous = NULL;
     while (lo) {
         const code_region_t *r = regions[--lo];
         size_t i;
@@ -55,6 +198,63 @@ static recompiled_fn precise_source(cpu_t *c, const entry_t *entries, size_t cou
             if (registered) *registered = 1;
             if (dispatch_check(c, index, &entries[lo], r)) return entries[lo].fn;
             break;
+        }
+    }
+    return NULL;
+}
+
+static recompiled_fn precise_source(cpu_t *c, unsigned source, const entry_t *entries, size_t count,
+                                   const code_region_t *const *regions, const source_bounds_t *bounds,
+                                   uint32_t pc, int *registered, dispatch_builder_t *index) {
+    size_t lo = 0, hi = count;
+    source_span_index_t *si;
+    if (!regions || (bounds && (pc < bounds->first || pc >= bounds->end))) return NULL;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (entries[mid].pc <= pc) lo = mid + 1; else hi = mid;
+    }
+    if (!lo) return NULL;
+    /* Small overlays (e.g. battle effects) have only a handful of entries;
+     * scanning them directly avoids one-time malloc+qsort spikes on first miss. */
+    if (lo <= 32) return precise_source_linear(c, entries, lo, regions, pc, registered, index);
+    si = get_span_index(c, source, entries, count, regions);
+    if (!si) return precise_source_linear(c, entries, lo, regions, pc, registered, index);
+    if (!si->span_count) return NULL;
+    {
+        size_t slo = 0, shi = si->span_count, k;
+        uint32_t matches[64];
+        size_t mcount = 0, m;
+        while (slo < shi) {
+            size_t mid = slo + (shi - slo) / 2;
+            if (si->spans[mid].start <= pc) slo = mid + 1; else shi = mid;
+        }
+        k = slo;
+        while (k && si->spans[k - 1].max_end > (uint64_t)pc) {
+            const span_entry_t *sp = &si->spans[--k];
+            if (sp->end > (uint64_t)pc && sp->run_first < lo) {
+                uint32_t match_lo = sp->run_last < (uint32_t)(lo - 1) ? sp->run_last : (uint32_t)(lo - 1);
+                int dup = 0;
+                for (m = 0; m < mcount; ++m) if (matches[m] == match_lo) { dup = 1; break; }
+                if (!dup) {
+                    if (mcount == sizeof(matches) / sizeof(matches[0]))
+                        return precise_source_linear(c, entries, lo, regions, pc, registered, index);
+                    matches[mcount++] = match_lo;
+                }
+            }
+        }
+        /* Insertion-sort matches descending by entry index to preserve exact
+         * backward walk order from lo - 1 down to 0. */
+        for (m = 1; m < mcount; ++m) {
+            uint32_t v = matches[m];
+            size_t j = m;
+            while (j && matches[j - 1] < v) { matches[j] = matches[j - 1]; --j; }
+            matches[j] = v;
+        }
+        for (m = 0; m < mcount; ++m) {
+            uint32_t idx_lo = matches[m];
+            const code_region_t *r = regions[idx_lo];
+            if (registered) *registered = 1;
+            if (dispatch_check(c, index, &entries[idx_lo], r)) return entries[idx_lo].fn;
         }
     }
     return NULL;
@@ -87,6 +287,7 @@ void c_release_overlays(cpu_t *c, unsigned keep) {
 }
 
 void cpu_init(cpu_t *c) {
+    cpu_aux_reset(c);
     memset(c, 0, sizeof(*c));
     c->ram_top = 0x800000u;
     c->r[29] = 0x801ffff0u;
@@ -451,13 +652,13 @@ static recompiled_fn lookup_source(cpu_t *c, uint32_t pc, int *registered, dispa
         if (entry && registered) *registered = 1;
         if (entry && dispatch_check(c, index, entry, o->regions[entry - o->entries])) return entry->fn;
         if (precise_host()) {
-            recompiled_fn fn = precise_source(c, o->entries, o->count, o->regions,
+            recompiled_fn fn = precise_source(c, (unsigned)i + 1, o->entries, o->count, o->regions,
                                              c->entry_regions ? catalog_bounds(c, (unsigned)i + 1) : NULL, pc, registered, index);
             if (fn) return fn;
         }
     }
     if (precise_host()) {
-        recompiled_fn fn = precise_source(c, c->entries, c->entry_count, c->entry_regions,
+        recompiled_fn fn = precise_source(c, 0, c->entries, c->entry_count, c->entry_regions,
                                          c->entry_regions ? catalog_bounds(c, 0) : NULL, pc, registered, index);
         if (fn) return fn;
     }
@@ -466,6 +667,7 @@ static recompiled_fn lookup_source(cpu_t *c, uint32_t pc, int *registered, dispa
 }
 
 static void dispatch_reset(cpu_t *c) {
+    cpu_aux_reset(c);
     memset(c->dispatch_cache, 0, sizeof(c->dispatch_cache));
     memset(c->source_bounds_ready, 0, sizeof(c->source_bounds_ready));
     c->dispatch_candidate_count = 0; c->dispatch_generation = 1;
@@ -581,6 +783,8 @@ recompiled_fn lookup(cpu_t *c, uint32_t pc) {
     recompiled_fn fn;
     uint64_t epoch;
     int registered = 0, found = 0;
+    cpu_aux_t *aux;
+    fast_pc_slot_t *fast = NULL;
     if (c->interpreter_only) return NULL;
     /* Native HLE entries still depend on the incoming delayed-load tag. */
     if (!c->entry_regions) return lookup_source(c, pc, NULL, NULL);
@@ -588,6 +792,12 @@ recompiled_fn lookup(cpu_t *c, uint32_t pc) {
         c->dispatch_entry_regions != c->entry_regions ||
         c->dispatch_entry_count != c->entry_count || c->dispatch_overlay_count != c->overlay_count) {
         dispatch_reset(c);
+    }
+    aux = cpu_aux_get(c, 1);
+    if (aux) {
+        fast = &aux->fast[(pc >> 2) & (FAST_PC_SLOTS - 1u)];
+        if (fast->pc == pc && (fast->epoch == c->code_epoch || fast->epoch == UINT64_MAX))
+            return fast->fn;
     }
     slot = &c->dispatch_cache[(pc >> 2) % CODE_CACHE_SIZE];
     if (slot->pc != pc) {
@@ -600,6 +810,7 @@ recompiled_fn lookup(cpu_t *c, uint32_t pc) {
     }
     if ((slot->epoch == c->code_epoch || slot->epoch == UINT64_MAX) && slot->pc == pc) {
         if (slot->epoch == UINT64_MAX) slot->version = c->code_epoch;
+        if (fast) { fast->pc = pc; fast->epoch = slot->epoch; fast->fn = slot->fn; }
         return slot->fn;
     }
     /* An epoch miss must still complete deferred writes before trusting RAM. */
@@ -607,6 +818,7 @@ recompiled_fn lookup(cpu_t *c, uint32_t pc) {
         slot->epoch < c->code_epoch && slot->version <= slot->epoch &&
         slot->version == dispatch_version(c, slot)) {
         slot->epoch = c->code_epoch;
+        if (fast) { fast->pc = pc; fast->epoch = slot->epoch; fast->fn = slot->fn; }
         return slot->fn;
     }
     epoch = c->code_epoch;
@@ -646,6 +858,7 @@ resolved:
     slot->version = !registered ? c->code_epoch :
         epoch == c->code_epoch ? dispatch_version(c, slot) : UINT64_MAX;
     slot->pc = pc; slot->epoch = registered ? c->code_epoch : UINT64_MAX; slot->fn = fn;
+    if (fast) { fast->pc = pc; fast->epoch = slot->epoch; fast->fn = fn; }
     return fn;
 }
 

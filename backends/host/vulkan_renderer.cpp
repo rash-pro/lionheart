@@ -875,8 +875,32 @@ void flush_pending_hd_models(Backend &b) {
 void dirty_bounds(gpu_raster_t *s,int x,int y,int w,int h,bool effect=false) {
     int l=std::max(x,s->left), r=std::min(x+w,s->right+1);
     int t=std::max(y,s->top), b=std::min(y+h,s->bottom+1);
-    if (r>l) for (int row=t;row<b;++row) backend->mark(unsigned(l),unsigned(row),unsigned(r-l));
-    if (effect && r>l && b>t) backend->effect(unsigned(l),unsigned(t),unsigned(r-l),unsigned(b-t),true);
+    if (r<=l || b<=t) return;
+    unsigned ul=unsigned(l), uw=unsigned(r-l), ut=unsigned(t), uh=unsigned(b-t);
+    backend->touch(ul,ut,uw,uh);
+    backend->dirty=true;
+    uint64_t row_mask[16]={};
+    unsigned xx=ul, left=uw;
+    while (left) {
+        xx&=1023;
+        unsigned count=std::min({left,1024-xx,64-(xx&63)});
+        uint64_t mask=count==64 ? ~uint64_t(0) : ((uint64_t(1)<<count)-1)<<(xx&63);
+        row_mask[xx/64]|=mask;
+        xx+=count; left-=count;
+    }
+    unsigned first_word=ul/64, last_word=(ul+uw-1)/64;
+    if (last_word<16) {
+        for (int row=t;row<b;++row) {
+            auto &dst=backend->dirty_rows[unsigned(row)&511];
+            for (unsigned wi=first_word;wi<=last_word;++wi) dst[wi]|=row_mask[wi];
+        }
+    } else {
+        for (int row=t;row<b;++row) {
+            auto &dst=backend->dirty_rows[unsigned(row)&511];
+            for (unsigned wi=0;wi<16;++wi) dst[wi]|=row_mask[wi];
+        }
+    }
+    if (effect) backend->effect(ul,ut,uw,uh,true);
 }
 
 }

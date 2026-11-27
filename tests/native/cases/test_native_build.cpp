@@ -337,3 +337,30 @@ LH_TEST(test_a_killed_player_leaves_no_compiler_running) {
         LH_CHECK_MSG(!running(pid), "compiler child " + pid + " outlived the player");
     }
 }
+
+LH_TEST(test_background_mode_caps_default_workers_and_respects_override) {
+    {
+        Build b(t);
+        b.sets("-1 0x1e 0 main slow units=2\n"
+               "2 0x02 0 field slow units=2\n"
+               "4 0x02 0 menu slow units=2\n"
+               "130 0x02 1 effect1 slow units=2\n"
+               "131 0x04 1 effect2 slow units=2\n");
+        const auto out = b.run({"--toggle-background"});
+        LH_CONTAINS(out, "state done sets 5 ready 5 failed 0 compiled 5 ");
+        const unsigned before = unsigned(std::stoul(lh::capture(out, "background_workers before ([0-9]+)")));
+        const unsigned during = unsigned(std::stoul(lh::capture(out, "background_workers before [0-9]+ during ([0-9]+)")));
+        const unsigned after = unsigned(std::stoul(lh::capture(out, "background_workers before [0-9]+ during [0-9]+ after ([0-9]+)")));
+        LH_CHECK_MSG(before >= 1 && during >= 1, "worker counts stay positive");
+        LH_CHECK_MSG(during <= before, "background mode never raises the default worker cap");
+        LH_EQ(after, before);
+        if (before >= 6) LH_CHECK_MSG(during < before, "background mode lowers default worker concurrency on wide CPUs");
+    }
+    {
+        Build b(t);
+        b.sets("-1 0x1e 0 main slow units=2\n2 0x02 0 field slow units=2\n");
+        const auto out = b.run({"--cache-id", "cache-override", "--workers", 2, "--toggle-background"});
+        LH_CONTAINS(out, "state done sets 2 ready 2 failed 0 compiled 2 ");
+        LH_CONTAINS(out, "background_workers before 2 during 2 after 2\n");
+    }
+}

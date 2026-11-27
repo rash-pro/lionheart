@@ -1463,6 +1463,9 @@ int main(int argc, char **argv) {
     } else
 #endif
     {
+#ifdef FF8_PLAYER
+        host_native_background(1);
+#endif
         host_states_apply(&c,&input);
         if (!host_states_failed()) do { run_guest(c); } while (host_states_apply(&c,&input));
     }

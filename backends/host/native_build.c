@@ -689,7 +689,8 @@ static struct {
     cond_t changed;
     thread_t service, *workers;
     child_t *children;
-    unsigned worker_count;
+    unsigned worker_count, worker_budget;
+    int background;
     file_lock_t in_use, builder_lock;
     set_t *sets;
     size_t set_count;
@@ -1327,6 +1328,10 @@ static void *worker_main(void *argument)
         job_t *j;
         size_t row;
         if (!building()) break;
+        if (worker >= b.worker_budget) {
+            cond_wait(&b.changed, &b.guard, 0);
+            continue;
+        }
         if ((j = best_job())) {
             size_t unit = j->started++;
             int code = 0, ran;
@@ -1585,10 +1590,21 @@ static unsigned pick_workers(void) {
     return workers < by_memory ? workers : by_memory;
 }
 
+static unsigned background_workers(unsigned max_workers) {
+    unsigned cpus = processors();
+    /* Leave ample physical cores, L3 cache, and turbo headroom for the active
+     * emulation thread during gameplay; explicit --native-workers overrides. */
+    unsigned limit = cpus >= 8 ? cpus / 4 : 1;
+    if (!limit) limit = 1;
+    return limit < max_workers ? limit : max_workers;
+}
+
 static int start_workers(void) {
     unsigned i;
     b.worker_count = pick_workers();
-    b.status.workers = b.worker_count;
+    b.worker_budget = b.background && !b.config.workers ? background_workers(b.worker_count) : b.worker_count;
+    if (!b.worker_budget) b.worker_budget = 1;
+    b.status.workers = b.worker_budget;
     b.workers = calloc(b.worker_count, sizeof(*b.workers));
     b.children = calloc(b.worker_count, sizeof(*b.children));
     if (!b.workers || !b.children) return 0;
@@ -1824,6 +1840,22 @@ void native_build_disc(unsigned disc) {
     lock(&b.guard);
     b.disc = disc;
     cond_all(&b.changed);
+    unlock(&b.guard);
+}
+
+void native_build_set_background(int active) {
+    unsigned budget;
+    if (!b.running) return;
+    lock(&b.guard);
+    b.background = active ? 1 : 0;
+    if (b.worker_count) {
+        budget = b.background && !b.config.workers ? background_workers(b.worker_count) : b.worker_count;
+        if (budget > b.worker_count) budget = b.worker_count;
+        if (!budget) budget = 1;
+        b.worker_budget = budget;
+        b.status.workers = budget;
+        cond_all(&b.changed);
+    }
     unlock(&b.guard);
 }
 
