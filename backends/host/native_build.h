@@ -133,6 +133,9 @@ void native_build_stop(void);
 void native_build_status(native_build_status_t *status);
 /* The inserted disc changed; its sets come next. */
 void native_build_disc(unsigned disc);
+/* While gameplay is active, cap automatic worker concurrency to avoid CPU/L3
+ * contention with the emulation thread; explicit config.workers overrides. */
+void native_build_set_background(int active);
 /* The guest entered code that has no native body at pc: the first bytes
  * there are enough to tell which pending set it belongs to. Cheap, lock-free,
  * callable from the guest thread at any rate. */

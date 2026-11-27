@@ -454,6 +454,10 @@ void host_native_disc(unsigned disc) {
     if (np.service) native_build_disc(disc);
 }
 
+void host_native_background(int active) {
+    if (np.service) native_build_set_background(active);
+}
+
 void host_native_discs(const char *const discs[4], unsigned inserted) {
     unsigned d, same = 1;
     if (!np.running) return;

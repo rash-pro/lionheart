@@ -256,7 +256,7 @@ int main(int argc, char **argv) {
     char error[256], twin_out[4096] = "";
     unsigned ran_count = 0, kill_after = 0, hold = 0, stop_after = 0, delay = 0, twin_hold = 0;
     const char *twin_cache = NULL;
-    int as_twin = 0;
+    int as_twin = 0, toggle_background = 0;
     double timeout = 120;
     int i, child = 0, with_extra = 0;
 #ifdef _WIN32
@@ -293,6 +293,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--twin-cache-id")) twin_cache = next, ++i;
         else if (!strcmp(argv[i], "--twin-hold-ms")) twin_hold = (unsigned)atoi(next), ++i;
         else if (!strcmp(argv[i], "--delay-ms")) delay = (unsigned)atoi(next), ++i;
+        else if (!strcmp(argv[i], "--toggle-background")) toggle_background = 1;
         else if (!strcmp(argv[i], "--verbose")) config.verbose = 1;
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
@@ -310,6 +311,24 @@ int main(int argc, char **argv) {
     if (child < 0 && !(child = twin(argc, argv, twin_out))) { fprintf(stderr, "cannot start the twin\n"); return 2; }
     if (delay) pause_ms(delay);
     if (!native_build_start(&config, error, sizeof(error))) { fprintf(stderr, "start: %s\n", error); return 2; }
+    if (toggle_background) {
+        unsigned before = 0, during = 0, after = 0;
+        for (i = 0; i < 2000; ++i) {
+            native_build_status(&status);
+            if (status.workers > 0 || status.state >= NATIVE_BUILD_DONE) break;
+            pause_ms(5);
+        }
+        before = status.workers;
+        native_build_set_background(1);
+        native_build_status(&status);
+        during = status.workers;
+        pause_ms(120);
+        native_build_set_background(0);
+        native_build_status(&status);
+        after = status.workers;
+        printf("background_workers before %u during %u after %u\n", before, during, after);
+        fflush(stdout);
+    }
     if (ran_count) {
         /* Samples count only once the sets can be told apart. */
         for (i = 0; i < 2000; ++i) {

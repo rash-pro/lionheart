@@ -38,6 +38,8 @@ int host_native_boot(cpu_t *c);
 int host_native_start(const char *data, const char *const discs[4], unsigned inserted, const host_native_options_t *options);
 /* The inserted disc changed. */
 void host_native_disc(unsigned disc);
+/* Tell the builder whether gameplay is active (throttles automatic workers). */
+void host_native_background(int active);
 /* The discs the player knows changed: building starts again on the new list;
  * modules already loaded stay loaded. */
 void host_native_discs(const char *const discs[4], unsigned inserted);
