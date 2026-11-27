@@ -34,6 +34,7 @@ typedef struct {
     char token[64], key[65];
     int fail, slow, child, link_fail, units;
     uint32_t pc;
+    size_t pad;
 } row_t;
 
 static row_t rows[600];
@@ -85,6 +86,8 @@ static int load_spec(const char *path) {
             else if (!strcmp(word, "child")) r->child = 1;
             else if (!strcmp(word, "linkfail")) r->link_fail = 1;
             else if (!strncmp(word, "units=", 6)) r->units = atoi(word + 6);
+            else if (!strncmp(word, "work=", 5)) r->info.work = (uint32_t)strtoul(word + 5, NULL, 10);
+            else if (!strncmp(word, "pad=", 4)) r->pad = (size_t)strtoul(word + 4, NULL, 10);
             else if (!strncmp(word, "pc=", 3)) r->pc = (uint32_t)strtoul(word + 3, NULL, 16);
             else if (!strncmp(word, "name=", 5)) snprintf(r->info.name, sizeof(r->info.name), "%s", word + 5);
         }
@@ -139,6 +142,16 @@ static int emit(void *user, size_t set, const char *directory, char key[65], cha
         if (!(f = fopen(path, "wb"))) { snprintf(error, size, "cannot write %s", path); return 0; }
         fprintf(f, "/* %s unit %d */\nSOURCE-TEXT-MUST-NOT-LEAK\n%s%s%s%s", r->token, unit, r->fail ? "LH_FAKE_FAIL\n" : "", r->child ? "LH_FAKE_CHILD\n" : "",
                 r->slow ? "LH_FAKE_SLOW\n" : "", r->link_fail ? "LH_FAKE_LINK_FAIL\n" : "");
+        if (unit == 0 && r->pad) {
+            char block[1024];
+            size_t left = r->pad;
+            memset(block, ' ', sizeof(block));
+            while (left) {
+                size_t chunk = left < sizeof(block) ? left : sizeof(block);
+                fwrite(block, 1, chunk, f);
+                left -= chunk;
+            }
+        }
         fclose(f);
     }
     {

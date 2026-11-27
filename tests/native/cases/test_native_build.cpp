@@ -111,6 +111,32 @@ LH_TEST(test_order_executable_disc_game_sets_effects_then_the_rest) {
     LH_TEXT_EQ(joined(rows), "main -1\nfield-two 34\neffect-two 130\nfield-one 2\nmenu-one 4\nfield-three 66\neffect-one 131\n");
 }
 
+LH_TEST(test_lpt_orders_heavier_sets_first_within_a_tier) {
+    Build b(t);
+    b.sets("-1 0x1e 0 main work=100\n"
+           "2 0x02 0 small-a work=10\n"
+           "4 0x02 0 heavy work=500\n"
+           "6 0x02 0 small-b work=10\n"
+           "8 0x02 0 medium work=200\n");
+    const auto rows = b.deliveries(b.run({"--workers", 1, "--disc", 1}));
+    LH_TEXT_EQ(joined(rows), "main -1\nheavy 4\nmedium 8\nsmall-a 2\nsmall-b 6\n");
+}
+
+LH_TEST(test_tiered_optimization_flags_for_core_large_and_effect_units) {
+    Build b(t);
+    const auto flags_log = t.temp() / "flags.log";
+    b.sets("-1 0x1e 0 main\n"
+           "2 0x02 0 giant-core pad=524288\n"
+           "130 0x02 1 effect\n");
+    t.ok(b.command({"--workers", 1, "--disc", 1}).env("FAKE_CC_FLAGS_LOG", flags_log.string()));
+    const auto flags = lh::read_file(flags_log);
+    // Core small units get -O1 without outlining, giant core units (>=512 KiB)
+    // get -O1 -DFF8_PRECISE_OUTLINE=1, and effect units get -O1 -DFF8_PRECISE_OUTLINE=2.
+    LH_CONTAINS(flags, "unit_000.c -O1\n");
+    LH_CONTAINS(flags, "unit_000.c -O1 -DFF8_PRECISE_OUTLINE=1\n");
+    LH_CONTAINS(flags, "unit_000.c -O1 -DFF8_PRECISE_OUTLINE=2\n");
+}
+
 LH_TEST(test_running_code_moves_its_set_to_the_front) {
     Build b(t);
     b.sets("-1 0x1e 0 main slow\n"

@@ -234,7 +234,18 @@ static inline void c_tick(cpu_t *c, uint32_t n) {
     }
 }
 
-static inline void c_precise_begin(cpu_t *c, uint32_t pc) {
+#if defined(FF8_PRECISE_OUTLINE) && (defined(__GNUC__) || defined(__clang__))
+#define FF8_HELPER_LINKAGE static __attribute__((noinline, unused))
+#else
+#define FF8_HELPER_LINKAGE static inline
+#endif
+#if defined(FF8_PRECISE_OUTLINE) && (FF8_PRECISE_OUTLINE >= 2) && (defined(__GNUC__) || defined(__clang__))
+#define FF8_BEGIN_LINKAGE static __attribute__((noinline, unused))
+#else
+#define FF8_BEGIN_LINKAGE static inline
+#endif
+
+FF8_BEGIN_LINKAGE void c_precise_begin(cpu_t *c, uint32_t pc) {
     c->in_delay_slot = c->branch_pending; c->flow = 0;
     c_count_recompiled(c, pc, 1); c_recomp_budget(c, 1);
     c_pc_count(c, pc, 1);
@@ -332,12 +343,12 @@ static inline void ram_write(cpu_t *c, uint32_t p, unsigned width, uint32_t valu
 }
 
 #define MEMORY_ACCESSORS(bits, width) \
-static inline uint32_t mem_read##bits(cpu_t *c, uint32_t address) { \
+FF8_HELPER_LINKAGE uint32_t mem_read##bits(cpu_t *c, uint32_t address) { \
     uint32_t p = address & 0x1fffffffu; \
     if (p < c->ram_limit && !(address & (width - 1))) return ram_read(c, p, width); \
     return mem_slow_read(c, address, width); \
 } \
-static inline void mem_write##bits(cpu_t *c, uint32_t address, uint32_t value) { \
+FF8_HELPER_LINKAGE void mem_write##bits(cpu_t *c, uint32_t address, uint32_t value) { \
     uint32_t p = address & 0x1fffffffu; \
     if (p < c->ram_limit && !(address & (width - 1))) ram_write(c, p, width, value); \
     else mem_slow_write(c, address, width, value); \
@@ -350,8 +361,8 @@ MEMORY_ACCESSORS(32, 4)
 /* Operands are captured before retirement. A following write (including a
  * second load) cancels a pending load to the same register. LWL/LWR alone
  * forward that pending value when merging the two halves. */
-static inline void c_retire(cpu_t *c, unsigned dst, uint32_t value,
-                            unsigned load, uint32_t loaded) {
+FF8_HELPER_LINKAGE void c_retire(cpu_t *c, unsigned dst, uint32_t value,
+                                 unsigned load, uint32_t loaded) {
     if (c->load_reg && (c->halted || (c->load_reg != dst && c->load_reg != load)))
         c->r[c->load_reg] = c->load_value;
     if (!c->halted && dst) c->r[dst] = value;

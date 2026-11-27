@@ -650,13 +650,19 @@ typedef struct {
     char key[65];
 } set_t;
 
+/* Threshold (bytes) above which a core-tier translation unit outlines
+ * c_retire/mem_read/mem_write to avoid super-linear register allocation on
+ * giant switch functions (e.g. battle/field 4000-case units). */
+#define LARGE_UNIT_BYTES (512ull << 10)
+
 struct job {
     job_t *next;
     char key[65], directory[PATH_CAP];
     size_t *sets, set_count;
     char **units;
+    uint64_t *unit_sizes;
     size_t unit_count, started, finished;
-    int failed, linking;
+    int failed, linking, effect;
     char tail[TAIL_CAP];
     uint64_t work;
     double began;
@@ -744,16 +750,20 @@ static void set_error(const char *format, ...) {
 }
 
 /* Lower sorts first: the executable, sets the guest ran, the inserted disc's
- * game sets, its battle effects, then everything else. */
+ * game sets, its battle effects, then everything else. Within each tier,
+ * larger sets sort first (LPT) so slow multi-unit sets start early instead of
+ * trailing the tier; equal work keeps catalog row order. */
 static uint64_t priority(const set_t *s) {
     unsigned tier, here = b.disc && (s->info.discs & (1u << b.disc));
+    uint32_t work_rank;
     if (s->info.index < 0) tier = 0;
-    else if (s->promoted) return (uint64_t)1 << 40 | (UINT32_MAX - s->promoted);
+    else if (s->promoted) return (uint64_t)1 << 56 | (UINT32_MAX - s->promoted);
     else if (here && !s->info.effect) tier = 2;
     else if (here) tier = 3;
     else if (!s->info.effect) tier = 4;
     else tier = 5;
-    return (uint64_t)tier << 40 | (uint32_t)(s - b.sets);
+    work_rank = s->info.work > 0xffffffu ? 0xffffffu : s->info.work;
+    return ((uint64_t)tier << 56) | ((uint64_t)(0xffffffu - work_rank) << 32) | (uint32_t)(s - b.sets);
 }
 
 static uint64_t job_priority(const job_t *j) {
@@ -838,7 +848,7 @@ static void count(void) {
     if (!b.status.first_tier_seconds && b.set_count) {
         int left = 0;
         for (i = 0; i < b.set_count && !left; ++i)
-            if ((priority(&b.sets[i]) >> 40) <= 2 && !b.sets[i].promoted && b.sets[i].state < SET_READY) left = 1;
+            if ((priority(&b.sets[i]) >> 56) <= 2 && !b.sets[i].promoted && b.sets[i].state < SET_READY) left = 1;
         if (!left) { b.status.first_tier_seconds = now() - b.start; b.status.first_tier_cpu = cpu_seconds() - b.start_cpu; }
     }
 }
@@ -954,16 +964,16 @@ static void forget_job(job_t *j, int keep) {
     /* A stop keeps what was compiled, whatever ended the job. */
     if (!keep && !b.stopping && b.status.state != NATIVE_BUILD_STOPPED) remove_tree(j->directory);
     for (i = 0; i < j->unit_count; ++i) free(j->units[i]);
-    free(j->units); free(j->sets); free(j);
+    free(j->units); free(j->unit_sizes); free(j->sets); free(j);
 }
 
 /* ---- the recipe ---- */
 
 const char *native_build_recipe(native_build_family_t family) {
     switch (family) {
-    case NATIVE_BUILD_GCC: return "gcc -O2 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE, -shared -nostdlib; 1";
-    case NATIVE_BUILD_CLANG: return "clang -O2 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE, -shared -nostdlib; 1";
-    default: return "zig cc -O2 -mcpu=baseline -fPIC, -shared -nostdlib; 1";
+    case NATIVE_BUILD_GCC: return "gcc -O1 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE outline=512k/effect2, -shared -nostdlib; 2";
+    case NATIVE_BUILD_CLANG: return "clang -O1 -march=x86-64 -mtune=generic -fPIC -fno-stack-protector -U_FORTIFY_SOURCE outline=512k/effect2, -shared -nostdlib; 2";
+    default: return "zig cc -O1 -mcpu=baseline -fPIC outline=512k/effect2, -shared -nostdlib; 2";
     }
 }
 
@@ -988,9 +998,12 @@ static int compiler_env(const native_build_config_t *c, const char *directory, c
     return 1;
 }
 
-/* argv has room for 40. Diagnostics carry no source text: no carets. */
+/* argv has room for 40. Diagnostics carry no source text: no carets.
+ * outline_level: 0 = full inline (-O1, core game units), 1 = outline c_retire
+ * and memory helpers on giant (>512 KiB) core units, 2 = also outline
+ * c_precise_begin on battle effect modules (tiers 3/5). */
 static size_t compile_command(const native_build_config_t *c, const char *include, const char *define, const char *source,
-                              const char *output, const char **argv) {
+                              const char *output, int outline_level, const char **argv) {
     size_t n = command_base(c, argv);
     if (c->family == NATIVE_BUILD_ZIG) argv[n++] = "-mcpu=baseline";
     else {
@@ -1000,12 +1013,15 @@ static size_t compile_command(const native_build_config_t *c, const char *includ
         argv[n++] = "-march=x86-64"; argv[n++] = "-mtune=generic";
         argv[n++] = "-fno-stack-protector"; argv[n++] = "-U_FORTIFY_SOURCE";
     }
-    argv[n++] = "-O2"; argv[n++] = "-s"; argv[n++] = "-fomit-frame-pointer";
+    argv[n++] = "-O1"; argv[n++] = "-s"; argv[n++] = "-fomit-frame-pointer";
     argv[n++] = "-std=c99"; argv[n++] = "-DNDEBUG"; argv[n++] = "-fPIC"; argv[n++] = "-w";
     if (c->family == NATIVE_BUILD_GCC) { argv[n++] = "-fno-diagnostics-show-caret"; argv[n++] = "-fdiagnostics-color=never"; }
     else { argv[n++] = "-fno-caret-diagnostics"; argv[n++] = "-fno-color-diagnostics"; }
     if (c->windows) argv[n++] = "-mno-stack-arg-probe";
-    argv[n++] = "-DFF8_NATIVE_MODULE"; argv[n++] = define;
+    argv[n++] = "-DFF8_NATIVE_MODULE";
+    if (outline_level >= 2) argv[n++] = "-DFF8_PRECISE_OUTLINE=2";
+    else if (outline_level == 1) argv[n++] = "-DFF8_PRECISE_OUTLINE=1";
+    argv[n++] = define;
     argv[n++] = "-I"; argv[n++] = include;
     argv[n++] = "-c"; argv[n++] = source; argv[n++] = "-o"; argv[n++] = output;
     argv[n] = NULL;
@@ -1034,7 +1050,10 @@ static int compile_unit(unsigned worker, job_t *j, size_t unit, int *code) {
         return 0;
     /* Finished by an earlier launch: an object exists only once it is whole. */
     if (exists(object, NULL)) { *code = 0; return 1; }
-    compile_command(&b.config, b.include, define, j->units[unit], part, argv);
+    {
+        int outline = j->effect ? 2 : (j->unit_sizes && j->unit_sizes[unit] >= LARGE_UNIT_BYTES ? 1 : 0);
+        compile_command(&b.config, b.include, define, j->units[unit], part, outline, argv);
+    }
     if (run(argv, env, log, &b.children[worker], &b.guard, code)) return 0;
     if (*code) keep_tail(j, log);
     else if (!publish(part, object, 1)) *code = 1;
@@ -1087,12 +1106,34 @@ static void add_unit(void *user, const char *name, int directory) {
     job_t *j = user;
     size_t n = strlen(name), length;
     char **grown;
+    uint64_t *sizes, sz = 0;
     if (directory || n < 3 || strcmp(name + n - 2, ".c")) return;
     if (!(grown = realloc(j->units, (j->unit_count + 1) * sizeof(*grown)))) { j->failed = 1; return; }
     j->units = grown;
+    if (!(sizes = realloc(j->unit_sizes, (j->unit_count + 1) * sizeof(*sizes)))) { j->failed = 1; return; }
+    j->unit_sizes = sizes;
     length = strlen(j->directory) + n + 2;
     if (!(j->units[j->unit_count] = malloc(length))) { j->failed = 1; return; }
-    snprintf(j->units[j->unit_count++], length, "%s/%s", j->directory, name);
+    snprintf(j->units[j->unit_count], length, "%s/%s", j->directory, name);
+    exists(j->units[j->unit_count], &sz);
+    j->unit_sizes[j->unit_count++] = sz;
+}
+
+/* Largest generated .c units first (LPT) so giant switch units start
+ * immediately instead of straggling behind small units. */
+static void sort_units_lpt(job_t *j) {
+    size_t i, k;
+    for (i = 1; i < j->unit_count; ++i) {
+        char *u = j->units[i];
+        uint64_t s = j->unit_sizes[i];
+        for (k = i; k > 0 && (j->unit_sizes[k - 1] < s ||
+            (j->unit_sizes[k - 1] == s && strcmp(j->units[k - 1], u) > 0)); --k) {
+            j->units[k] = j->units[k - 1];
+            j->unit_sizes[k] = j->unit_sizes[k - 1];
+        }
+        j->units[k] = u;
+        j->unit_sizes[k] = s;
+    }
 }
 
 static size_t best_pending(void) {
@@ -1215,29 +1256,34 @@ static void emit_set(size_t row) {
     snprintf(j->key, sizeof(j->key), "%s", key);
     snprintf(j->directory, sizeof(j->directory), "%s", directory);
     j->sets[0] = row; j->set_count = 1;
+    j->effect = s->info.effect;
     j->work = set_work(s);
     j->began = now();
     if (!list(directory, add_unit, j) || !j->unit_count) j->failed = 1;
+    if (!j->failed) sort_units_lpt(j);
     {
         size_t i;
         char path[PATH_CAP];
         for (i = 0; i < b.config.file_count && !j->failed; ++i) {
             size_t n = strlen(b.config.files[i].name);
             char **grown;
+            uint64_t *sizes;
             if (n < 3 || strcmp(b.config.files[i].name + n - 2, ".c") || !join(path, b.include, b.config.files[i].name)) continue;
-            if (!(grown = realloc(j->units, (j->unit_count + 1) * sizeof(*grown))) || !(grown[j->unit_count] = malloc(strlen(directory) + n + 2))) {
-                if (grown) j->units = grown;
-                j->failed = 1; break;
-            }
+            if (!(grown = realloc(j->units, (j->unit_count + 1) * sizeof(*grown)))) { j->failed = 1; break; }
             j->units = grown;
+            if (!(sizes = realloc(j->unit_sizes, (j->unit_count + 1) * sizeof(*sizes)))) { j->failed = 1; break; }
+            j->unit_sizes = sizes;
+            if (!(j->units[j->unit_count] = malloc(strlen(directory) + n + 2))) { j->failed = 1; break; }
             /* Each module gets its own copy, so every object lands in the build folder. */
             snprintf(j->units[j->unit_count], strlen(directory) + n + 2, "%s/%s", directory, b.config.files[i].name);
             if (!write_file(j->units[j->unit_count], b.config.files[i].data, b.config.files[i].size)) j->failed = 1;
-            j->unit_count++;
+            j->unit_sizes[j->unit_count++] = b.config.files[i].size;
         }
     }
     if (j->failed) {
-        free(j->sets); j->unit_count = 0; free(j->units); remove_tree(directory); free(j);
+        size_t fi;
+        for (fi = 0; fi < j->unit_count; ++fi) free(j->units[fi]);
+        free(j->sets); j->unit_count = 0; free(j->units); free(j->unit_sizes); remove_tree(directory); free(j);
         s->state = SET_PENDING;
         stop_building("cannot prepare the sources of %s", s->info.name);
         return;
@@ -1974,7 +2020,7 @@ int native_build_try(const native_build_config_t *config, const char *source,
         if (name && (n < 3 || strcmp(name + n - 2, ".c"))) continue;
         if ((name && !join(unit, include, name)) || !path_of(object, "%s.o", unit) || !(objects[count] = malloc(strlen(object) + 1))) goto done;
         strcpy(objects[count++], object);
-        compile_command(config, include, define, unit, object, argv);
+        compile_command(config, include, define, unit, object, 0, argv);
         if (run(argv, env, log, &child, &guard, &code)) { snprintf(error, size, "cannot run %s", config->compiler); goto done; }
         if (code) { first_error(log, "compiling", code, error, size); goto done; }
     }
