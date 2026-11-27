@@ -481,6 +481,7 @@ static const gui_string_t gui_strings[] = {
     {"enh.mods.log", "Log"},
     {"enh.mods.log_title", "Mod import log"},
     {"enh.mods.log_empty", "No warnings or log messages recorded for this pack."},
+    {"enh.mods.operation_failed", "Could not update this pack. Check its original folders and any files with the same names."},
     {"enh.mods.remove_title", "Remove mod pack?"},
     {"enh.mods.remove_body", "Remove \"%s\" and delete its imported HD files?"},
     {"val.builtin", "Built-in"},

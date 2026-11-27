@@ -252,6 +252,69 @@ void test_mod_xml_evaluator() {
     check(std::strcmp(cfg.options[1].id, "UI_ID") == 0 && cfg.options[1].type == 0 && cfg.options[1].default_value == 1, "bool opt");
 }
 
+void test_managed_import_preserves_existing_movies(const std::filesystem::path &temp_dir) {
+    namespace fs = std::filesystem;
+    fs::path data = temp_dir / "managed-import";
+    fs::path pack = data / "pack";
+    fs::path movies = data / "movies-hd";
+    fs::path other_movies = data / "other-movies";
+    fs::remove_all(data);
+    fs::create_directories(pack);
+    fs::create_directories(movies);
+    fs::create_directories(other_movies);
+
+    /* A minimal ISO9660 directory and an empty FF8 disc index. */
+    constexpr size_t sector = 2048;
+    std::vector<uint8_t> iso(19 * sector);
+    std::memcpy(iso.data() + 16 * sector + 1, "CD001", 5);
+    iso[16 * sector + 158] = 17;
+    iso[16 * sector + 167] = 8;
+    iso[17 * sector] = 46;
+    iso[17 * sector + 2] = 18;
+    iso[17 * sector + 11] = 8;
+    iso[17 * sector + 32] = 12;
+    std::memcpy(iso.data() + 17 * sector + 33, "FF8DISC1.IMG", 12);
+    fs::path disc = data / "synthetic.iso";
+    std::ofstream(disc, std::ios::binary).write(reinterpret_cast<const char *>(iso.data()), iso.size());
+
+    std::ofstream(pack / "existing.mp4") << "new";
+    std::ofstream(pack / "installed.mp4") << "imported";
+    std::ofstream(movies / "existing.mp4") << "old";
+    std::ofstream(other_movies / "installed.mp4") << "unrelated";
+    std::string disc_arg = disc.string(), pack_arg = pack.string();
+    const char *discs[] = {disc_arg.c_str()};
+    const char *packs[] = {pack_arg.c_str()};
+    host_mod_import_status_t status{};
+    check(host_mod_import_run_ex(discs, 1, packs, 1, nullptr, nullptr, movies.string().c_str(),
+                                 nullptr, data.string().c_str(), nullptr, 0, &status) == 1,
+          status.error);
+    check(status.movies_written == 1, "an existing movie is not claimed by the new pack");
+    check(host_mod_registry_remove(data.string().c_str(), "pack", nullptr, nullptr,
+                                   other_movies.string().c_str()) == 0,
+          "remove refuses to operate in a different folder");
+    check(fs::exists(other_movies / "installed.mp4"), "separately configured asset preserved");
+    check(host_mod_registry_remove(data.string().c_str(), "pack", nullptr, nullptr,
+                                   movies.string().c_str()) == 1,
+          "remove from original folder succeeds");
+    std::string existing;
+    std::ifstream(movies / "existing.mp4") >> existing;
+    check(existing == "old", "preexisting movie is preserved after removing a pack");
+    check(!fs::exists(movies / "installed.mp4"), "only the imported movie is removed");
+
+    check(host_mod_import_run_ex(discs, 1, packs, 1, nullptr, nullptr, movies.string().c_str(),
+                                 nullptr, data.string().c_str(), nullptr, 0, &status) == 1,
+          status.error);
+    check(host_mod_registry_set_enabled(data.string().c_str(), "pack", 0, nullptr, nullptr,
+                                        movies.string().c_str()) == 1, "disable the imported movie");
+    std::ofstream(movies / "installed.mp4") << "manually-added";
+    check(host_mod_registry_set_enabled(data.string().c_str(), "pack", 1, nullptr, nullptr,
+                                        movies.string().c_str()) == 0, "refuse to overwrite on enable");
+    check(host_mod_registry_remove(data.string().c_str(), "pack", nullptr, nullptr,
+                                   movies.string().c_str()) == 1, "remove the disabled pack");
+    std::ifstream(movies / "installed.mp4") >> existing;
+    check(existing == "manually-added", "removing a disabled pack preserves the active folder");
+}
+
 void test_mod_registry_lifecycle(const std::filesystem::path &temp_dir) {
     namespace fs = std::filesystem;
     fs::path data = temp_dir / "reg-data";
@@ -541,6 +604,7 @@ int main(int argc, char **argv) {
                                            : (std::filesystem::temp_directory_path() / "lh_mod_import_test");
     test_iros_parser(tmp);
     test_mod_registry_lifecycle(tmp);
+    test_managed_import_preserves_existing_movies(tmp);
     test_battle_dat_conversion(tmp);
     std::printf("ok\n");
     return 0;

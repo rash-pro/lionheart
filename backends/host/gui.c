@@ -22,6 +22,7 @@ static struct {
     host_gui_mode_t mode; host_gui_pane_t pane,requested;
     host_gui_result_t result; host_gui_input_t input;
     int configured,game,want_open,modal,setup_step,ra_form,ra_error,ra_seen,ra_locked;
+    int mod_operation_failed;
     char pending_booster[32];
     int force_hub,first_focus,focus_rail,reset_scroll,keyboard,keyboard_first,shift,symbols,pick_slot,drop_active;
     int card_imported[2];
@@ -281,6 +282,7 @@ static void start_mod_import(const char *path,const host_mod_option_override_t *
     if (!mov_out && *gui.data) { snprintf(default_mov,sizeof(default_mov),"%s/movies-hd",gui.data); mov_out=default_mov; }
     if (*gui.data) { snprintf(default_aud,sizeof(default_aud),"%s/audio-hd",gui.data); aud_out=default_aud; }
     gui.mod_import_seen_done=0;
+    gui.mod_operation_failed=0;
     if (gui.services.mod_import_start_ex)
         gui.services.mod_import_start_ex(gui.services.context,discs,dc,path,tex_out,mod_out,mov_out,
                                          aud_out,*gui.data ? gui.data : NULL,overrides,override_count);
@@ -1186,6 +1188,10 @@ static void draw_enhancements(void) {
             float my=978;
             label("enh.mods.heading",x+18,my,width-36,GUI_SUB,GUI_MUTED);
             my+=32;
+            if (gui.mod_operation_failed) {
+                label("enh.mods.operation_failed",x+18,my,width-36,GUI_SUB,GUI_ERROR);
+                my+=30;
+            }
             if (gui.mod_count==0) {
                 label("enh.mods.empty",x+18,my,width-36,GUI_SUB,GUI_DIM);
             } else {
@@ -1210,10 +1216,12 @@ static void draw_enhancements(void) {
                     if (next_en!=m->enabled && gui.services.mod_set_enabled) {
                         if (gui.services.mod_set_enabled(gui.services.context,gui.data,m->id,next_en,
                                                          gui.options->textures_dir,gui.options->models_dir,gui.options->movies)) {
+                            gui.mod_operation_failed=0;
                             refresh_mods();
                             if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
                             break;
                         }
+                        gui.mod_operation_failed=1;
                     }
                     snprintf(idbuf,sizeof(idbuf),"enh.mod.%u.log",i);
                     if (gui_ui_button(idbuf,S("enh.mods.log"),R(x+width-186,my+14,74,38),0)) {
@@ -1494,10 +1502,11 @@ static void draw_dialog(void) {
         if (gui.first_focus) gui_ui_focus("btn.cancel");
         if (button("btn.remove",x+width-166,y+height-72,134,GUI_DANGER)) {
             if (m && gui.services.mod_remove) {
-                gui.services.mod_remove(gui.services.context,gui.data,m->id,
+                gui.mod_operation_failed=!gui.services.mod_remove(gui.services.context,gui.data,m->id,
                                         gui.options->textures_dir,gui.options->models_dir,gui.options->movies);
                 refresh_mods();
-                if (gui.services.changed) gui.services.changed(gui.services.context,"hd-reload",overlay());
+                if (!gui.mod_operation_failed && gui.services.changed)
+                    gui.services.changed(gui.services.context,"hd-reload",overlay());
             }
             gui.modal=MODAL_NONE;
             request_focus();

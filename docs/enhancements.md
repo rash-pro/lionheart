@@ -114,7 +114,8 @@ Drop `.glb` files directly under `models-dir` (`field/d000.glb`, `battle/c0m001.
 ### Automatic FF8 PC / FFNx mod importer (native C++)
 Lionheart includes a built-in native C++ mod importer with zero external dependencies (CPU BC1/BC2/BC3/BC7 DDS decoder, IROS `.iroj`/`.iro` archive reader, Junction VIII / 7th Heaven `mod.xml` evaluator, PS1 disc indexer, and `.mch` → glTF 2.0 `.glb` converter):
 
-- **From the in-app GUI:** Open **Menu → Enhancements**, click **Import mods**, and pick either a folder containing `.iroj`/`.iro` packs (such as a Junction VIII `library/` folder) or an unpacked FFNx mod directory. Lionheart indexes your configured PS1 disc(s) in the background, converts matching HD textures and high-poly `.mch` field models directly into `~/.local/share/lionheart/textures-hd` and `~/.local/share/lionheart/models-hd`, enables HD textures & models, and reloads live.
+- **From the in-app GUI:** Open **Menu → Enhancements**. Use **Import .iro** for a single `.iro` or `.iroj` archive, or **Import folder** for a library of archives or an unpacked mod. If the pack has supported `mod.xml` settings, choose them before importing. The importer keeps existing files in the destination folders and reports skipped files in the import log.
+- **Manage imported packs:** Find the pack under **Installed mods** to view its log, enable or disable it, or remove it. Keep the original output folders selected when managing a pack. To reimport a pack with different options, remove the current pack first.
 - **From the CLI:**
   ```sh
   lionheart --disc /path/to/FF8-Disc1.cue --import-mods /path/to/ff8-mods/library

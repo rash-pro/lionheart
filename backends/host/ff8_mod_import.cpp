@@ -1898,17 +1898,30 @@ std::string slugify_mod_id(const std::string &raw) {
     return out;
 }
 
+bool path_occupied(const fs::path &path) {
+    std::error_code ec;
+    const auto status = fs::symlink_status(path, ec);
+    return status.type() != fs::file_type::not_found && ec != std::errc::no_such_file_or_directory;
+}
+
+std::string asset_root(const fs::path &path) {
+    if (path.empty()) return {};
+    std::error_code ec;
+    fs::path absolute = fs::absolute(path, ec);
+    if (ec) return {};
+    fs::path root = fs::weakly_canonical(absolute, ec);
+    return ec ? std::string{} : root.generic_string();
+}
+
 bool move_file_safe(const fs::path &src, const fs::path &dst) {
     std::error_code ec;
-    if (!fs::is_regular_file(src, ec)) return false;
+    if (!path_occupied(src)) return true;
+    if (!fs::is_regular_file(fs::symlink_status(src, ec))) return false;
     fs::create_directories(dst.parent_path(), ec);
-    fs::rename(src, dst, ec);
-    if (!ec) return true;
-    ec.clear();
-    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    if (ec) return false;
-    fs::remove(src, ec);
-    return true;
+    if (ec || !fs::copy_file(src, dst, ec)) return false;
+    if (fs::remove(src, ec)) return true;
+    fs::remove(dst, ec);
+    return false;
 }
 
 bool load_registry_json(const fs::path &reg_path, json &out) {
@@ -1935,16 +1948,9 @@ bool save_registry_json(const fs::path &reg_path, const json &doc) {
     std::string dump = doc.dump(2) + "\n";
     if (!write_file_bytes(tmp, reinterpret_cast<const uint8_t *>(dump.data()), dump.size())) return false;
     fs::rename(tmp, reg_path, ec);
-    if (ec) {
-        fs::remove(reg_path, ec);
-        ec.clear();
-        fs::rename(tmp, reg_path, ec);
-        if (ec) {
-            fs::remove(tmp, ec);
-            return false;
-        }
-    }
-    return true;
+    if (!ec) return true;
+    fs::remove(tmp, ec);
+    return false;
 }
 
 bool read_mod_xml_from_path(const std::string &mod_path, std::string &xml_out, std::string &label_out) {
@@ -2063,6 +2069,27 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         final_status.finished = 1;
         return false;
     }
+
+    const bool managed = !registry_dir.empty();
+    const fs::path reg_path = fs::path(registry_dir) / "mods-registry.json";
+    json registry;
+    json roots = json::object();
+    if (managed) {
+        if (!load_registry_json(reg_path, registry) && path_occupied(reg_path)) {
+            std::snprintf(final_status.error, sizeof(final_status.error), "Could not read the mod registry.");
+            final_status.running = 0;
+            final_status.finished = 1;
+            return false;
+        }
+        roots = {{"textures", asset_root(textures_out)}, {"models", asset_root(models_out)},
+                 {"movies", asset_root(movies_out)}, {"audio", asset_root(audio_out)}};
+    }
+    std::atomic<unsigned> conflicts{0};
+    auto occupied_output = [&](const fs::path &path) {
+        if (!managed || !path_occupied(path)) return false;
+        ++conflicts;
+        return true;
+    };
 
     /* Step 1: Index PS1 FF8 disc(s). */
     if (sink) sink->set_stage("Indexing FF8 PlayStation disc...");
@@ -2512,21 +2539,29 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
                         if (job.pal_idx <= 0) {
                             std::string fname_out = htex + ".png";
                             fs::path out_p = fs::path(textures_out) / fname_out;
-                            if (write_file_bytes(out_p, png.data(), png.size())) {
-                                ++tex_written;
-                                std::lock_guard<std::mutex> lk(written_mu);
-                                written_tex_files.push_back(std::move(fname_out));
-                            } else ++tex_failed;
+                            std::unique_lock<std::mutex> lk(written_mu, std::defer_lock);
+                            if (managed) lk.lock();
+                            if (!occupied_output(out_p)) {
+                                if (write_file_bytes(out_p, png.data(), png.size())) {
+                                    ++tex_written;
+                                    if (!lk.owns_lock()) lk.lock();
+                                    written_tex_files.push_back(std::move(fname_out));
+                                } else ++tex_failed;
+                            }
                         }
                         if (job.pal_idx >= 0 && size_t(job.pal_idx) < target.clut_hashes.size()) {
                             std::string hclut = hex64(target.clut_hashes[size_t(job.pal_idx)]);
                             std::string fname_out = htex + "_" + hclut + ".png";
                             fs::path out_p = fs::path(textures_out) / fname_out;
-                            if (write_file_bytes(out_p, png.data(), png.size())) {
-                                ++tex_written;
-                                std::lock_guard<std::mutex> lk(written_mu);
-                                written_tex_files.push_back(std::move(fname_out));
-                            } else ++tex_failed;
+                            std::unique_lock<std::mutex> lk(written_mu, std::defer_lock);
+                            if (managed) lk.lock();
+                            if (!occupied_output(out_p)) {
+                                if (write_file_bytes(out_p, png.data(), png.size())) {
+                                    ++tex_written;
+                                    if (!lk.owns_lock()) lk.lock();
+                                    written_tex_files.push_back(std::move(fname_out));
+                                } else ++tex_failed;
+                            }
                         }
                     }
                     if (sink) sink->inc_done();
@@ -2605,6 +2640,12 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
 
             fs::path rel_glb = fs::path(mc.category) / (mc.model_id + ".glb");
             fs::path abs_glb = fs::path(models_out) / rel_glb;
+            const bool model_key_exists = managed && manifest["models"].contains(canon_key);
+            if (model_key_exists) ++conflicts;
+            if (model_key_exists || occupied_output(abs_glb)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
             std::vector<int> bone_remap;
             bool ok = false;
             if (mc.kind == ModelKind::FieldMch || mc.kind == ModelKind::WorldMch) {
@@ -2647,7 +2688,8 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         }
 
         std::string mstr = manifest.dump(2) + "\n";
-        write_file_bytes(manifest_path, reinterpret_cast<const uint8_t *>(mstr.data()), mstr.size());
+        if (models_written || !managed)
+            write_file_bytes(manifest_path, reinterpret_cast<const uint8_t *>(mstr.data()), mstr.size());
     }
 
     /* Step 6: Optional FMV movie extraction (.avi / .cam / .mp4 / .mkv / .webm). */
@@ -2659,6 +2701,10 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         for (const auto &kv : movie_choices) {
             const auto &mc = kv.second;
             fs::path target = fs::path(movies_out) / mc.filename;
+            if (occupied_output(target)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
             if (fs::is_regular_file(target, ec) && fs::file_size(target, ec) == mc.ref.size) {
                 ++movies_written;
                 written_movie_files.push_back(mc.filename);
@@ -2685,6 +2731,10 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             const auto &ac = kv.second;
             fs::path target = fs::path(audio_out) / ac.rel_path;
             fs::create_directories(target.parent_path(), ec);
+            if (occupied_output(target)) {
+                if (sink) sink->inc_done();
+                continue;
+            }
             if (fs::is_regular_file(target, ec) && fs::file_size(target, ec) == ac.ref.size) {
                 ++audio_written;
                 written_audio_files.push_back(ac.rel_path);
@@ -2716,8 +2766,10 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
         add_log(ov);
     }
 
+    if (conflicts) add_log("Preserved " + std::to_string(conflicts.load()) + " existing asset file(s)", true);
+
     /* Step 8: Persist mod entry in <registry_dir>/mods-registry.json if requested. */
-    if (!registry_dir.empty()) {
+    if (managed) {
         auto dedup = [](std::vector<std::string> &v) {
             std::sort(v.begin(), v.end());
             v.erase(std::unique(v.begin(), v.end()), v.end());
@@ -2729,10 +2781,14 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
 
         std::string mod_name = !primary_mod_name.empty() ? primary_mod_name
                              : (!sources.empty() ? sources.front().label : fs::path(mod_paths.front()).filename().string());
-        std::string mod_id = slugify_mod_id(mod_name);
-        fs::path reg_path = fs::path(registry_dir) / "mods-registry.json";
-        json doc;
-        load_registry_json(reg_path, doc);
+        const std::string slug = slugify_mod_id(mod_name);
+        std::string mod_id = slug;
+        const auto &mods = registry["mods"];
+        for (unsigned suffix = 2; std::any_of(mods.begin(), mods.end(), [&](const json &entry) {
+                 return entry.is_object() && entry.value("id", "") == mod_id;
+             }); ++suffix) {
+            mod_id = slug + "-" + std::to_string(suffix);
+        }
 
         json rec = {
             {"id", mod_id},
@@ -2746,6 +2802,7 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             {"warnings", warnings},
             {"failed", tex_failed.load() + models_failed},
             {"log", log_lines},
+            {"roots", roots},
             {"files", {
                 {"textures", written_tex_files},
                 {"models", written_model_files},
@@ -2755,16 +2812,13 @@ bool run_import_impl(const std::vector<std::string> &disc_paths,
             {"manifest_models", written_manifest_models}
         };
 
-        bool replaced = false;
-        for (auto &existing : doc["mods"]) {
-            if (existing.is_object() && existing.value("id", "") == mod_id) {
-                existing = std::move(rec);
-                replaced = true;
-                break;
-            }
+        registry["mods"].push_back(std::move(rec));
+        if (!save_registry_json(reg_path, registry)) {
+            std::snprintf(final_status.error, sizeof(final_status.error), "Could not save the mod registry.");
+            final_status.running = 0;
+            final_status.finished = 1;
+            return false;
         }
-        if (!replaced) doc["mods"].push_back(std::move(rec));
-        save_registry_json(reg_path, doc);
     }
 
     final_status.running = 0;
@@ -3266,8 +3320,14 @@ extern "C" unsigned host_mod_registry_list(const char *data_dir, host_mod_entry_
 }
 
 namespace {
-void rebuild_models_manifest_from_registry(const nlohmann::json &doc, const std::string &models_dir,
-                                           const std::unordered_set<std::string> &removed_model_keys) {
+bool registry_matches_root(const nlohmann::json &entry, const char *bucket, const std::string &dir) {
+    if (!entry.contains("roots")) return true;
+    const auto &roots = entry["roots"];
+    return roots.is_object() && roots.contains(bucket) && roots[bucket].is_string() &&
+           roots[bucket] == HostHD::asset_root(dir);
+}
+
+void rebuild_models_manifest_from_registry(const nlohmann::json &doc, const std::string &models_dir) {
     if (models_dir.empty()) return;
     namespace fs = std::filesystem;
     fs::path manifest_path = fs::path(models_dir) / "manifest.json";
@@ -3282,17 +3342,17 @@ void rebuild_models_manifest_from_registry(const nlohmann::json &doc, const std:
             }
         } catch (...) {}
     }
-    /* Remove any keys owned by disabled/removed mods first, then re-apply all enabled mods. */
-    for (const auto &k : removed_model_keys) manifest["models"].erase(k);
+    /* Remove keys owned by disabled mods, then reapply enabled mods. */
     for (const auto &m : doc["mods"]) {
-        if (!m.is_object() || !m.contains("manifest_models") || !m["manifest_models"].is_object()) continue;
+        if (!m.is_object() || !registry_matches_root(m, "models", models_dir) ||
+            !m.contains("manifest_models") || !m["manifest_models"].is_object()) continue;
         bool en = m.value("enabled", true);
         for (auto it = m["manifest_models"].begin(); it != m["manifest_models"].end(); ++it) {
             if (!en) manifest["models"].erase(it.key());
         }
     }
     for (const auto &m : doc["mods"]) {
-        if (!m.is_object() || !m.value("enabled", true)) continue;
+        if (!m.is_object() || !m.value("enabled", true) || !registry_matches_root(m, "models", models_dir)) continue;
         if (!m.contains("manifest_models") || !m["manifest_models"].is_object()) continue;
         for (auto it = m["manifest_models"].begin(); it != m["manifest_models"].end(); ++it) {
             manifest["models"][it.key()] = it.value();
@@ -3303,11 +3363,11 @@ void rebuild_models_manifest_from_registry(const nlohmann::json &doc, const std:
 }
 
 std::unordered_set<std::string> collect_other_enabled_files(const nlohmann::json &doc, const std::string &skip_id,
-                                                            const char *bucket) {
+                                                            const char *bucket, const std::string &dir) {
     std::unordered_set<std::string> used;
     for (const auto &m : doc["mods"]) {
         if (!m.is_object() || !m.value("enabled", true)) continue;
-        if (m.value("id", "") == skip_id) continue;
+        if (m.value("id", "") == skip_id || !registry_matches_root(m, bucket, dir)) continue;
         if (m.contains("files") && m["files"].is_object() && m["files"].contains(bucket) && m["files"][bucket].is_array()) {
             for (const auto &f : m["files"][bucket]) {
                 if (f.is_string()) used.insert(f.get<std::string>());
@@ -3346,31 +3406,37 @@ extern "C" int host_mod_registry_set_enabled(const char *data_dir, const char *m
     struct Bucket { const char *name; std::string dir; };
     Bucket buckets[] = {{"textures", tex_d}, {"models", mod_d}, {"movies", mov_d}, {"audio", aud_d}};
     if (target->contains("files") && (*target)["files"].is_object()) {
+        std::vector<std::pair<fs::path, fs::path>> moves;
         for (const auto &b : buckets) {
-            if (!(*target)["files"].contains(b.name) || !(*target)["files"][b.name].is_array()) continue;
-            auto other_used = collect_other_enabled_files(doc, id, b.name);
-            for (const auto &f : (*target)["files"][b.name]) {
+            const auto &files = (*target)["files"];
+            if (!files.contains(b.name) || !files[b.name].is_array() || files[b.name].empty()) continue;
+            if (!registry_matches_root(*target, b.name, b.dir)) return 0;
+            auto other_used = collect_other_enabled_files(doc, id, b.name, b.dir);
+            for (const auto &f : files[b.name]) {
                 if (!f.is_string()) continue;
                 std::string rel = f.get<std::string>();
                 if (!HostHD::is_safe_rel_path(rel)) continue;
                 fs::path active_p = fs::path(b.dir) / rel;
                 fs::path stash_p = disabled_root / b.name / rel;
-                if (!want) {
-                    if (!other_used.count(rel)) HostHD::move_file_safe(active_p, stash_p);
-                } else {
-                    HostHD::move_file_safe(stash_p, active_p);
-                }
+                if (want) moves.emplace_back(stash_p, active_p);
+                else if (!other_used.count(rel)) moves.emplace_back(active_p, stash_p);
             }
         }
+        for (const auto &[src, dst] : moves)
+            if (HostHD::path_occupied(src) && HostHD::path_occupied(dst)) return 0;
+        for (const auto &[src, dst] : moves)
+            if (!HostHD::move_file_safe(src, dst)) return 0;
     }
     (*target)["enabled"] = want;
-    std::unordered_set<std::string> empty_removed;
-    rebuild_models_manifest_from_registry(doc, mod_d, empty_removed);
+    if (!HostHD::save_registry_json(reg_path, doc)) return 0;
+    if (target->contains("manifest_models") && !(*target)["manifest_models"].empty()) {
+        rebuild_models_manifest_from_registry(doc, mod_d);
+    }
     if (want) {
         std::error_code ec;
         fs::remove_all(disabled_root, ec);
     }
-    return HostHD::save_registry_json(reg_path, doc) ? 1 : 0;
+    return 1;
 }
 
 extern "C" int host_mod_registry_remove(const char *data_dir, const char *mod_id,
@@ -3393,36 +3459,13 @@ extern "C" int host_mod_registry_remove(const char *data_dir, const char *mod_id
     }
     if (found_idx == SIZE_MAX) return 0;
 
-    nlohmann::json removed = doc["mods"][found_idx];
-    std::string tex_d = (textures_dir && textures_dir[0]) ? textures_dir : (fs::path(data_dir) / "textures-hd").string();
-    std::string mod_d = (models_dir && models_dir[0]) ? models_dir : (fs::path(data_dir) / "models-hd").string();
-    std::string mov_d = (movies_dir && movies_dir[0]) ? movies_dir : (fs::path(data_dir) / "movies-hd").string();
-    std::string aud_d = (fs::path(data_dir) / "audio-hd").string();
-
-    struct Bucket { const char *name; std::string dir; };
-    Bucket buckets[] = {{"textures", tex_d}, {"models", mod_d}, {"movies", mov_d}, {"audio", aud_d}};
-    std::error_code ec;
-    if (removed.contains("files") && removed["files"].is_object()) {
-        for (const auto &b : buckets) {
-            if (!removed["files"].contains(b.name) || !removed["files"][b.name].is_array()) continue;
-            auto other_used = collect_other_enabled_files(doc, id, b.name);
-            for (const auto &f : removed["files"][b.name]) {
-                if (!f.is_string()) continue;
-                std::string rel = f.get<std::string>();
-                if (!HostHD::is_safe_rel_path(rel)) continue;
-                if (!other_used.count(rel)) fs::remove(fs::path(b.dir) / rel, ec);
-            }
-        }
-    }
-    fs::remove_all(fs::path(data_dir) / "mods-disabled" / id, ec);
-
-    std::unordered_set<std::string> removed_model_keys;
-    if (removed.contains("manifest_models") && removed["manifest_models"].is_object()) {
-        for (auto it = removed["manifest_models"].begin(); it != removed["manifest_models"].end(); ++it) {
-            removed_model_keys.insert(it.key());
-        }
+    if (doc["mods"][found_idx].value("enabled", true)) {
+        if (!host_mod_registry_set_enabled(data_dir, mod_id, 0, textures_dir, models_dir, movies_dir)) return 0;
+        if (!HostHD::load_registry_json(reg_path, doc)) return 0;
     }
     doc["mods"].erase(doc["mods"].begin() + std::ptrdiff_t(found_idx));
-    rebuild_models_manifest_from_registry(doc, mod_d, removed_model_keys);
-    return HostHD::save_registry_json(reg_path, doc) ? 1 : 0;
+    if (!HostHD::save_registry_json(reg_path, doc)) return 0;
+    std::error_code ec;
+    fs::remove_all(fs::path(data_dir) / "mods-disabled" / id, ec);
+    return !ec;
 }
